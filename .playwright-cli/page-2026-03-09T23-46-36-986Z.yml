@@ -1,0 +1,159 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - main [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - link "Creator" [ref=e6] [cursor=pointer]:
+            - /url: /creator
+            - img [ref=e7]
+            - text: Creator
+          - generic [ref=e10]:
+            - img [ref=e12]
+            - generic [ref=e16]:
+              - generic [ref=e17]: Timeline Composer
+              - generic [ref=e18]: Workstation
+          - textbox "Untitled timeline" [ref=e20]
+          - generic [ref=e21]: No draft yet
+        - generic [ref=e22]:
+          - button "Collapse project bin" [ref=e23]:
+            - img
+          - button "Collapse inspector" [ref=e24]:
+            - img
+          - generic [ref=e25]:
+            - combobox [ref=e26]:
+              - generic: Vertical 9:16
+              - img
+            - combobox [ref=e27]:
+              - generic: Medium • Balanced default
+              - img
+          - button [ref=e28]:
+            - img
+          - button "Export" [disabled]:
+            - img
+            - text: Export
+      - generic [ref=e31]:
+        - generic [ref=e32]:
+          - generic [ref=e33]:
+            - generic: Project Bin
+            - generic: Media, drafts, and project metadata
+          - generic [ref=e34]:
+            - generic [ref=e35]:
+              - generic:
+                - button "Import audio bed" [ref=e36]:
+                  - img
+                  - text: Import audio bed
+                - button "Import video clips" [ref=e37]:
+                  - img
+                  - text: Import video clips
+            - generic:
+              - tablist [ref=e38]:
+                - tab "Media" [selected] [ref=e39]
+                - tab "Drafts" [ref=e40]
+                - tab "Project" [ref=e41]
+              - tabpanel "Media":
+                - generic [ref=e45]: Import a master audio track and at least one video clip. Every asset stays reusable inside this project.
+        - separator [ref=e46]:
+          - img [ref=e49]
+        - generic:
+          - generic:
+            - generic:
+              - generic [ref=e56]:
+                - generic [ref=e57]:
+                  - generic [ref=e58]:
+                    - generic [ref=e59]: Program Monitor
+                    - generic [ref=e60]: Output preview
+                  - generic [ref=e61]: 9:16 • medium
+                - generic [ref=e63]:
+                  - generic [ref=e64]: Program
+                  - generic [ref=e65]:
+                    - generic [ref=e67]:
+                      - generic [ref=e69]:
+                        - generic [ref=e70]: Import media to begin editing
+                        - generic [ref=e71]: The viewer will show your composition here.
+                      - generic:
+                        - generic: Live
+                      - generic:
+                        - generic: 0:00
+                    - generic:
+                      - generic [ref=e72]:
+                        - generic [ref=e73]:
+                          - button "Play" [disabled]:
+                            - img
+                            - text: Play
+                          - button "Reset" [ref=e74]:
+                            - img
+                            - text: Reset
+                          - generic [ref=e75]: 0:00 / 0:00
+                        - slider [ref=e80]
+                      - generic [ref=e81]:
+                        - generic [ref=e82]:
+                          - generic [ref=e83]: Visible clip
+                          - generic [ref=e84]: None
+                        - generic [ref=e85]:
+                          - generic [ref=e86]: Audio clip
+                          - generic [ref=e87]: None
+                        - generic [ref=e88]:
+                          - generic [ref=e89]: Audio state
+                          - generic [ref=e90]:
+                            - img [ref=e91]
+                            - text: Silent
+              - separator [ref=e95]:
+                - img [ref=e98]
+              - generic [ref=e105]:
+                - generic [ref=e106]:
+                  - generic [ref=e107]:
+                    - generic [ref=e108]: Timeline
+                    - generic [ref=e109]: One video lane, one master audio lane
+                  - generic [ref=e110]: 0:00
+                - generic [ref=e111]:
+                  - generic:
+                    - button "Copy" [disabled]:
+                      - img
+                      - text: Copy
+                    - button "Duplicate" [disabled]:
+                      - img
+                      - text: Duplicate
+                    - button "Paste" [disabled]:
+                      - img
+                      - text: Paste
+                    - button "Delete" [disabled]:
+                      - img
+                      - text: Delete
+                    - button "Snap on" [ref=e112]:
+                      - img
+                      - text: Snap on
+                    - generic [ref=e113]:
+                      - img [ref=e114]
+                      - slider [ref=e121]
+                - generic:
+                  - generic [ref=e122]:
+                    - generic [ref=e123]: Tracks
+                    - generic [ref=e124]:
+                      - generic [ref=e125]: V1
+                      - generic [ref=e126]:
+                        - generic [ref=e127]: Video Lane
+                        - generic [ref=e128]: No clips
+                    - generic [ref=e129]:
+                      - generic [ref=e130]: A1
+                      - generic [ref=e131]:
+                        - generic [ref=e132]: Master Audio
+                        - generic [ref=e133]: No track
+                  - generic [ref=e135]:
+                    - generic [ref=e137]: 0:00
+                    - generic [ref=e139]: 0:05
+        - separator [ref=e144]:
+          - img [ref=e147]
+        - generic [ref=e154]:
+          - generic [ref=e155]:
+            - generic: Inspector
+            - generic: Context-sensitive clip and export controls
+          - generic [ref=e156]:
+            - generic:
+              - tablist [ref=e157]:
+                - tab "Clip" [selected] [ref=e158]
+                - tab "Audio" [ref=e159]
+                - tab "Export" [ref=e160]
+              - tabpanel "Clip":
+                - generic [ref=e161]: Select a video clip on the timeline to adjust trim, fit/fill, and framing.
+    - region "Notifications alt+T"
+  - alert [ref=e162]
