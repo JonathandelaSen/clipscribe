@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FileText, Clapperboard, ArrowRight, Sparkles, ArrowLeft } from "lucide-react";
+import { FileText, Clapperboard, ArrowRight, Sparkles, ArrowLeft, Film } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -23,6 +23,16 @@ const TOOLS = [
     bgColor: "bg-orange-400/10",
     borderColor: "border-orange-400/20",
     glowColor: "group-hover:bg-orange-500/10",
+  },
+  {
+    title: "Timeline Studio",
+    description: "Build full timeline projects with clips, an audio bed, subtitles, and exports.",
+    href: "/creator/editor",
+    icon: Film,
+    color: "text-cyan-300",
+    bgColor: "bg-cyan-300/10",
+    borderColor: "border-cyan-300/20",
+    glowColor: "group-hover:bg-cyan-400/10",
   },
 ] as const;
 
@@ -65,7 +75,7 @@ export default function CreatorPage() {
         </header>
 
         {/* Tools Grid */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-6 pb-20">
+        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20">
           {TOOLS.map((tool) => {
             const Icon = tool.icon;
             return (
