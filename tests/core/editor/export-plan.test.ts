@@ -97,7 +97,9 @@ test("buildEditorExportPlan assembles concat + multi-item audio mix graph", () =
   assert.equal(plan.width, 1920);
   assert.equal(plan.height, 1080);
   assert.equal(plan.durationSeconds, 20.5);
-  assert.ok(plan.filterComplex.includes("concat=n=2:v=1:a=1"));
+  assert.ok(
+    plan.filterComplex.includes("[vseg0][aseg0][vseg1][aseg1]concat=n=2:v=1:a=1[video_track][clip_audio_track]")
+  );
   assert.ok(plan.filterComplex.includes("music_track_0"));
   assert.ok(plan.filterComplex.includes("music_track_1"));
   assert.ok(plan.filterComplex.includes("volume=0"));
@@ -146,4 +148,69 @@ test("buildEditorExportPlan warns when an audio item source is missing", () => {
   });
 
   assert.deepEqual(plan.warnings, ["Audio track item 1 is missing its source file."]);
+});
+
+test("buildEditorExportPlan keeps concat inputs interleaved when a clip uses fallback audio", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const videoA = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "a.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 5,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const videoB = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "b.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 4,
+    width: 1920,
+    height: 1080,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const videoC = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "c.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 6,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  project.assetIds = [videoA.id, videoB.id, videoC.id];
+  project.timeline.videoClips = [
+    createDefaultVideoClip({ assetId: videoA.id, label: "A", durationSeconds: 5 }),
+    createDefaultVideoClip({ assetId: videoB.id, label: "B", durationSeconds: 4 }),
+    createDefaultVideoClip({ assetId: videoC.id, label: "C", durationSeconds: 6 }),
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: videoA.id, path: "a.mp4", asset: videoA },
+      { inputIndex: 1, assetId: videoB.id, path: "b.mp4", asset: videoB },
+      { inputIndex: 2, assetId: videoC.id, path: "c.mp4", asset: videoC },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.match(
+    plan.filterComplex,
+    /\[vseg0\]\[aseg0\]\[vseg1\]\[aseg1\]\[vseg2\]\[aseg2\]concat=n=3:v=1:a=1\[video_track\]\[clip_audio_track\]/
+  );
+  assert.ok(plan.filterComplex.includes("anullsrc=r=48000:cl=stereo,atrim=duration=4.000[aseg1]"));
 });

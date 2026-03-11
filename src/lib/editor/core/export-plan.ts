@@ -57,8 +57,8 @@ export function buildEditorExportPlan(input: {
 
   const warnings: string[] = [];
   const filterParts: string[] = [];
-  const segmentVideoLabels: string[] = [];
-  const segmentAudioLabels: string[] = [];
+  const concatSegmentInputs: string[] = [];
+  let concatSegmentCount = 0;
 
   for (const placement of placements) {
     const inputRef = inputsByAssetId.get(placement.clip.assetId);
@@ -78,31 +78,29 @@ export function buildEditorExportPlan(input: {
     filterParts.push(
       `[${inputRef.inputIndex}:v]trim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds},setpts=PTS-STARTPTS,${geometry.filter}[${videoLabel}]`
     );
-    segmentVideoLabels.push(`[${videoLabel}]`);
 
+    const audioLabel = `aseg${placement.index}`;
     if (inputRef.asset.hasAudio && !placement.clip.muted && placement.clip.volume > 0) {
-      const audioLabel = `aseg${placement.index}`;
       filterParts.push(
         `[${inputRef.inputIndex}:a]atrim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds},asetpts=PTS-STARTPTS,volume=${placement.clip.volume.toFixed(
           3
         )}[${audioLabel}]`
       );
     } else {
-      const audioLabel = `aseg${placement.index}`;
       filterParts.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${placement.durationSeconds.toFixed(3)}[${audioLabel}]`);
     }
-    segmentAudioLabels.push(`[aseg${placement.index}]`);
+    concatSegmentInputs.push(`[${videoLabel}]`, `[${audioLabel}]`);
+    concatSegmentCount += 1;
   }
 
   const concatVideoLabel = "video_track";
   const concatAudioLabel = "clip_audio_track";
-  if (segmentVideoLabels.length === 0) {
+  if (concatSegmentCount === 0) {
     throw new Error("Export plan requires at least one timeline clip.");
   }
 
-  const concatParts = [...segmentVideoLabels, ...segmentAudioLabels];
   filterParts.push(
-    `${concatParts.join("")}concat=n=${segmentVideoLabels.length}:v=1:a=1[${concatVideoLabel}][${concatAudioLabel}]`
+    `${concatSegmentInputs.join("")}concat=n=${concatSegmentCount}:v=1:a=1[${concatVideoLabel}][${concatAudioLabel}]`
   );
 
   let mixedAudioLabel: string | null = concatAudioLabel;

@@ -113,6 +113,10 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
+import {
+  ExportProgressOverlay,
+  type EditorExportPhase,
+} from "@/components/editor/ExportProgressOverlay";
 
 const ASPECT_OPTIONS: EditorAspectRatio[] = ["16:9", "9:16", "1:1", "4:5"];
 const RESOLUTION_OPTIONS: EditorResolution[] = ["720p", "1080p", "4K"];
@@ -184,6 +188,13 @@ function useObjectUrl(file: File | null | undefined) {
   }, [url]);
 
   return url;
+}
+
+function getEditorExportPhase(progressPct: number): EditorExportPhase {
+  if (progressPct >= 100) return "complete";
+  if (progressPct >= 95) return "finalizing";
+  if (progressPct >= 15) return "rendering";
+  return "preparing";
 }
 
 function ProjectAssetThumbnail({
@@ -610,7 +621,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [panelVisibility.left]);
 
   useEffect(() => {
-    if (!isHistoryOpen) return;
+    if (!isHistoryOpen || isExporting) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && (historyPanelRef.current?.contains(target) || historyButtonRef.current?.contains(target))) {
@@ -629,7 +640,27 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isHistoryOpen]);
+  }, [isExporting, isHistoryOpen]);
+
+  useEffect(() => {
+    if (!isExporting) return;
+    setIsHistoryOpen(false);
+    setIsPlaying(false);
+  }, [isExporting]);
+
+  useEffect(() => {
+    if (!isExporting) return;
+
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [isExporting]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1247,13 +1278,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return;
     }
 
-    setIsExporting(true);
-    setExportProgress(1);
     const exportingProject = markEditorProjectExporting(project, Date.now());
     setProject(exportingProject);
-    await saveProject(exportingProject);
+    setIsExporting(true);
+    setExportProgress(1);
 
     try {
+      await saveProject(exportingProject);
+
       const result = await localEditorExportService.exportProject({
         project: exportingProject,
         resolvedAssets,
@@ -1299,23 +1331,28 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       toast.success(`Exported ${result.file.name}`);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Export failed";
-      const failedRecord = buildEditorExportRecord({
-        projectId: exportingProject.id,
-        filename: `${exportingProject.name}.mp4`,
-        mimeType: "video/mp4",
-        sizeBytes: 0,
-        durationSeconds: projectDuration,
-        aspectRatio: exportingProject.aspectRatio,
-        resolution: exportResolution,
-        width: 0,
-        height: 0,
-        error: message,
-        status: "failed",
-      });
-      await saveExport(failedRecord);
-      const nextProject = markEditorProjectFailed(exportingProject, message, Date.now());
-      await saveProject(nextProject);
-      setProject(nextProject);
+      try {
+        const failedRecord = buildEditorExportRecord({
+          projectId: exportingProject.id,
+          filename: `${exportingProject.name}.mp4`,
+          mimeType: "video/mp4",
+          sizeBytes: 0,
+          durationSeconds: projectDuration,
+          aspectRatio: exportingProject.aspectRatio,
+          resolution: exportResolution,
+          width: 0,
+          height: 0,
+          error: message,
+          status: "failed",
+        });
+        await saveExport(failedRecord);
+        const nextProject = markEditorProjectFailed(exportingProject, message, Date.now());
+        await saveProject(nextProject);
+        setProject(nextProject);
+      } catch (persistError) {
+        console.error("Failed to persist export failure state", persistError);
+        setProject(markEditorProjectFailed(exportingProject, message, Date.now()));
+      }
       toast.error(message);
     } finally {
       setIsExporting(false);
@@ -1324,6 +1361,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
+    if (isExporting) return;
     if (isShortcutTargetEditable(event.target)) return;
 
     const usesCommand = event.metaKey || event.ctrlKey;
@@ -1426,6 +1464,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const visibleWindowLabel = `${secondsToClock(visibleStart)} - ${secondsToClock(
     Math.min(projectDuration, visibleEnd)
   )}`;
+  const exportPhase = getEditorExportPhase(exportProgress);
   const dropIndicatorPct = (() => {
     if (!draggingClipId && draggingAssetKind !== "video") return null;
     if (dropTargetIndex != null && visibleClipPlacements[dropTargetIndex]) {
@@ -1439,7 +1478,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   })();
 
   return (
-    <main className="h-[100dvh] overflow-hidden">
+    <main className="h-[100dvh] overflow-hidden" aria-busy={isExporting}>
       <input
         ref={mediaInputRef}
         type="file"
@@ -1456,7 +1495,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         onChange={(event) => void handleAttachSrt(event.target.files)}
       />
 
-      <div className="flex h-full flex-col gap-[6px]">
+      <div className={cn("flex h-full flex-col gap-[6px]", isExporting && "pointer-events-none select-none")}>
         <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-3">
@@ -2915,6 +2954,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           </Card>
         </div>
       </div>
+      <ExportProgressOverlay
+        open={isExporting}
+        projectName={project.name}
+        resolution={exportResolution}
+        progressPct={exportProgress}
+        phase={exportPhase}
+      />
       <Toaster theme="dark" position="bottom-center" />
     </main>
   );

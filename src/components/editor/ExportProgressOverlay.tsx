@@ -1,0 +1,140 @@
+"use client";
+
+import { Film, Loader2 } from "lucide-react";
+
+import type { EditorResolution } from "@/lib/editor/types";
+
+import { Progress } from "@/components/ui/progress";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+
+export type EditorExportPhase = "preparing" | "rendering" | "finalizing" | "complete";
+
+const PHASE_COPY: Record<
+  EditorExportPhase,
+  { badge: string; title: string; description: string; helper: string }
+> = {
+  preparing: {
+    badge: "Preparing",
+    title: "Preparing assets and subtitles",
+    description: "Setting up the browser render workspace, validating media, and staging caption frames.",
+    helper: "Keep this tab open while Timeline Studio assembles the export pipeline.",
+  },
+  rendering: {
+    badge: "Rendering",
+    title: "Rendering your timeline",
+    description: "FFmpeg.wasm is encoding the current edit directly in this browser session.",
+    helper: "Editing is locked until the MP4 render finishes.",
+  },
+  finalizing: {
+    badge: "Finalizing",
+    title: "Finalizing the MP4",
+    description: "The video is being packaged for download and the export audit trail is being wrapped up.",
+    helper: "The file is almost ready. Avoid refreshing or closing this tab now.",
+  },
+  complete: {
+    badge: "Complete",
+    title: "Export complete",
+    description: "Handing off the finished file and saving the final export metadata before control returns.",
+    helper: "One more moment while the editor closes out the export cleanly.",
+  },
+};
+
+function clampProgress(progressPct: number) {
+  return Math.min(100, Math.max(0, Math.round(progressPct)));
+}
+
+export function ExportProgressOverlay({
+  open,
+  projectName,
+  resolution,
+  progressPct,
+  phase,
+}: {
+  open: boolean;
+  projectName: string;
+  resolution: EditorResolution;
+  progressPct: number;
+  phase: EditorExportPhase;
+}) {
+  const safeProgress = clampProgress(progressPct);
+  const copy = PHASE_COPY[phase];
+
+  return (
+    <Dialog open={open}>
+      <DialogContent
+        showCloseButton={false}
+        onEscapeKeyDown={(event) => event.preventDefault()}
+        onPointerDownOutside={(event) => event.preventDefault()}
+        onInteractOutside={(event) => event.preventDefault()}
+        className="overflow-hidden border-white/10 bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_42%),radial-gradient(circle_at_bottom_right,rgba(34,211,238,0.15),transparent_36%),linear-gradient(180deg,rgba(8,11,16,0.98),rgba(4,7,12,0.98))] p-0 text-white shadow-[0_28px_90px_rgba(0,0,0,0.6)] sm:max-w-[34rem]"
+      >
+        <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.06),transparent_38%)]" />
+        <div className="relative space-y-6 p-6 sm:p-7">
+          <div className="flex items-start justify-between gap-4">
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-cyan-100">
+              <Film className="h-3.5 w-3.5" />
+              Timeline Export
+            </div>
+            <div
+              aria-live="polite"
+              className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-sm font-semibold text-amber-100"
+            >
+              {safeProgress}%
+            </div>
+          </div>
+
+          <DialogHeader className="space-y-2 text-left">
+            <div className="flex items-center gap-2 text-sm text-white/72">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>{copy.badge}</span>
+            </div>
+            <DialogTitle className="text-2xl font-semibold tracking-[-0.03em] text-white">
+              {copy.title}
+            </DialogTitle>
+            <DialogDescription className="max-w-2xl text-sm leading-6 text-white/62">
+              {copy.description}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <Progress
+              value={safeProgress}
+              className="h-3 bg-white/10 [&_[data-slot=progress-indicator]]:bg-[linear-gradient(90deg,rgba(34,211,238,0.95),rgba(251,191,36,0.95))]"
+            />
+            <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.24em] text-white/46">
+              <span>{copy.badge}</span>
+              <span>{safeProgress === 100 ? "Locked until handoff finishes" : "Interaction temporarily blocked"}</span>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Project</div>
+              <div className="mt-2 truncate text-sm font-medium text-white" title={projectName}>
+                {projectName}
+              </div>
+            </div>
+            <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Output</div>
+              <div className="mt-2 text-sm font-medium text-white">{resolution}</div>
+            </div>
+            <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Engine</div>
+              <div className="mt-2 text-sm font-medium text-white">FFmpeg.wasm</div>
+            </div>
+          </div>
+
+          <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-white/66">
+            {copy.helper}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
