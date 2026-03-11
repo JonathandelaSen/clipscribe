@@ -127,8 +127,11 @@ import {
 const ASPECT_OPTIONS: EditorAspectRatio[] = ["16:9", "9:16", "1:1", "4:5"];
 const RESOLUTION_OPTIONS: EditorResolution[] = ["720p", "1080p", "4K"];
 const EDITOR_PANEL_CLASS =
-  "h-full overflow-hidden rounded-[0.9rem] border border-white/7 bg-[linear-gradient(180deg,rgba(13,17,24,0.98),rgba(7,10,15,0.98))] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_12px_28px_rgba(0,0,0,0.18)]";
-const EDITOR_PANEL_CONTENT_CLASS = "flex h-full min-h-0 flex-col gap-2 p-2";
+  "h-full gap-0 overflow-hidden rounded-[0.9rem] border border-white/7 bg-[linear-gradient(180deg,rgba(13,17,24,0.98),rgba(7,10,15,0.98))] py-0 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_12px_28px_rgba(0,0,0,0.18)]";
+const EDITOR_PANEL_CONTENT_CLASS = "flex h-full min-h-0 flex-col gap-0 p-0";
+const EDITOR_PANEL_HEADER_CLASS =
+  "flex min-h-10 items-center justify-between gap-2 border-b border-white/6 px-2.5 py-2";
+const EDITOR_PANEL_BODY_CLASS = "flex min-h-0 flex-1 flex-col p-1.5 sm:p-2";
 const EDITOR_SECTION_CLASS =
   "rounded-[0.75rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.022),rgba(255,255,255,0.012))] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]";
 const EDITOR_LABEL_CLASS = "text-[10px] font-medium uppercase tracking-[0.28em] text-white/38";
@@ -1521,7 +1524,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   })();
 
   return (
-    <main className="h-[100dvh] overflow-hidden" aria-busy={isExporting}>
+    <main className="h-[100dvh] overflow-hidden px-2 sm:px-3 lg:px-4" aria-busy={isExporting}>
       <input
         ref={mediaInputRef}
         type="file"
@@ -1538,7 +1541,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         onChange={(event) => void handleAttachSrt(event.target.files)}
       />
 
-      <div className={cn("flex h-full flex-col gap-[6px]", isExporting && "pointer-events-none select-none")}>
+      <div className={cn("mx-auto flex h-full w-full flex-col gap-[6px]", isExporting && "pointer-events-none select-none")}>
         <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-3">
@@ -1652,17 +1655,24 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               >
                 <Card className={EDITOR_PANEL_CLASS}>
                   <CardContent className={cn(EDITOR_PANEL_CONTENT_CLASS, "relative")}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className={EDITOR_LABEL_CLASS}>Media</div>
+                    <div className={EDITOR_PANEL_HEADER_CLASS}>
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className={EDITOR_LABEL_CLASS}>{isHistoryOpen ? "History" : "Media"}</div>
+                        <div className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-0.5 text-[9px] uppercase tracking-[0.24em] text-white/36">
+                          {isHistoryOpen ? history.length : assets.length}
+                        </div>
+                      </div>
                       <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          className={cn(EDITOR_TOOLBAR_BUTTON_CLASS, "h-7 rounded-md px-2.5")}
-                          onClick={() => mediaInputRef.current?.click()}
-                        >
-                          <FolderOpen className="mr-2 h-4 w-4" />
-                          Import
-                        </Button>
+                        {!isHistoryOpen && (
+                          <Button
+                            variant="outline"
+                            className={cn(EDITOR_TOOLBAR_BUTTON_CLASS, "h-7 rounded-md px-2.5")}
+                            onClick={() => mediaInputRef.current?.click()}
+                          >
+                            <FolderOpen className="mr-2 h-4 w-4" />
+                            Import
+                          </Button>
+                        )}
                         <Button
                           ref={historyButtonRef}
                           variant="ghost"
@@ -1676,7 +1686,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           onClick={() => setIsHistoryOpen((current) => !current)}
                         >
                           <Search className="mr-2 h-4 w-4" />
-                          History
+                          {isHistoryOpen ? "Media" : "History"}
                         </Button>
                         <Button
                           variant="ghost"
@@ -1689,16 +1699,50 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col">
-                      <div className={cn(EDITOR_SECTION_CLASS, "flex min-h-0 flex-1 flex-col p-2")}>
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className={EDITOR_LABEL_CLASS}>Assets</div>
-                          <div className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-0.5 text-[9px] uppercase tracking-[0.24em] text-white/36">
-                            {assets.length}
-                          </div>
-                        </div>
+                    <div ref={historyPanelRef} className={EDITOR_PANEL_BODY_CLASS}>
                         <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                          {assets.length === 0 ? (
+                          {isHistoryOpen ? (
+                            <>
+                              <div className="mb-2">
+                                <Input
+                                  value={librarySearch}
+                                  onChange={(event) => setLibrarySearch(event.target.value)}
+                                  placeholder="Search transcript history"
+                                  className="h-8 rounded-md border-white/8 bg-white/[0.04]"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                {filteredHistory.length === 0 ? (
+                                  <div className="rounded-[0.9rem] border border-dashed border-white/10 p-4 text-sm text-white/40">
+                                    No history items match this search.
+                                  </div>
+                                ) : (
+                                  filteredHistory.map((item) => {
+                                    const transcript = getLatestTranscript(item);
+                                    return (
+                                      <div
+                                        key={item.id}
+                                        className="rounded-[0.9rem] border border-white/8 bg-white/[0.025] p-3 transition-colors hover:border-white/14 hover:bg-white/[0.04]"
+                                      >
+                                        <div className="truncate text-sm font-medium text-white">{item.filename}</div>
+                                        <div className="mt-1 text-xs text-white/42">
+                                          {transcript ? `${transcript.subtitles.length} subtitle versions` : "No subtitles"}
+                                        </div>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="mt-3 h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
+                                          onClick={() => void handleAddHistoryItem(item)}
+                                        >
+                                          Add to Bin
+                                        </Button>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </>
+                          ) : assets.length === 0 ? (
                             <div className="grid h-full place-items-center rounded-[0.9rem] border border-dashed border-white/10 bg-black/20 p-4 text-center text-sm text-white/45">
                               Import clips or pull media from history to populate this project.
                             </div>
@@ -1738,70 +1782,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             </div>
                           )}
                         </div>
-                      </div>
                     </div>
-
-                    {isHistoryOpen ? (
-                      <div
-                        ref={historyPanelRef}
-                        className="absolute inset-x-2 bottom-2 top-11 z-20 flex min-h-0 flex-col overflow-hidden rounded-[0.95rem] border border-white/10 bg-[linear-gradient(180deg,rgba(9,12,18,0.98),rgba(5,8,12,0.98))] shadow-[0_24px_60px_rgba(0,0,0,0.46),inset_0_1px_0_rgba(255,255,255,0.04)] backdrop-blur-xl"
-                      >
-                        <div className="flex items-center justify-between gap-2 border-b border-white/8 px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <div className={EDITOR_LABEL_CLASS}>History</div>
-                            <span className="rounded-full border border-white/8 bg-white/[0.04] px-2 py-0.5 text-[9px] uppercase tracking-[0.24em] text-white/36">
-                              {history.length}
-                            </span>
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 rounded-md text-white/40 hover:bg-white/[0.06] hover:text-white"
-                            onClick={() => setIsHistoryOpen(false)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="border-b border-white/6 px-3 py-2.5">
-                          <Input
-                            value={librarySearch}
-                            onChange={(event) => setLibrarySearch(event.target.value)}
-                            placeholder="Search transcript history"
-                            className="h-8 rounded-md border-white/8 bg-white/[0.04]"
-                          />
-                        </div>
-                        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2.5">
-                          {filteredHistory.length === 0 ? (
-                            <div className="rounded-[0.9rem] border border-dashed border-white/10 p-4 text-sm text-white/40">
-                              No history items match this search.
-                            </div>
-                          ) : (
-                            filteredHistory.map((item) => {
-                              const transcript = getLatestTranscript(item);
-                              return (
-                                <div
-                                  key={item.id}
-                                  className="rounded-[0.9rem] border border-white/8 bg-white/[0.025] p-3 transition-colors hover:border-white/14 hover:bg-white/[0.04]"
-                                >
-                                  <div className="truncate text-sm font-medium text-white">{item.filename}</div>
-                                  <div className="mt-1 text-xs text-white/42">
-                                    {transcript ? `${transcript.subtitles.length} subtitle versions` : "No subtitles"}
-                                  </div>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="mt-3 h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
-                                    onClick={() => void handleAddHistoryItem(item)}
-                                  >
-                                    Add to Bin
-                                  </Button>
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    ) : null}
                   </CardContent>
                 </Card>
               </div>
@@ -1822,12 +1803,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               <div className="min-w-0 min-h-0 flex-1">
                 <Card className={EDITOR_PANEL_CLASS}>
                   <CardContent className={EDITOR_PANEL_CONTENT_CLASS}>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-sm text-white/72">{previewTitle}</div>
-                        <div className={cn(EDITOR_TIMECODE_CLASS, "mt-0.5")}>{previewMeta}</div>
+                    <div className={cn(EDITOR_PANEL_HEADER_CLASS, "gap-3")}>
+                      <div className="min-w-0 flex flex-1 flex-wrap items-center gap-x-2.5 gap-y-1">
+                        <div className="truncate text-sm text-white/78">{previewTitle}</div>
+                        <div className={cn(EDITOR_TIMECODE_CLASS, "truncate")}>{previewMeta}</div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center justify-end gap-2">
                         <div className="flex items-center gap-1 rounded-[0.9rem] border border-white/8 bg-black/25 p-1">
                           <button
                             type="button"
@@ -1864,173 +1845,175 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       </div>
                     </div>
 
-                    <div className="flex min-h-0 flex-1 flex-col rounded-[0.75rem] border border-white/8 bg-[linear-gradient(180deg,rgba(9,12,17,0.98),rgba(5,8,12,0.98))] p-1.5">
-                      <div className="flex min-h-0 flex-1 items-center justify-center">
-                        <div
-                          className="relative max-h-full w-full overflow-hidden rounded-[1rem] border border-white/8 bg-black shadow-[0_14px_24px_rgba(0,0,0,0.26)]"
-                          style={{
-                            width: "min(100%, 760px)",
-                            aspectRatio: String(aspectRatioValue),
-                          }}
-                        >
-                          {previewMode.kind === "timeline" ? (
-                            previewVideoUrl ? (
-                              <>
-                                <video
-                                  ref={videoRef}
-                                  key={`timeline:${previewVideoUrl}`}
-                                  src={previewVideoUrl}
-                                  muted={false}
-                                  playsInline
-                                  className="absolute inset-0 h-full w-full object-cover"
-                                  style={{
-                                    transform: `translate(${activePlacement?.clip.canvas.panX ?? 0}px, ${activePlacement?.clip.canvas.panY ?? 0}px) scale(${activePlacement?.clip.canvas.zoom ?? 1})`,
-                                    transformOrigin: "center center",
-                                  }}
-                                />
-                                {project.subtitles.enabled && currentCaption ? (
-                                  <div
-                                    className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-1/2 text-center"
+                    <div className={EDITOR_PANEL_BODY_CLASS}>
+                      <div className="flex min-h-0 flex-1 flex-col rounded-[0.75rem] border border-white/8 bg-[linear-gradient(180deg,rgba(9,12,17,0.98),rgba(5,8,12,0.98))] p-1.5">
+                        <div className="flex min-h-0 flex-1 items-center justify-center">
+                          <div
+                            className="relative max-h-full w-full overflow-hidden rounded-[1rem] border border-white/8 bg-black shadow-[0_14px_24px_rgba(0,0,0,0.26)]"
+                            style={{
+                              width: "min(100%, 760px)",
+                              aspectRatio: String(aspectRatioValue),
+                            }}
+                          >
+                            {previewMode.kind === "timeline" ? (
+                              previewVideoUrl ? (
+                                <>
+                                  <video
+                                    ref={videoRef}
+                                    key={`timeline:${previewVideoUrl}`}
+                                    src={previewVideoUrl}
+                                    muted={false}
+                                    playsInline
+                                    className="absolute inset-0 h-full w-full object-cover"
                                     style={{
-                                      left: `${project.subtitles.positionXPercent}%`,
-                                      top: `${project.subtitles.positionYPercent}%`,
-                                      transform: "translate(-50%, -50%)",
+                                      transform: `translate(${activePlacement?.clip.canvas.panX ?? 0}px, ${activePlacement?.clip.canvas.panY ?? 0}px) scale(${activePlacement?.clip.canvas.zoom ?? 1})`,
+                                      transformOrigin: "center center",
                                     }}
-                                  >
+                                  />
+                                  {project.subtitles.enabled && currentCaption ? (
                                     <div
-                                      className="inline-block rounded-[1rem] border border-white/10 bg-black/18 px-4 py-2 text-white backdrop-blur-[2px]"
+                                      className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-1/2 text-center"
                                       style={{
-                                        fontSize: `${Math.max(18, 28 * project.subtitles.scale)}px`,
-                                        lineHeight: `${Math.max(22, 34 * project.subtitles.scale)}px`,
-                                        fontWeight: 700,
-                                        textShadow: "0 3px 10px rgba(0,0,0,0.6)",
-                                        WebkitTextStroke: "2px rgba(8,8,8,0.75)",
+                                        left: `${project.subtitles.positionXPercent}%`,
+                                        top: `${project.subtitles.positionYPercent}%`,
+                                        transform: "translate(-50%, -50%)",
                                       }}
                                     >
-                                      {String(currentCaption.text)}
+                                      <div
+                                        className="inline-block rounded-[1rem] border border-white/10 bg-black/18 px-4 py-2 text-white backdrop-blur-[2px]"
+                                        style={{
+                                          fontSize: `${Math.max(18, 28 * project.subtitles.scale)}px`,
+                                          lineHeight: `${Math.max(22, 34 * project.subtitles.scale)}px`,
+                                          fontWeight: 700,
+                                          textShadow: "0 3px 10px rgba(0,0,0,0.6)",
+                                          WebkitTextStroke: "2px rgba(8,8,8,0.75)",
+                                        }}
+                                      >
+                                        {String(currentCaption.text)}
+                                      </div>
                                     </div>
-                                  </div>
-                                ) : null}
-                              </>
-                            ) : (
-                              <div className="absolute inset-0 grid place-items-center text-center text-white/45">
-                                <div>
-                                  <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
-                                  No video source resolved for the current playhead.
-                                </div>
-                              </div>
-                            )
-                          ) : previewedAsset?.kind === "video" ? (
-                            previewVideoUrl ? (
-                              <video
-                                key={`asset:${previewVideoUrl}`}
-                                src={previewVideoUrl}
-                                controls
-                                playsInline
-                                className="absolute inset-0 h-full w-full object-contain"
-                              />
-                            ) : (
-                              <div className="absolute inset-0 grid place-items-center text-center text-white/45">
-                                <div>
-                                  <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
-                                  This asset is missing from browser storage.
-                                </div>
-                              </div>
-                            )
-                          ) : previewedAsset?.kind === "audio" ? (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_30%),linear-gradient(180deg,rgba(15,18,27,0.95),rgba(4,7,12,0.98))] p-8 text-center">
-                              <div className="rounded-full border border-white/10 bg-white/5 p-5 text-amber-100">
-                                <Music4 className="h-8 w-8" />
-                              </div>
-                              <div>
-                                <div className="text-lg font-semibold text-white">{previewedAsset.filename}</div>
-                                <div className="mt-2 text-sm text-white/55">
-                                  {secondsToClock(previewedAsset.durationSeconds)} · audio asset preview
-                                </div>
-                              </div>
-                              {previewAudioUrl ? (
-                                <audio controls src={previewAudioUrl} className="w-full max-w-md" />
+                                  ) : null}
+                                </>
                               ) : (
-                                <div className="text-sm text-white/45">This audio file is missing from browser storage.</div>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="absolute inset-0 grid place-items-center text-center text-white/45">
-                              <div>
-                                <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
-                                Select a project asset to preview it here.
+                                <div className="absolute inset-0 grid place-items-center text-center text-white/45">
+                                  <div>
+                                    <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                    No video source resolved for the current playhead.
+                                  </div>
+                                </div>
+                              )
+                            ) : previewedAsset?.kind === "video" ? (
+                              previewVideoUrl ? (
+                                <video
+                                  key={`asset:${previewVideoUrl}`}
+                                  src={previewVideoUrl}
+                                  controls
+                                  playsInline
+                                  className="absolute inset-0 h-full w-full object-contain"
+                                />
+                              ) : (
+                                <div className="absolute inset-0 grid place-items-center text-center text-white/45">
+                                  <div>
+                                    <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                    This asset is missing from browser storage.
+                                  </div>
+                                </div>
+                              )
+                            ) : previewedAsset?.kind === "audio" ? (
+                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_30%),linear-gradient(180deg,rgba(15,18,27,0.95),rgba(4,7,12,0.98))] p-8 text-center">
+                                <div className="rounded-full border border-white/10 bg-white/5 p-5 text-amber-100">
+                                  <Music4 className="h-8 w-8" />
+                                </div>
+                                <div>
+                                  <div className="text-lg font-semibold text-white">{previewedAsset.filename}</div>
+                                  <div className="mt-2 text-sm text-white/55">
+                                    {secondsToClock(previewedAsset.durationSeconds)} · audio asset preview
+                                  </div>
+                                </div>
+                                {previewAudioUrl ? (
+                                  <audio controls src={previewAudioUrl} className="w-full max-w-md" />
+                                ) : (
+                                  <div className="text-sm text-white/45">This audio file is missing from browser storage.</div>
+                                )}
                               </div>
+                            ) : (
+                              <div className="absolute inset-0 grid place-items-center text-center text-white/45">
+                                <div>
+                                  <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                  Select a project asset to preview it here.
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-1.5 shrink-0">
+                          {previewMode.kind === "timeline" ? (
+                            <>
+                              <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.9rem] border border-white/8 bg-black/25 px-3 py-2">
+                                <div className={EDITOR_TIMECODE_CLASS}>
+                                  {secondsToClock(project.timeline.playheadSeconds)} / {secondsToClock(projectDuration)}
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    variant="outline"
+                                    className={EDITOR_TOOLBAR_BUTTON_CLASS}
+                                    onClick={() => setIsPlaying((current) => !current)}
+                                  >
+                                    {isPlaying ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+                                    {isPlaying ? "Pause" : "Play"}
+                                  </Button>
+                                  <Button
+                                    variant="ghost"
+                                    className="h-8 rounded-[0.85rem] px-3 text-xs text-white/52 hover:bg-white/[0.06] hover:text-white"
+                                    onClick={() =>
+                                      updateProject((current) => ({
+                                        ...current,
+                                        timeline: {
+                                          ...current.timeline,
+                                          playheadSeconds: 0,
+                                        },
+                                      }))
+                                    }
+                                  >
+                                    Reset
+                                  </Button>
+                                </div>
+                              </div>
+                              <input
+                                type="range"
+                                min={0}
+                                max={Math.max(projectDuration, 0.1)}
+                                step={0.01}
+                                value={project.timeline.playheadSeconds}
+                                onChange={(event) =>
+                                  updateProject((current) => ({
+                                    ...current,
+                                    timeline: {
+                                      ...current.timeline,
+                                      playheadSeconds: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="mt-2 w-full accent-cyan-400"
+                              />
+                            </>
+                          ) : (
+                            <div className="flex flex-wrap items-center justify-between gap-3 rounded-[0.9rem] border border-cyan-400/14 bg-cyan-400/[0.045] px-3 py-2.5">
+                              <div className="text-sm text-white/58">
+                                Project assets preview independently. Click any clip in the timeline to return to the live sequence.
+                              </div>
+                              <Button
+                                variant="outline"
+                                className={EDITOR_TOOLBAR_BUTTON_CLASS}
+                                onClick={() => setPreviewMode({ kind: "timeline" })}
+                              >
+                                Back to Timeline
+                              </Button>
                             </div>
                           )}
+                          {previewMode.kind === "timeline" && previewAudioUrl ? <audio ref={audioRef} src={previewAudioUrl} hidden /> : null}
                         </div>
-                      </div>
-
-                      <div className="mt-2 shrink-0">
-                        {previewMode.kind === "timeline" ? (
-                          <>
-                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.9rem] border border-white/8 bg-black/25 px-3 py-2">
-                              <div className={EDITOR_TIMECODE_CLASS}>
-                                {secondsToClock(project.timeline.playheadSeconds)} / {secondsToClock(projectDuration)}
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <Button
-                                  variant="outline"
-                                  className={EDITOR_TOOLBAR_BUTTON_CLASS}
-                                  onClick={() => setIsPlaying((current) => !current)}
-                                >
-                                  {isPlaying ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
-                                  {isPlaying ? "Pause" : "Play"}
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  className="h-8 rounded-[0.85rem] px-3 text-xs text-white/52 hover:bg-white/[0.06] hover:text-white"
-                                  onClick={() =>
-                                    updateProject((current) => ({
-                                      ...current,
-                                      timeline: {
-                                        ...current.timeline,
-                                        playheadSeconds: 0,
-                                      },
-                                    }))
-                                  }
-                                >
-                                  Reset
-                                </Button>
-                              </div>
-                            </div>
-                            <input
-                              type="range"
-                              min={0}
-                              max={Math.max(projectDuration, 0.1)}
-                              step={0.01}
-                              value={project.timeline.playheadSeconds}
-                              onChange={(event) =>
-                                updateProject((current) => ({
-                                  ...current,
-                                  timeline: {
-                                    ...current.timeline,
-                                    playheadSeconds: Number(event.target.value),
-                                  },
-                                }))
-                              }
-                              className="mt-3 w-full accent-cyan-400"
-                            />
-                          </>
-                        ) : (
-                          <div className="flex flex-wrap items-center justify-between gap-3 rounded-[0.9rem] border border-cyan-400/14 bg-cyan-400/[0.045] px-3 py-2.5">
-                            <div className="text-sm text-white/58">
-                              Project assets preview independently. Click any clip in the timeline to return to the live sequence.
-                            </div>
-                            <Button
-                              variant="outline"
-                              className={EDITOR_TOOLBAR_BUTTON_CLASS}
-                              onClick={() => setPreviewMode({ kind: "timeline" })}
-                            >
-                              Back to Timeline
-                            </Button>
-                          </div>
-                        )}
-                        {previewMode.kind === "timeline" && previewAudioUrl ? <audio ref={audioRef} src={previewAudioUrl} hidden /> : null}
                       </div>
                     </div>
                   </CardContent>
@@ -2056,19 +2039,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               >
                 <Card className={EDITOR_PANEL_CLASS}>
                   <CardContent className={EDITOR_PANEL_CONTENT_CLASS}>
-                    <div className="flex items-center justify-between gap-2">
+                    <div className={EDITOR_PANEL_HEADER_CLASS}>
                       <div className={EDITOR_LABEL_CLASS}>Inspector</div>
                       <Button
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 rounded-md text-white/38 hover:bg-white/[0.06] hover:text-white"
                         onClick={() => togglePanel("right")}
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
                     </div>
 
-                    <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col">
+                    <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 pt-1.5 sm:px-2 sm:pb-2">
                       <TabsList className="grid w-full shrink-0 grid-cols-3 rounded-[0.75rem] border border-white/8 bg-black/25 p-1">
                         <TabsTrigger value="selection" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
                           Selection
@@ -2081,7 +2064,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         </TabsTrigger>
                       </TabsList>
 
-                      <TabsContent value="selection" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      <TabsContent value="selection" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
                         {selectedClip && selectedClipAsset ? (
                           <>
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
@@ -2343,7 +2326,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         )}
                       </TabsContent>
 
-                      <TabsContent value="subtitles" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      <TabsContent value="subtitles" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
                         <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
                           <div className="flex items-center justify-between">
                             <div>
@@ -2487,7 +2470,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         </div>
                       </TabsContent>
 
-                      <TabsContent value="exports" className="mt-3 min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+                      <TabsContent value="exports" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
                         <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
                           <div className={EDITOR_LABEL_CLASS}>Export Status</div>
                           {isExporting ? (
@@ -2555,9 +2538,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             ) : null}
           </section>
 
-          <Card className="h-full overflow-hidden rounded-none border-none bg-[linear-gradient(180deg,rgba(10,13,18,0.99),rgba(5,7,10,0.99))] text-white shadow-none">
+          <Card className="h-full gap-0 overflow-hidden rounded-none border-none bg-[linear-gradient(180deg,rgba(10,13,18,0.99),rgba(5,7,10,0.99))] py-0 text-white shadow-none">
             <CardContent className="flex h-full min-h-0 flex-col gap-0 p-0">
-              <div className="flex flex-col gap-2 border-b border-white/6 bg-[linear-gradient(180deg,rgba(255,255,255,0.015),rgba(255,255,255,0.006))] px-2 py-1.5 xl:flex-row xl:items-center xl:justify-between">
+              <div className="flex flex-col gap-1.5 border-b border-white/6 bg-[linear-gradient(180deg,rgba(255,255,255,0.015),rgba(255,255,255,0.006))] px-2.5 py-1.5 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className={EDITOR_TIMECODE_CLASS}>{visibleWindowLabel}</div>
                   {selectedTimelineLabel ? (
