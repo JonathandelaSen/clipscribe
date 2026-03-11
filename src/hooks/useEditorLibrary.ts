@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createDexieEditorRepository, groupEditorExportsByProjectId } from "@/lib/repositories/editor-repo";
+import { normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import type { EditorAssetRecord, EditorExportRecord, EditorProjectRecord } from "@/lib/editor/types";
 
 const editorRepository = createDexieEditorRepository();
@@ -17,7 +18,7 @@ export function useEditorLibrary() {
     try {
       const allProjects = await editorRepository.listProjects();
       const allExports = await Promise.all(allProjects.map((project) => editorRepository.listProjectExports(project.id)));
-      setProjects(allProjects);
+      setProjects(allProjects.map((project) => normalizeLegacyEditorProjectRecord(project)));
       setExports(allExports.flat());
     } catch (err) {
       console.error("Failed to load editor library", err);
@@ -33,9 +34,10 @@ export function useEditorLibrary() {
 
   const upsertProject = useCallback(async (record: EditorProjectRecord) => {
     await editorRepository.putProject(record);
+    const normalizedRecord = normalizeLegacyEditorProjectRecord(record);
     setProjects((prev) => {
-      const next = prev.filter((project) => project.id !== record.id);
-      next.push(record);
+      const next = prev.filter((project) => project.id !== normalizedRecord.id);
+      next.push(normalizedRecord);
       return next.sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
     });
   }, []);
@@ -93,7 +95,7 @@ export function useEditorProject(projectId: string | undefined) {
         editorRepository.listProjectAssets(projectId),
         editorRepository.listProjectExports(projectId),
       ]);
-      setProject(projectRecord ?? null);
+      setProject(projectRecord ? normalizeLegacyEditorProjectRecord(projectRecord) : null);
       setAssets(projectAssets);
       setExports(projectExports);
     } catch (err) {
@@ -110,7 +112,7 @@ export function useEditorProject(projectId: string | undefined) {
 
   const saveProject = useCallback(async (record: EditorProjectRecord) => {
     await editorRepository.putProject(record);
-    setProject(record);
+    setProject(normalizeLegacyEditorProjectRecord(record));
   }, []);
 
   const saveAssets = useCallback(async (records: EditorAssetRecord[]) => {

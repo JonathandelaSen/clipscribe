@@ -1,6 +1,6 @@
 import { buildShortExportGeometry } from "../../creator/core/export-geometry";
 import { getEditorOutputDimensions } from "./aspect-ratio";
-import { getTimelineClipPlacements } from "./timeline";
+import { getTimelineAudioEnd, getTimelineClipPlacements } from "./timeline";
 import type {
   EditorAssetRecord,
   EditorProjectRecord,
@@ -106,38 +106,32 @@ export function buildEditorExportPlan(input: {
   );
 
   let mixedAudioLabel: string | null = concatAudioLabel;
-  const audioTrack = input.project.timeline.audioTrack;
-  if (audioTrack) {
-    const audioInputRef = inputsByAssetId.get(audioTrack.assetId);
+  input.project.timeline.audioItems.forEach((audioItem, index) => {
+    const audioInputRef = inputsByAssetId.get(audioItem.assetId);
     if (!audioInputRef) {
-      warnings.push("External audio track source is missing.");
-    } else {
-      const trackLabel = "music_track";
-      filterParts.push(
-        `[${audioInputRef.inputIndex}:a]atrim=start=${audioTrack.trimStartSeconds}:end=${audioTrack.trimEndSeconds},asetpts=PTS-STARTPTS,adelay=${Math.round(
-          Math.max(0, audioTrack.startOffsetSeconds) * 1000
-        )}|${Math.round(Math.max(0, audioTrack.startOffsetSeconds) * 1000)},volume=${audioTrack.muted ? 0 : audioTrack.volume.toFixed(
-          3
-        )}[${trackLabel}]`
-      );
-      if (mixedAudioLabel) {
-        const nextMixedLabel = "mixed_audio";
-        filterParts.push(`[${mixedAudioLabel}][${trackLabel}]amix=inputs=2:duration=longest:dropout_transition=0[${nextMixedLabel}]`);
-        mixedAudioLabel = nextMixedLabel;
-      } else {
-        mixedAudioLabel = trackLabel;
-      }
+      warnings.push(`Audio track item ${index + 1} is missing its source file.`);
+      return;
     }
-  }
+
+    const trackLabel = `music_track_${index}`;
+    const delayMs = Math.round(Math.max(0, audioItem.startOffsetSeconds) * 1000);
+    filterParts.push(
+      `[${audioInputRef.inputIndex}:a]atrim=start=${audioItem.trimStartSeconds}:end=${audioItem.trimEndSeconds},asetpts=PTS-STARTPTS,adelay=${delayMs}|${delayMs},volume=${audioItem.muted ? 0 : audioItem.volume.toFixed(
+        3
+      )}[${trackLabel}]`
+    );
+    if (mixedAudioLabel) {
+      const nextMixedLabel = `mixed_audio_${index}`;
+      filterParts.push(`[${mixedAudioLabel}][${trackLabel}]amix=inputs=2:duration=longest:dropout_transition=0[${nextMixedLabel}]`);
+      mixedAudioLabel = nextMixedLabel;
+    } else {
+      mixedAudioLabel = trackLabel;
+    }
+  });
 
   const ffmpegArgs = input.inputs.flatMap((item) => ["-i", item.path]);
   const durationSeconds = roundMs(
-    Math.max(
-      placements[placements.length - 1]?.endSeconds ?? 0,
-      audioTrack
-        ? audioTrack.startOffsetSeconds + Math.max(0, audioTrack.trimEndSeconds - audioTrack.trimStartSeconds)
-        : 0
-    )
+    Math.max(placements[placements.length - 1]?.endSeconds ?? 0, getTimelineAudioEnd(input.project.timeline.audioItems))
   );
 
   return {

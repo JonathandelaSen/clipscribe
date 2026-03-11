@@ -26,7 +26,7 @@ const TOOLS = [
   },
   {
     title: "Timeline Studio",
-    description: "Build full timeline projects with clips, an audio bed, subtitles, and exports.",
+    description: "Build full timeline projects with clips, a ripple audio track, subtitles, and exports.",
     href: "/creator/editor",
     icon: Film,
     color: "text-cyan-300",

@@ -2,15 +2,23 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  clampAudioTrackToAsset,
+  clampAudioItemToAsset,
   clampVideoClipToAsset,
+  ensureProjectSelection,
   findClipAtProjectTime,
   getProjectDuration,
+  getSelectionForLaneIndex,
   getTimelineClipPlacements,
+  insertTimelineAudioItemAfter,
   reorderTimelineClip,
   splitTimelineClip,
 } from "../../../src/lib/editor/core/timeline";
-import { createDefaultAudioTrack, createDefaultVideoClip, createEmptyEditorProject } from "../../../src/lib/editor/storage";
+import {
+  createDefaultAudioTrack,
+  createDefaultVideoClip,
+  createEmptyEditorProject,
+  normalizeLegacyEditorProjectRecord,
+} from "../../../src/lib/editor/storage";
 
 test("getTimelineClipPlacements creates a continuous ripple sequence", () => {
   const clips = [
@@ -56,7 +64,7 @@ test("clamp trim helpers enforce asset boundaries and minimum durations", () => 
     },
     10
   );
-  const audio = clampAudioTrackToAsset(
+  const audio = clampAudioItemToAsset(
     {
       ...createDefaultAudioTrack({ assetId: "aud", durationSeconds: 30 }),
       trimStartSeconds: 29.9,
@@ -73,13 +81,15 @@ test("clamp trim helpers enforce asset boundaries and minimum durations", () => 
   assert.equal(audio.startOffsetSeconds, 0);
 });
 
-test("getProjectDuration respects the longer of video sequence or audio bed", () => {
+test("getProjectDuration respects the longer of video sequence or audio items", () => {
   const project = createEmptyEditorProject();
   project.timeline.videoClips = [createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 8 })];
-  project.timeline.audioTrack = {
-    ...createDefaultAudioTrack({ assetId: "aud", durationSeconds: 15 }),
-    startOffsetSeconds: 2,
-  };
+  project.timeline.audioItems = [
+    {
+      ...createDefaultAudioTrack({ assetId: "aud", durationSeconds: 15 }),
+      startOffsetSeconds: 2,
+    },
+  ];
 
   assert.equal(getProjectDuration(project), 17);
 });
@@ -93,4 +103,67 @@ test("findClipAtProjectTime resolves the active clip in sequence time", () => {
 
   assert.equal(found?.clip.assetId, "b");
   assert.equal(found?.startSeconds, 4);
+});
+
+test("normalizeLegacyEditorProjectRecord upgrades selected clip and audio track fields", () => {
+  const project = createEmptyEditorProject();
+  const clip = createDefaultVideoClip({ assetId: "video-1", label: "Clip", durationSeconds: 5 });
+  const audio = createDefaultAudioTrack({ assetId: "audio-1", durationSeconds: 8 });
+  const legacyProject = {
+    ...project,
+    timeline: {
+      ...project.timeline,
+      selectedClipId: clip.id,
+      videoClips: [clip],
+      audioTrack: audio,
+    },
+  };
+
+  const normalized = ensureProjectSelection(normalizeLegacyEditorProjectRecord(legacyProject));
+
+  assert.deepEqual(normalized.timeline.selectedItem, { kind: "video", id: clip.id });
+  assert.equal(normalized.timeline.audioItems.length, 1);
+  assert.equal(normalized.timeline.audioItems[0].id, audio.id);
+});
+
+test("insertTimelineAudioItemAfter ripples later audio items to the right", () => {
+  const first = {
+    ...createDefaultAudioTrack({ assetId: "aud-a", durationSeconds: 4 }),
+    startOffsetSeconds: 0,
+    trimEndSeconds: 4,
+  };
+  const second = {
+    ...createDefaultAudioTrack({ assetId: "aud-b", durationSeconds: 3 }),
+    startOffsetSeconds: 4,
+    trimEndSeconds: 3,
+  };
+  const inserted = {
+    ...createDefaultAudioTrack({ assetId: "aud-c", durationSeconds: 2 }),
+    trimEndSeconds: 2,
+  };
+
+  const nextItems = insertTimelineAudioItemAfter([first, second], inserted, first.id);
+
+  assert.deepEqual(
+    nextItems.map((item) => ({
+      assetId: item.assetId,
+      startOffsetSeconds: item.startOffsetSeconds,
+    })),
+    [
+      { assetId: "aud-a", startOffsetSeconds: 0 },
+      { assetId: "aud-c", startOffsetSeconds: 4 },
+      { assetId: "aud-b", startOffsetSeconds: 6 },
+    ]
+  );
+});
+
+test("getSelectionForLaneIndex falls back to the next remaining item after delete", () => {
+  const videoA = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const videoB = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 });
+  const audioA = createDefaultAudioTrack({ assetId: "aud-a", durationSeconds: 5 });
+  const selection = getSelectionForLaneIndex("video", 1, [videoA, videoB], [audioA]);
+  const nextSelection = getSelectionForLaneIndex("video", 1, [videoA], [audioA]);
+
+  assert.deepEqual(selection, { kind: "video", id: videoB.id });
+  assert.deepEqual(nextSelection, { kind: "video", id: videoA.id });
 });

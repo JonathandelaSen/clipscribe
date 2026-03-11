@@ -131,7 +131,11 @@ export function EditorProjectLibrary() {
                             <div className="flex flex-wrap gap-4 text-sm text-white/55">
                               <span>Updated {formatRelativeDate(project.updatedAt)}</span>
                               <span>{exportCount} export record{exportCount === 1 ? "" : "s"}</span>
-                              <span>{project.timeline.audioTrack ? "Audio bed attached" : "No audio bed"}</span>
+                              <span>
+                                {project.timeline.audioItems.length
+                                  ? `${project.timeline.audioItems.length} audio item${project.timeline.audioItems.length === 1 ? "" : "s"}`
+                                  : "No audio items"}
+                              </span>
                             </div>
                             {project.latestExport ? (
                               <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-50/85">
@@ -182,7 +186,7 @@ export function EditorProjectLibrary() {
                   <Clapperboard className="h-4 w-4 text-cyan-200" />
                   Timeline editing
                 </div>
-                Sequence multiple clips, trim or split them, attach one audio bed, and keep a live caption track.
+                Sequence multiple clips, trim or split them, build a ripple audio track, and keep a live caption track.
               </div>
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                 <div className="mb-2 font-medium text-white">Exports</div>

@@ -10,11 +10,23 @@ import type {
   EditorExportRecord,
   EditorProjectRecord,
   EditorSubtitlePreset,
+  TimelineSelection,
   TimelineAudioItem,
   TimelineVideoClip,
 } from "./types";
 
 const DEFAULT_SUBTITLE_PRESET: EditorSubtitlePreset = "clean_caption";
+
+type LegacyEditorProjectTimelineState = Partial<EditorProjectRecord["timeline"]> & {
+  selectedClipId?: string;
+  audioTrack?: TimelineAudioItem | null;
+  audioItems?: TimelineAudioItem[];
+  selectedItem?: TimelineSelection;
+};
+
+type LegacyEditorProjectRecord = Omit<EditorProjectRecord, "timeline"> & {
+  timeline: LegacyEditorProjectTimelineState;
+};
 
 export function createDefaultVideoClip(input: {
   assetId: string;
@@ -72,9 +84,9 @@ export function createEmptyEditorProject(input?: {
     timeline: {
       playheadSeconds: 0,
       zoomLevel: 1,
-      selectedClipId: undefined,
+      selectedItem: undefined,
       videoClips: [],
-      audioTrack: null,
+      audioItems: [],
     },
     subtitles: {
       enabled: true,
@@ -83,6 +95,31 @@ export function createEmptyEditorProject(input?: {
       positionYPercent: 84,
       scale: 1,
       style: getDefaultCreatorSubtitleStyle(DEFAULT_SUBTITLE_PRESET),
+    },
+  };
+}
+
+export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord | LegacyEditorProjectRecord): EditorProjectRecord {
+  const timeline = (project.timeline ?? {}) as LegacyEditorProjectTimelineState;
+  const audioItems = Array.isArray(timeline.audioItems) && timeline.audioItems.length > 0
+    ? timeline.audioItems
+    : timeline.audioTrack
+      ? [timeline.audioTrack]
+      : [];
+  const selectedItem = timeline.selectedItem
+    ? timeline.selectedItem
+    : timeline.selectedClipId
+      ? { kind: "video" as const, id: timeline.selectedClipId }
+      : undefined;
+
+  return {
+    ...project,
+    timeline: {
+      playheadSeconds: timeline.playheadSeconds ?? 0,
+      zoomLevel: timeline.zoomLevel ?? 1,
+      selectedItem,
+      videoClips: Array.isArray(timeline.videoClips) ? timeline.videoClips : [],
+      audioItems,
     },
   };
 }

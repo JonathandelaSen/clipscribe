@@ -209,7 +209,9 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       notes: [
         `Timeline export via ffmpeg.wasm (${input.project.aspectRatio} @ ${input.resolution}).`,
         `${input.project.timeline.videoClips.length} video clips in ripple sequence.`,
-        input.project.timeline.audioTrack ? "External audio bed mixed with clip audio." : "Clip audio only.",
+        input.project.timeline.audioItems.length
+          ? `${input.project.timeline.audioItems.length} audio track item${input.project.timeline.audioItems.length === 1 ? "" : "s"} mixed with clip audio.`
+          : "Clip audio only.",
         subtitleFrames.length > 0 ? `${subtitleFrames.length} subtitle frames burned into the output.` : "No subtitle burn-in frames were rendered.",
         input.resolution === "4K" ? "4K is experimental in browser and may fail on lower-memory devices." : "Standard browser export preset.",
       ],

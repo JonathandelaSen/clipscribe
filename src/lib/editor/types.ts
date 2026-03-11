@@ -56,6 +56,13 @@ export interface TimelineAudioItem {
   muted: boolean;
 }
 
+export type TimelineSelectionKind = "video" | "audio";
+
+export interface TimelineSelection {
+  kind: TimelineSelectionKind;
+  id: string;
+}
+
 export interface EditorSubtitleTrackSettings {
   enabled: boolean;
   preset: EditorSubtitlePreset;
@@ -68,9 +75,9 @@ export interface EditorSubtitleTrackSettings {
 export interface EditorProjectTimelineState {
   playheadSeconds: number;
   zoomLevel: number;
-  selectedClipId?: string;
+  selectedItem?: TimelineSelection;
   videoClips: TimelineVideoClip[];
-  audioTrack?: TimelineAudioItem | null;
+  audioItems: TimelineAudioItem[];
 }
 
 export interface EditorExportSummary {
@@ -138,6 +145,14 @@ export interface EditorExportRecord {
 
 export interface TimelineClipPlacement {
   clip: TimelineVideoClip;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  index: number;
+}
+
+export interface TimelineAudioPlacement {
+  item: TimelineAudioItem;
   startSeconds: number;
   endSeconds: number;
   durationSeconds: number;

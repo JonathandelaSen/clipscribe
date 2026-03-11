@@ -2,7 +2,10 @@ import type {
   EditorAssetRecord,
   EditorProjectRecord,
   TimelineAudioItem,
+  TimelineAudioPlacement,
   TimelineClipPlacement,
+  TimelineSelection,
+  TimelineSelectionKind,
   TimelineVideoClip,
 } from "../types";
 import { makeId } from "../../history";
@@ -19,10 +22,11 @@ export function getVideoClipDuration(clip: TimelineVideoClip): number {
   return roundMs(Math.max(0.5, clip.trimEndSeconds - clip.trimStartSeconds));
 }
 
-export function getAudioTrackDuration(track: TimelineAudioItem | null | undefined): number {
-  if (!track) return 0;
-  return roundMs(Math.max(0, track.trimEndSeconds - track.trimStartSeconds));
+export function getAudioItemDuration(item: TimelineAudioItem): number {
+  return roundMs(Math.max(0.5, item.trimEndSeconds - item.trimStartSeconds));
 }
+
+export const getAudioTrackDuration = getAudioItemDuration;
 
 export function getTimelineClipPlacements(clips: TimelineVideoClip[]): TimelineClipPlacement[] {
   let cursor = 0;
@@ -40,17 +44,32 @@ export function getTimelineClipPlacements(clips: TimelineVideoClip[]): TimelineC
   });
 }
 
+export function getTimelineAudioPlacements(items: TimelineAudioItem[]): TimelineAudioPlacement[] {
+  return items.map((item, index) => {
+    const durationSeconds = getAudioItemDuration(item);
+    const startSeconds = roundMs(Math.max(0, item.startOffsetSeconds));
+    return {
+      item,
+      index,
+      startSeconds,
+      endSeconds: roundMs(startSeconds + durationSeconds),
+      durationSeconds,
+    };
+  });
+}
+
+export function getTimelineAudioEnd(items: TimelineAudioItem[]): number {
+  const placements = getTimelineAudioPlacements(items);
+  return placements.length ? placements[placements.length - 1].endSeconds : 0;
+}
+
 export function getProjectVideoDuration(project: Pick<EditorProjectRecord, "timeline">): number {
   const placements = getTimelineClipPlacements(project.timeline.videoClips);
   return placements.length ? placements[placements.length - 1].endSeconds : 0;
 }
 
 export function getProjectDuration(project: Pick<EditorProjectRecord, "timeline">): number {
-  const videoDuration = getProjectVideoDuration(project);
-  const audioDuration = project.timeline.audioTrack
-    ? project.timeline.audioTrack.startOffsetSeconds + getAudioTrackDuration(project.timeline.audioTrack)
-    : 0;
-  return roundMs(Math.max(videoDuration, audioDuration));
+  return roundMs(Math.max(getProjectVideoDuration(project), getTimelineAudioEnd(project.timeline.audioItems)));
 }
 
 export function clampVideoClipToAsset(clip: TimelineVideoClip, assetDurationSeconds: number): TimelineVideoClip {
@@ -64,16 +83,34 @@ export function clampVideoClipToAsset(clip: TimelineVideoClip, assetDurationSeco
   };
 }
 
-export function clampAudioTrackToAsset(track: TimelineAudioItem, assetDurationSeconds: number): TimelineAudioItem {
+export function clampAudioItemToAsset(item: TimelineAudioItem, assetDurationSeconds: number): TimelineAudioItem {
   const safeDuration = Math.max(0.5, assetDurationSeconds || 0.5);
-  const trimStartSeconds = clampNumber(track.trimStartSeconds, 0, Math.max(0, safeDuration - 0.5));
-  const trimEndSeconds = clampNumber(track.trimEndSeconds, trimStartSeconds + 0.5, safeDuration);
+  const trimStartSeconds = clampNumber(item.trimStartSeconds, 0, Math.max(0, safeDuration - 0.5));
+  const trimEndSeconds = clampNumber(item.trimEndSeconds, trimStartSeconds + 0.5, safeDuration);
   return {
-    ...track,
-    startOffsetSeconds: roundMs(Math.max(0, track.startOffsetSeconds)),
+    ...item,
+    startOffsetSeconds: roundMs(Math.max(0, item.startOffsetSeconds)),
     trimStartSeconds: roundMs(trimStartSeconds),
     trimEndSeconds: roundMs(trimEndSeconds),
   };
+}
+
+export const clampAudioTrackToAsset = clampAudioItemToAsset;
+
+export function normalizeTimelineAudioItems(items: TimelineAudioItem[]): TimelineAudioItem[] {
+  const sorted = [...items].sort((a, b) => a.startOffsetSeconds - b.startOffsetSeconds);
+  let previousEnd = 0;
+  return sorted.map((item) => {
+    const startOffsetSeconds = roundMs(Math.max(previousEnd, Math.max(0, item.startOffsetSeconds)));
+    const nextItem = {
+      ...item,
+      startOffsetSeconds,
+      trimStartSeconds: roundMs(Math.max(0, item.trimStartSeconds)),
+      trimEndSeconds: roundMs(Math.max(item.trimStartSeconds + 0.5, item.trimEndSeconds)),
+    };
+    previousEnd = roundMs(startOffsetSeconds + getAudioItemDuration(nextItem));
+    return nextItem;
+  });
 }
 
 export function reorderTimelineClip(
@@ -126,11 +163,99 @@ export function removeTimelineClip(clips: TimelineVideoClip[], clipId: string): 
   return clips.filter((clip) => clip.id !== clipId);
 }
 
+export function removeTimelineAudioItem(items: TimelineAudioItem[], itemId: string): TimelineAudioItem[] {
+  return items.filter((item) => item.id !== itemId);
+}
+
 export function replaceTimelineClip(
   clips: TimelineVideoClip[],
   nextClip: TimelineVideoClip
 ): TimelineVideoClip[] {
   return clips.map((clip) => (clip.id === nextClip.id ? nextClip : clip));
+}
+
+export function replaceTimelineAudioItem(
+  items: TimelineAudioItem[],
+  nextItem: TimelineAudioItem
+): TimelineAudioItem[] {
+  return normalizeTimelineAudioItems(items.map((item) => (item.id === nextItem.id ? nextItem : item)));
+}
+
+export function createClonedTimelineClip(clip: TimelineVideoClip): TimelineVideoClip {
+  return {
+    ...clip,
+    id: makeId("edclip"),
+  };
+}
+
+export function createClonedTimelineAudioItem(item: TimelineAudioItem): TimelineAudioItem {
+  return {
+    ...item,
+    id: makeId("edaudio"),
+  };
+}
+
+export function insertTimelineClipAfter(
+  clips: TimelineVideoClip[],
+  nextClip: TimelineVideoClip,
+  afterClipId?: string
+): TimelineVideoClip[] {
+  if (!afterClipId) {
+    return [...clips, nextClip];
+  }
+  const index = clips.findIndex((clip) => clip.id === afterClipId);
+  if (index < 0) {
+    return [...clips, nextClip];
+  }
+  const result = [...clips];
+  result.splice(index + 1, 0, nextClip);
+  return result;
+}
+
+export function appendTimelineAudioItem(
+  items: TimelineAudioItem[],
+  nextItem: TimelineAudioItem
+): TimelineAudioItem[] {
+  const endSeconds = getTimelineAudioEnd(items);
+  return normalizeTimelineAudioItems([
+    ...items,
+    {
+      ...nextItem,
+      startOffsetSeconds: endSeconds,
+    },
+  ]);
+}
+
+export function insertTimelineAudioItemAfter(
+  items: TimelineAudioItem[],
+  nextItem: TimelineAudioItem,
+  afterItemId?: string
+): TimelineAudioItem[] {
+  if (!afterItemId) {
+    return appendTimelineAudioItem(items, nextItem);
+  }
+
+  const index = items.findIndex((item) => item.id === afterItemId);
+  if (index < 0) {
+    return appendTimelineAudioItem(items, nextItem);
+  }
+
+  const result = [...items];
+  const insertedDuration = getAudioItemDuration(nextItem);
+  const insertionStart = roundMs(items[index].startOffsetSeconds + getAudioItemDuration(items[index]));
+  result.splice(index + 1, 0, {
+    ...nextItem,
+    startOffsetSeconds: insertionStart,
+  });
+
+  for (let itemIndex = index + 2; itemIndex < result.length; itemIndex += 1) {
+    result[itemIndex] = {
+      ...result[itemIndex],
+      startOffsetSeconds: roundMs(result[itemIndex].startOffsetSeconds + insertedDuration),
+    };
+  }
+
+  return normalizeTimelineAudioItems(result);
 }
 
 export function findClipAtProjectTime(
@@ -142,17 +267,66 @@ export function findClipAtProjectTime(
   );
 }
 
+export function findAudioItemAtProjectTime(
+  items: TimelineAudioItem[],
+  projectTimeSeconds: number
+): TimelineAudioPlacement | undefined {
+  return getTimelineAudioPlacements(items).find(
+    (placement) => projectTimeSeconds >= placement.startSeconds && projectTimeSeconds < placement.endSeconds
+  );
+}
+
+export function getFirstTimelineSelection(
+  videoClips: TimelineVideoClip[],
+  audioItems: TimelineAudioItem[]
+): TimelineSelection | undefined {
+  if (videoClips[0]) return { kind: "video", id: videoClips[0].id };
+  if (audioItems[0]) return { kind: "audio", id: audioItems[0].id };
+  return undefined;
+}
+
+export function hasTimelineSelection(
+  selection: TimelineSelection | undefined,
+  videoClips: TimelineVideoClip[],
+  audioItems: TimelineAudioItem[]
+): boolean {
+  if (!selection) return false;
+  if (selection.kind === "video") {
+    return videoClips.some((clip) => clip.id === selection.id);
+  }
+  return audioItems.some((item) => item.id === selection.id);
+}
+
 export function ensureProjectSelection(project: EditorProjectRecord): EditorProjectRecord {
-  const selectedExists = project.timeline.selectedClipId
-    ? project.timeline.videoClips.some((clip) => clip.id === project.timeline.selectedClipId)
-    : false;
+  const audioItems = normalizeTimelineAudioItems(project.timeline.audioItems ?? []);
+  const selectedItem = hasTimelineSelection(project.timeline.selectedItem, project.timeline.videoClips, audioItems)
+    ? project.timeline.selectedItem
+    : getFirstTimelineSelection(project.timeline.videoClips, audioItems);
+
   return {
     ...project,
     timeline: {
       ...project.timeline,
-      selectedClipId: selectedExists ? project.timeline.selectedClipId : project.timeline.videoClips[0]?.id,
+      selectedItem,
+      audioItems,
     },
   };
+}
+
+export function getSelectionForLaneIndex(
+  kind: TimelineSelectionKind,
+  index: number,
+  videoClips: TimelineVideoClip[],
+  audioItems: TimelineAudioItem[]
+): TimelineSelection | undefined {
+  const lane = kind === "video" ? videoClips : audioItems;
+  if (lane[index]) {
+    return { kind, id: lane[index].id };
+  }
+  if (index > 0 && lane[index - 1]) {
+    return { kind, id: lane[index - 1].id };
+  }
+  return getFirstTimelineSelection(videoClips, audioItems);
 }
 
 export function getAssetById(
