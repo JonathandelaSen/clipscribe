@@ -6,17 +6,25 @@ import {
   clampVideoClipToAsset,
   ensureProjectSelection,
   findClipAtProjectTime,
+  getContiguousAudioStartOffset,
   getProjectDuration,
   getSelectionForLaneIndex,
   getTimelineClipPlacements,
   insertTimelineAudioItemAfter,
   reorderTimelineClip,
+  resetTimelineAudioItemTrack,
+  resetTimelineAudioItemTrim,
+  resetTimelineVideoClipAudio,
+  resetTimelineVideoClipFrame,
+  resetTimelineVideoClipTrim,
   splitTimelineClip,
 } from "../../../src/lib/editor/core/timeline";
 import {
+  DEFAULT_EDITOR_MEDIA_VOLUME,
   createDefaultAudioTrack,
   createDefaultVideoClip,
   createEmptyEditorProject,
+  getDefaultEditorCanvasState,
   normalizeLegacyEditorProjectRecord,
 } from "../../../src/lib/editor/storage";
 
@@ -166,4 +174,56 @@ test("getSelectionForLaneIndex falls back to the next remaining item after delet
 
   assert.deepEqual(selection, { kind: "video", id: videoB.id });
   assert.deepEqual(nextSelection, { kind: "video", id: videoA.id });
+});
+
+test("reset helpers restore selected clip defaults", () => {
+  const clip = {
+    ...createDefaultVideoClip({ assetId: "video-1", label: "Clip", durationSeconds: 12 }),
+    trimStartSeconds: 3.25,
+    trimEndSeconds: 8.75,
+    canvas: {
+      zoom: 1.6,
+      panX: 48,
+      panY: -72,
+    },
+    volume: 0.35,
+    muted: true,
+  };
+
+  const resetTrim = resetTimelineVideoClipTrim(clip, 12);
+  const resetFrame = resetTimelineVideoClipFrame(clip);
+  const resetAudio = resetTimelineVideoClipAudio(clip);
+
+  assert.equal(resetTrim.trimStartSeconds, 0);
+  assert.equal(resetTrim.trimEndSeconds, 12);
+  assert.deepEqual(resetFrame.canvas, getDefaultEditorCanvasState());
+  assert.equal(resetAudio.volume, DEFAULT_EDITOR_MEDIA_VOLUME);
+  assert.equal(resetAudio.muted, false);
+});
+
+test("reset helpers restore selected audio defaults", () => {
+  const first = {
+    ...createDefaultAudioTrack({ assetId: "audio-1", durationSeconds: 4 }),
+    trimEndSeconds: 4,
+    startOffsetSeconds: 0,
+  };
+  const second = {
+    ...createDefaultAudioTrack({ assetId: "audio-2", durationSeconds: 6 }),
+    trimStartSeconds: 2,
+    trimEndSeconds: 5.5,
+    startOffsetSeconds: 12,
+    volume: 0.25,
+    muted: true,
+  };
+
+  const resetTrim = resetTimelineAudioItemTrim(second, 6);
+  const contiguousStart = getContiguousAudioStartOffset([first, second], second.id);
+  const resetTrack = resetTimelineAudioItemTrack([first, second], second.id);
+
+  assert.equal(resetTrim.trimStartSeconds, 0);
+  assert.equal(resetTrim.trimEndSeconds, 6);
+  assert.equal(contiguousStart, 4);
+  assert.equal(resetTrack[1].startOffsetSeconds, 4);
+  assert.equal(resetTrack[1].volume, DEFAULT_EDITOR_MEDIA_VOLUME);
+  assert.equal(resetTrack[1].muted, false);
 });

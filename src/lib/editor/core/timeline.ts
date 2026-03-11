@@ -9,6 +9,11 @@ import type {
   TimelineVideoClip,
 } from "../types";
 import { makeId } from "../../history";
+import {
+  DEFAULT_EDITOR_MEDIA_MUTED,
+  DEFAULT_EDITOR_MEDIA_VOLUME,
+  getDefaultEditorCanvasState,
+} from "../storage";
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -96,6 +101,82 @@ export function clampAudioItemToAsset(item: TimelineAudioItem, assetDurationSeco
 }
 
 export const clampAudioTrackToAsset = clampAudioItemToAsset;
+
+export function resetTimelineVideoClipTrim(
+  clip: TimelineVideoClip,
+  assetDurationSeconds: number
+): TimelineVideoClip {
+  return clampVideoClipToAsset(
+    {
+      ...clip,
+      trimStartSeconds: 0,
+      trimEndSeconds: Math.max(0.5, assetDurationSeconds || 0.5),
+    },
+    assetDurationSeconds
+  );
+}
+
+export function resetTimelineVideoClipFrame(clip: TimelineVideoClip): TimelineVideoClip {
+  return {
+    ...clip,
+    canvas: getDefaultEditorCanvasState(),
+  };
+}
+
+export function resetTimelineVideoClipAudio(clip: TimelineVideoClip): TimelineVideoClip {
+  return {
+    ...clip,
+    volume: DEFAULT_EDITOR_MEDIA_VOLUME,
+    muted: DEFAULT_EDITOR_MEDIA_MUTED,
+  };
+}
+
+export function resetTimelineAudioItemTrim(
+  item: TimelineAudioItem,
+  assetDurationSeconds: number
+): TimelineAudioItem {
+  return clampAudioItemToAsset(
+    {
+      ...item,
+      trimStartSeconds: 0,
+      trimEndSeconds: Math.max(0.5, assetDurationSeconds || 0.5),
+    },
+    assetDurationSeconds
+  );
+}
+
+export function getContiguousAudioStartOffset(
+  items: TimelineAudioItem[],
+  itemId: string
+): number {
+  let cursor = 0;
+  for (const item of items) {
+    if (item.id === itemId) {
+      return roundMs(cursor);
+    }
+    cursor += getAudioItemDuration(item);
+  }
+  return 0;
+}
+
+export function resetTimelineAudioItemTrack(
+  items: TimelineAudioItem[],
+  itemId: string
+): TimelineAudioItem[] {
+  const nextStartOffset = getContiguousAudioStartOffset(items, itemId);
+  return normalizeTimelineAudioItems(
+    items.map((item) =>
+      item.id === itemId
+        ? {
+            ...item,
+            startOffsetSeconds: nextStartOffset,
+            volume: DEFAULT_EDITOR_MEDIA_VOLUME,
+            muted: DEFAULT_EDITOR_MEDIA_MUTED,
+          }
+        : item
+    )
+  );
+}
 
 export function normalizeTimelineAudioItems(items: TimelineAudioItem[]): TimelineAudioItem[] {
   const sorted = [...items].sort((a, b) => a.startOffsetSeconds - b.startOffsetSeconds);

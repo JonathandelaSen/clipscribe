@@ -24,6 +24,7 @@ import {
   Music4,
   Pause,
   Play,
+  RotateCcw,
   Scissors,
   Search,
   Split,
@@ -40,13 +41,13 @@ import {
   resolveCreatorSubtitleStyle,
 } from "@/lib/creator/subtitle-style";
 import { secondsToClock } from "@/lib/creator/types";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLatestSubtitleForLanguage, getLatestTranscript, type HistoryItem } from "@/lib/history";
 import { useEditorProject } from "@/hooks/useEditorLibrary";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { downloadBlob, readMediaMetadata } from "@/lib/editor/media";
 import {
   buildProjectCaptionTimeline,
-  resolveCaptionSourceChunks,
   type TimelineCaptionChunk,
 } from "@/lib/editor/core/captions";
 import {
@@ -74,6 +75,11 @@ import {
   reorderTimelineClip,
   replaceTimelineAudioItem,
   replaceTimelineClip,
+  resetTimelineAudioItemTrack,
+  resetTimelineAudioItemTrim,
+  resetTimelineVideoClipAudio,
+  resetTimelineVideoClipFrame,
+  resetTimelineVideoClipTrim,
   splitTimelineClip,
 } from "@/lib/editor/core/timeline";
 import { localEditorExportService } from "@/lib/editor/export-service";
@@ -197,14 +203,29 @@ function getEditorExportPhase(progressPct: number): EditorExportPhase {
   return "preparing";
 }
 
+function SectionResetButton({
+  onClick,
+}: {
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className="h-7 rounded-md px-2 text-[10px] uppercase tracking-[0.2em] text-white/46 hover:bg-white/[0.06] hover:text-white"
+      onClick={onClick}
+    >
+      <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+      Reset
+    </Button>
+  );
+}
+
 function ProjectAssetThumbnail({
   resolvedAsset,
   isActive,
-  captionCount,
   onSelect,
-  onAppend,
-  onAssignAudio,
-  onAttachSrt,
   onDelete,
   onDragStart,
   onDragEnd,
@@ -212,11 +233,7 @@ function ProjectAssetThumbnail({
 }: {
   resolvedAsset: ResolvedEditorAsset | undefined;
   isActive: boolean;
-  captionCount: number;
   onSelect: () => void;
-  onAppend: () => void;
-  onAssignAudio: () => void;
-  onAttachSrt: () => void;
   onDelete: () => void;
   onDragStart: (event: ReactDragEvent<HTMLDivElement>) => void;
   onDragEnd: () => void;
@@ -227,90 +244,101 @@ function ProjectAssetThumbnail({
 
   if (!asset) return null;
 
+  const isVideo = asset.kind === "video";
+
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       className={cn(
-        "group overflow-hidden rounded-[0.95rem] border text-left transition-all duration-150",
+        "group relative overflow-hidden rounded-xl border text-left transition-all duration-200",
         isActive
-          ? "border-cyan-300/40 bg-[linear-gradient(180deg,rgba(20,35,44,0.96),rgba(9,16,22,0.96))] shadow-[inset_0_1px_0_rgba(103,232,249,0.14)]"
-          : "border-white/8 bg-[linear-gradient(180deg,rgba(19,23,31,0.96),rgba(10,13,19,0.96))] hover:border-white/18 hover:bg-[linear-gradient(180deg,rgba(25,30,39,0.96),rgba(12,15,21,0.96))]",
-        isDragging ? "scale-[0.985] opacity-60 ring-1 ring-cyan-300/24" : "cursor-grab active:cursor-grabbing"
+          ? "border-cyan-400/50 shadow-[0_0_12px_rgba(34,211,238,0.12),inset_0_1px_0_rgba(103,232,249,0.18)]"
+          : "border-white/[0.06] hover:border-white/20 hover:shadow-[0_0_16px_rgba(255,255,255,0.03)]",
+        isDragging
+          ? "scale-[0.97] opacity-50 ring-1 ring-cyan-300/28"
+          : "cursor-grab active:cursor-grabbing hover:scale-[1.02]"
       )}
     >
       <button type="button" onClick={onSelect} className="block w-full text-left">
-        <div className="relative aspect-video overflow-hidden border-b border-white/8 bg-black">
-          {asset.kind === "video" && videoUrl ? (
+        <div className="relative aspect-video overflow-hidden bg-black">
+          {isVideo && videoUrl ? (
             <video
               src={videoUrl}
               muted
               playsInline
               preload="metadata"
-              className="h-full w-full object-cover"
+              className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
             />
           ) : (
-            <div className="flex h-full w-full items-center justify-center bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.18),transparent_44%),linear-gradient(180deg,rgba(15,19,27,0.98),rgba(7,10,16,0.98))]">
-              <div className="rounded-full border border-white/10 bg-white/5 p-2.5 text-white/70">
-                {asset.kind === "video" ? <Film className="h-4 w-4" /> : <Music4 className="h-4 w-4" />}
+            <div
+              className={cn(
+                "flex h-full w-full items-center justify-center",
+                isVideo
+                  ? "bg-[radial-gradient(circle_at_40%_30%,rgba(56,189,248,0.16),transparent_50%),linear-gradient(145deg,rgba(15,19,28,0.98),rgba(8,11,17,0.98))]"
+                  : "bg-[radial-gradient(ellipse_at_50%_20%,rgba(251,191,36,0.14),transparent_55%),linear-gradient(145deg,rgba(18,16,24,0.98),rgba(10,9,15,0.98))]"
+              )}
+            >
+              <div
+                className={cn(
+                  "rounded-xl border p-3 backdrop-blur-sm",
+                  isVideo
+                    ? "border-cyan-300/12 bg-cyan-400/[0.06] text-cyan-200/60"
+                    : "border-amber-300/12 bg-amber-400/[0.06] text-amber-200/60"
+                )}
+              >
+                {isVideo ? <Film className="h-5 w-5" /> : <Music4 className="h-5 w-5" />}
               </div>
             </div>
           )}
-          <div className="absolute inset-x-0 bottom-0 h-10 bg-[linear-gradient(180deg,transparent,rgba(3,6,10,0.82))]" />
-          <div className="absolute left-2 top-2 rounded-full border border-black/25 bg-black/60 px-2 py-1 text-[9px] uppercase tracking-[0.22em] text-white/66">
-            {asset.kind}
-          </div>
-          <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between text-[10px] text-white/72">
-            <span className="max-w-[70%] truncate font-medium">{asset.filename}</span>
-            <span className="font-mono text-white/45">{secondsToClock(asset.durationSeconds)}</span>
-          </div>
-        </div>
-        <div className="space-y-1.5 p-2.5">
-          <div className="flex flex-wrap gap-2 text-[9px] uppercase tracking-[0.2em] text-white/42">
-            <span>{asset.sourceType}</span>
-            <span>{captionCount > 0 ? `${captionCount} subs` : "no subs"}</span>
-            {isActive ? <span className="text-cyan-200/80">previewing</span> : null}
+          {/* Gradient overlay for text readability */}
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,transparent_30%,rgba(0,0,0,0.75))]" />
+
+          {/* Bottom info bar */}
+          <div className="absolute bottom-0 left-0 right-0 flex items-end justify-between gap-1 px-2.5 pb-2">
+            <div className="min-w-0 flex-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="truncate text-[12px] font-semibold leading-tight text-white/90">
+                    {asset.filename}
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent className="z-50 border border-white/10 bg-slate-900 px-3 py-1.5 text-[11px] text-white backdrop-blur-md shadow-xl">
+                  {asset.filename}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <div
+              className={cn(
+                "shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] tracking-wide",
+                isVideo
+                  ? "bg-white/10 text-white/55"
+                  : "bg-amber-400/10 text-amber-200/55"
+              )}
+            >
+              {secondsToClock(asset.durationSeconds)}
+            </div>
           </div>
         </div>
       </button>
-      <div className="flex flex-wrap gap-1.5 border-t border-white/6 px-2.5 py-2">
-        {asset.kind === "video" ? (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 rounded-md border-white/8 bg-white/[0.04] px-2 text-[10px] text-white/78 hover:bg-white/[0.09] hover:text-white"
-            onClick={onAppend}
-          >
-            Track
-          </Button>
-        ) : (
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 rounded-md border-white/8 bg-white/[0.04] px-2 text-[10px] text-white/78 hover:bg-white/[0.09] hover:text-white"
-            onClick={onAssignAudio}
-          >
-            Audio
-          </Button>
-        )}
-        {asset.kind === "video" && asset.sourceType === "upload" ? (
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 rounded-md px-2 text-[10px] text-cyan-100/88 hover:bg-cyan-400/10 hover:text-cyan-50"
-            onClick={onAttachSrt}
-          >
-            SRT
-          </Button>
-        ) : null}
+
+      {/* Delete button — appears on hover */}
+      <div className="absolute right-1.5 top-1.5 z-10 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
         <Button
+          type="button"
           size="sm"
           variant="ghost"
-          className="h-7 rounded-md px-2 text-[10px] text-white/42 hover:bg-red-500/10 hover:text-red-100"
-          onClick={onDelete}
+          draggable={false}
+          title={`Delete ${asset.filename}`}
+          aria-label={`Delete ${asset.filename}`}
+          className="h-7 w-7 rounded-lg border border-white/[0.06] bg-black/65 p-0 text-white/50 backdrop-blur-md hover:border-red-400/20 hover:bg-red-500/20 hover:text-red-200"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
         >
-          Remove
+          <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
     </div>
@@ -841,11 +869,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     window.addEventListener("pointerup", onPointerUp, { once: true });
   };
 
-  const seekVisibleTimeline = (event: ReactMouseEvent<HTMLDivElement>) => {
+  const seekVisibleTimelineAtClientX = (clientX: number) => {
     const viewport = timelineViewportRef.current;
     if (!viewport) return;
     const rect = viewport.getBoundingClientRect();
-    const pct = clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+    const pct = clampNumber((clientX - rect.left) / rect.width, 0, 1);
     const nextTime = visibleStart + visibleDuration * pct;
     setPreviewMode({ kind: "timeline" });
     updateProject((current) => ({
@@ -855,6 +883,29 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         playheadSeconds: nextTime,
       },
     }));
+  };
+
+  const seekVisibleTimeline = (event: ReactMouseEvent<HTMLDivElement>) => {
+    seekVisibleTimelineAtClientX(event.clientX);
+  };
+
+  const beginPlayheadDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsPlaying(false);
+    seekVisibleTimelineAtClientX(event.clientX);
+
+    const onPointerMove = (moveEvent: globalThis.PointerEvent) => {
+      seekVisibleTimelineAtClientX(moveEvent.clientX);
+    };
+
+    const onPointerUp = () => {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+    };
+
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp, { once: true });
   };
 
   const updateSelectedClip = (updater: (clip: TimelineVideoClip) => TimelineVideoClip) => {
@@ -885,6 +936,35 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
+  const resetSelectedClipTrim = () => {
+    if (!selectedClipAsset) return;
+    updateSelectedClip((clip) => resetTimelineVideoClipTrim(clip, selectedClipAsset.durationSeconds));
+  };
+
+  const resetSelectedClipFrame = () => {
+    updateSelectedClip(resetTimelineVideoClipFrame);
+  };
+
+  const resetSelectedClipAudio = () => {
+    updateSelectedClip(resetTimelineVideoClipAudio);
+  };
+
+  const resetSelectedAudioTrim = () => {
+    if (!selectedAudioAsset) return;
+    updateSelectedAudioItem((item) => resetTimelineAudioItemTrim(item, selectedAudioAsset.durationSeconds));
+  };
+
+  const resetSelectedAudioTrack = () => {
+    if (!selectedAudioItem) return;
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        audioItems: resetTimelineAudioItemTrack(current.timeline.audioItems, selectedAudioItem.id),
+      },
+    }));
+  };
+
   const focusTimelineSelection = (selection: TimelineSelection, playheadSeconds?: number) => {
     setPreviewMode({ kind: "timeline" });
     updateProject((current) => ({
@@ -895,24 +975,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         playheadSeconds: playheadSeconds ?? current.timeline.playheadSeconds,
       },
     }));
-  };
-
-  const appendVideoAssetToTimeline = (asset: EditorAssetRecord) => {
-    const clip = createDefaultVideoClip({
-      assetId: asset.id,
-      label: asset.filename.replace(/\.[^/.]+$/, ""),
-      durationSeconds: asset.durationSeconds,
-    });
-    updateProject((current) => ({
-      ...current,
-      timeline: {
-        ...current.timeline,
-        selectedItem: { kind: "video", id: clip.id },
-        playheadSeconds: getProjectDuration(current),
-        videoClips: [...current.timeline.videoClips, clip],
-      },
-    }));
-    setPreviewMode({ kind: "timeline" });
   };
 
   const insertVideoAssetAtTimelineIndex = (asset: EditorAssetRecord, index: number) => {
@@ -1150,16 +1212,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (!nextAssets.length) return;
     setAssets((current) => [...current, ...nextAssets]);
     await saveAssets(nextAssets);
-
-    nextAssets.forEach((asset) => {
-      if (asset.kind === "video") {
-        appendVideoAssetToTimeline(asset);
-      } else {
-        appendAudioAssetToTimeline(asset);
-      }
-    });
-
-    toast.success(`${nextAssets.length} asset${nextAssets.length === 1 ? "" : "s"} imported`);
+    toast.success(`${nextAssets.length} asset${nextAssets.length === 1 ? "" : "s"} added to the media bin`);
   };
 
   const handleAddHistoryItem = async (item: HistoryItem) => {
@@ -1207,17 +1260,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
     setAssets((current) => [...current, asset]);
     await saveAssets([asset]);
-    if (asset.kind === "video") {
-      appendVideoAssetToTimeline(asset);
-    } else {
-      appendAudioAssetToTimeline(asset);
-    }
-    toast.success(`Added ${item.filename} to this project`);
-  };
-
-  const handleAttachSrtClick = (assetId: string) => {
-    captionAttachAssetIdRef.current = assetId;
-    srtInputRef.current?.click();
+    toast.success(`Added ${item.filename} to the media bin`);
   };
 
   const handleAttachSrt = async (fileList: FileList | null) => {
@@ -1663,20 +1706,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
                               {assets.map((asset) => {
                                 const resolved = resolvedAssetsMap.get(asset.id);
-                                const captionCount =
-                                  asset.captionSource.kind === "embedded-srt"
-                                    ? asset.captionSource.chunks.length
-                                    : resolveCaptionSourceChunks(asset.captionSource, historyMap).length;
                                 return (
                                   <div key={asset.id} className="space-y-1.5">
                                     <ProjectAssetThumbnail
                                       resolvedAsset={resolved}
                                       isActive={previewMode.kind === "asset" && previewMode.assetId === asset.id}
-                                      captionCount={captionCount}
                                       onSelect={() => setPreviewMode({ kind: "asset", assetId: asset.id })}
-                                      onAppend={() => appendVideoAssetToTimeline(asset)}
-                                      onAssignAudio={() => appendAudioAssetToTimeline(asset)}
-                                      onAttachSrt={() => handleAttachSrtClick(asset.id)}
                                       onDelete={() => void handleDeleteAsset(asset)}
                                       onDragStart={(event) => {
                                         event.dataTransfer.effectAllowed = "move";
@@ -1758,7 +1793,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     className="mt-3 h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
                                     onClick={() => void handleAddHistoryItem(item)}
                                   >
-                                    Add to Project
+                                    Add to Bin
                                   </Button>
                                 </div>
                               );
@@ -2056,7 +2091,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             </div>
 
                             <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <label className={EDITOR_LABEL_CLASS}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Trim</div>
+                                <SectionResetButton onClick={resetSelectedClipTrim} />
+                              </div>
+                              <label className="text-xs uppercase tracking-[0.24em] text-white/45">
                                 Trim Start · {secondsToClock(selectedClip.trimStartSeconds)}
                               </label>
                               <input
@@ -2093,7 +2132,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             </div>
 
                             <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <div className={EDITOR_LABEL_CLASS}>Frame</div>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Frame</div>
+                                <SectionResetButton onClick={resetSelectedClipFrame} />
+                              </div>
                               <label className="text-xs text-white/55">Zoom · {selectedClip.canvas.zoom.toFixed(2)}x</label>
                               <input
                                 type="range"
@@ -2152,7 +2194,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
                             <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
                               <div className="flex items-center justify-between">
-                                <div className={EDITOR_LABEL_CLASS}>Clip Audio</div>
+                                <div className="flex items-center gap-2">
+                                  <div className={EDITOR_LABEL_CLASS}>Clip Audio</div>
+                                  <SectionResetButton onClick={resetSelectedClipAudio} />
+                                </div>
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -2195,7 +2240,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             </div>
 
                             <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <label className={EDITOR_LABEL_CLASS}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Trim</div>
+                                <SectionResetButton onClick={resetSelectedAudioTrim} />
+                              </div>
+                              <label className="text-xs uppercase tracking-[0.24em] text-white/45">
                                 Trim Start · {secondsToClock(selectedAudioItem.trimStartSeconds)}
                               </label>
                               <input
@@ -2233,7 +2282,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
                             <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
                               <div className="flex items-center justify-between gap-3">
-                                <div className={EDITOR_LABEL_CLASS}>Track Audio</div>
+                                <div className="flex items-center gap-2">
+                                  <div className={EDITOR_LABEL_CLASS}>Track Audio</div>
+                                  <SectionResetButton onClick={resetSelectedAudioTrack} />
+                                </div>
                                 <Button
                                   size="sm"
                                   variant="ghost"
@@ -2637,13 +2689,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
                 <div ref={timelineViewportRef} className="relative min-h-0 overflow-hidden">
                   <div
-                    className="pointer-events-none absolute inset-y-0 z-30 w-px bg-red-400/90 shadow-[0_0_22px_rgba(248,113,113,0.5)]"
+                    className="absolute inset-y-0 z-30 w-4 -translate-x-1/2 cursor-ew-resize touch-none"
                     style={{ left: `${playheadPct}%` }}
-                  />
-                  <div
-                    className="pointer-events-none absolute top-0 z-30 h-4 w-[10px] -translate-x-1/2 rounded-b-full border border-red-300/40 bg-red-400/90 shadow-[0_4px_12px_rgba(248,113,113,0.4)]"
-                    style={{ left: `${playheadPct}%` }}
-                  />
+                    onPointerDown={beginPlayheadDrag}
+                  >
+                    <div className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-red-400/90 shadow-[0_0_22px_rgba(248,113,113,0.5)]" />
+                    <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-[10px] -translate-x-1/2 rounded-b-full border border-red-300/40 bg-red-400/90 shadow-[0_4px_12px_rgba(248,113,113,0.4)]" />
+                  </div>
 
                   <div className="grid h-full min-h-0 grid-rows-[38px_minmax(0,1fr)_96px]">
                     <div
@@ -2748,7 +2800,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       {clipPlacements.length === 0 ? (
                         <div className="absolute left-[4%] top-1/2 w-[28%] min-w-[200px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-white/14 bg-white/[0.02] px-4 py-3 text-left">
                           <div className={EDITOR_LABEL_CLASS}>Video lane empty</div>
-                          <div className="mt-2 text-sm text-white/56">Add clips from the media bin to start cutting.</div>
+                          <div className="mt-2 text-sm text-white/56">Drag clips from the media bin to start cutting.</div>
                         </div>
                       ) : visibleClipPlacements.length === 0 ? (
                         <div className="absolute left-[4%] top-1/2 w-[30%] min-w-[240px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-cyan-300/14 bg-cyan-300/[0.035] px-4 py-3 text-left">
@@ -2943,7 +2995,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       ) : (
                         <div className="absolute left-[4%] top-1/2 w-[28%] min-w-[220px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-white/12 bg-white/[0.018] px-4 py-3 text-left">
                           <div className={EDITOR_LABEL_CLASS}>Audio lane empty</div>
-                          <div className="mt-2 text-sm text-white/56">Add audio from the media bin to build the A1 track.</div>
+                          <div className="mt-2 text-sm text-white/56">Drag audio from the media bin to build the A1 track.</div>
                         </div>
                       )}
                     </div>

@@ -7,6 +7,7 @@ import type {
   EditorAspectRatio,
   EditorAssetKind,
   EditorAssetRecord,
+  EditorCanvasState,
   EditorExportRecord,
   EditorProjectRecord,
   EditorSubtitlePreset,
@@ -16,6 +17,8 @@ import type {
 } from "./types";
 
 const DEFAULT_SUBTITLE_PRESET: EditorSubtitlePreset = "clean_caption";
+export const DEFAULT_EDITOR_MEDIA_VOLUME = 1;
+export const DEFAULT_EDITOR_MEDIA_MUTED = false;
 
 type LegacyEditorProjectTimelineState = Partial<EditorProjectRecord["timeline"]> & {
   selectedClipId?: string;
@@ -28,6 +31,14 @@ type LegacyEditorProjectRecord = Omit<EditorProjectRecord, "timeline"> & {
   timeline: LegacyEditorProjectTimelineState;
 };
 
+export function getDefaultEditorCanvasState(): EditorCanvasState {
+  return {
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+  };
+}
+
 export function createDefaultVideoClip(input: {
   assetId: string;
   label: string;
@@ -39,13 +50,9 @@ export function createDefaultVideoClip(input: {
     label: input.label,
     trimStartSeconds: 0,
     trimEndSeconds: Math.max(0.5, Number(input.durationSeconds || 0)),
-    canvas: {
-      zoom: 1,
-      panX: 0,
-      panY: 0,
-    },
-    volume: 1,
-    muted: false,
+    canvas: getDefaultEditorCanvasState(),
+    volume: DEFAULT_EDITOR_MEDIA_VOLUME,
+    muted: DEFAULT_EDITOR_MEDIA_MUTED,
   };
 }
 
@@ -59,8 +66,8 @@ export function createDefaultAudioTrack(input: {
     startOffsetSeconds: 0,
     trimStartSeconds: 0,
     trimEndSeconds: Math.max(0.5, Number(input.durationSeconds || 0)),
-    volume: 1,
-    muted: false,
+    volume: DEFAULT_EDITOR_MEDIA_VOLUME,
+    muted: DEFAULT_EDITOR_MEDIA_MUTED,
   };
 }
 
