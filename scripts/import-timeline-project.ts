@@ -6,6 +6,7 @@ import {
   normalizeImportTimelineProjectOptions,
   parseImportTimelineProjectArgs,
 } from "../src/lib/editor/workspace-cli";
+import { promptForBundlePath, withInteractiveReadline } from "../src/lib/editor/node-interactive";
 
 let wantsJson = false;
 
@@ -16,6 +17,16 @@ async function main() {
   if (parsed.help) {
     console.log(getImportTimelineProjectHelpText());
     return;
+  }
+
+  if (!parsed.bundlePath) {
+    if (parsed.json) {
+      throw new Error("--bundle is required when using --json.");
+    }
+
+    parsed.bundlePath = await withInteractiveReadline((rl) =>
+      promptForBundlePath(rl, process.cwd())
+    );
   }
 
   const options = normalizeImportTimelineProjectOptions(parsed, process.cwd());

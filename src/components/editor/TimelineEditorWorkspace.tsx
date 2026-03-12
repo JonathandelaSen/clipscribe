@@ -18,6 +18,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   Check,
+  Copy,
   Download,
   Film,
   FolderOpen,
@@ -219,6 +220,32 @@ function isShortcutTargetEditable(target: EventTarget | null): boolean {
   );
 }
 
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.append(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    const didCopy = document.execCommand("copy");
+    if (!didCopy) {
+      throw new Error("Clipboard copy is unavailable.");
+    }
+  } finally {
+    textarea.remove();
+  }
+}
+
 function useObjectUrl(file: File | null | undefined) {
   const url = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   useEffect(() => {
@@ -376,6 +403,7 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
   projectName,
   projectAspectRatio,
   exportResolution,
+  lastError,
   saveState,
   panelVisibility,
   isRenderBusy,
@@ -383,11 +411,14 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
   onAspectRatioChange,
   onExportResolutionChange,
   onTogglePanel,
+  onCopyLastError,
+  onDeleteLastError,
   onExport,
 }: {
   projectName: string;
   projectAspectRatio: EditorAspectRatio;
   exportResolution: EditorResolution;
+  lastError?: string | null;
   saveState: "saved" | "saving" | "dirty";
   panelVisibility: PanelVisibilityState;
   isRenderBusy: boolean;
@@ -395,8 +426,12 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
   onAspectRatioChange: (value: EditorAspectRatio) => void;
   onExportResolutionChange: (value: EditorResolution) => void;
   onTogglePanel: (panel: keyof PanelVisibilityState) => void;
+  onCopyLastError?: () => void | Promise<void>;
+  onDeleteLastError?: () => void | Promise<void>;
   onExport: () => void | Promise<void>;
 }) {
+  const errorHeadline = lastError?.split("\n")[0] || "Export failed";
+
   return (
     <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
       <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
@@ -486,6 +521,42 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
             Export
           </Button>
         </div>
+
+        {lastError ? (
+          <div className="rounded-lg border border-red-400/18 bg-red-500/10 px-3 py-3 text-red-50/90">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <div className="text-[10px] uppercase tracking-[0.24em] text-red-100/72">Last Export Error</div>
+                <div className="mt-2 text-sm font-medium text-red-50">{errorHeadline}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 rounded-md border border-red-300/14 bg-black/20 px-2.5 text-[11px] text-red-50/78 hover:bg-black/30 hover:text-red-50"
+                  onClick={() => void onCopyLastError?.()}
+                >
+                  <Copy className="mr-1.5 h-3.5 w-3.5" />
+                  Copy
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 rounded-md border border-red-300/14 bg-black/20 px-2.5 text-[11px] text-red-50/78 hover:bg-black/30 hover:text-red-50"
+                  onClick={() => void onDeleteLastError?.()}
+                >
+                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                  Delete
+                </Button>
+              </div>
+            </div>
+            <pre className="mt-3 max-h-32 overflow-auto rounded-md border border-red-300/14 bg-black/20 p-3 text-[11px] leading-5 text-red-50/78 whitespace-pre-wrap">
+              {lastError}
+            </pre>
+          </div>
+        ) : null}
       </div>
     </header>
   );
@@ -736,6 +807,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     [project]
   );
   const projectDuration = useMemo(() => (project ? getProjectDuration(project) : 0), [project]);
+
   const selectedItem = project?.timeline.selectedItem;
   const selectedClip = useMemo(
     () =>
@@ -2303,6 +2375,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }
 
       const message = err instanceof Error ? err.message : "Export failed";
+      const toastMessage = message.split("\n")[0] || "Export failed";
       try {
         const failedRecord = buildEditorExportRecord({
           projectId: exportingProject.id,
@@ -2329,7 +2402,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           setProject(markEditorProjectFailed(exportingProject, message, Date.now()));
         }
       }
-      toast.error(message);
+      toast.error(toastMessage);
     } finally {
       if (exportSessionRef.current?.id === session.id) {
         exportSessionRef.current = null;
@@ -2352,6 +2425,60 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     saveProject,
     syncExportStage,
   ]);
+
+  const handleCopyLastError = useCallback(async () => {
+    const lastError = project?.lastError;
+    if (!lastError) return;
+
+    try {
+      await copyTextToClipboard(lastError);
+      toast.success("Copied the export error details.");
+    } catch (error) {
+      console.error("Failed to copy the export error details", error);
+      toast.error("Could not copy the export error details.");
+    }
+  }, [project?.lastError]);
+
+  const handleDeleteLastError = useCallback(async () => {
+    if (!project?.lastError) return;
+
+    const previousProject = project;
+    const previousSaveState = saveState;
+    const previousAutosaveHash = autosaveHashRef.current;
+    const previousPersistedPlayheadSeconds = persistedPlayheadSecondsRef.current;
+    const nextProject = markEditorProjectSaved(
+      serializeEditorProjectForPersistence(
+        {
+          ...project,
+          lastError: undefined,
+        },
+        persistedPlayheadSecondsRef.current
+      ),
+      Date.now()
+    );
+    const nextAutosaveHash = getEditorProjectPersistenceFingerprint(
+      nextProject,
+      assets.map((asset) => asset.id),
+      nextProject.timeline.playheadSeconds
+    );
+
+    persistedPlayheadSecondsRef.current = nextProject.timeline.playheadSeconds;
+    autosaveHashRef.current = nextAutosaveHash;
+    setProject(nextProject);
+    setSaveState("saved");
+
+    try {
+      await saveProject(nextProject);
+      toast.success("Removed the last export error.");
+    } catch (error) {
+      console.error("Failed to clear the last export error", error);
+      persistedPlayheadSecondsRef.current = previousPersistedPlayheadSeconds;
+      autosaveHashRef.current = previousAutosaveHash;
+      setProject(previousProject);
+      setSaveState(previousSaveState);
+      toast.error("Could not remove the last export error.");
+    }
+  }, [assets, project, saveProject, saveState]);
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (isRenderBusy) return;
@@ -2520,6 +2647,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           projectName={project.name}
           projectAspectRatio={project.aspectRatio}
           exportResolution={exportResolution}
+          lastError={project.lastError}
           saveState={saveState}
           panelVisibility={panelVisibility}
           isRenderBusy={isRenderBusy}
@@ -2527,6 +2655,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           onAspectRatioChange={handleAspectRatioChange}
           onExportResolutionChange={handleExportResolutionChange}
           onTogglePanel={togglePanel}
+          onCopyLastError={handleCopyLastError}
+          onDeleteLastError={handleDeleteLastError}
           onExport={handleExport}
         />
 

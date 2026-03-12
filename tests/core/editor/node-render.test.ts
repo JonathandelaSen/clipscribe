@@ -79,6 +79,43 @@ test("exportEditorProjectWithSystemFfmpeg returns render details after a success
   assert.ok(result.ffmpegCommandPreview.includes("ffmpeg"));
 });
 
+test("exportEditorProjectWithSystemFfmpeg falls back to the bundled binary when ffmpeg is missing on PATH", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const { project, asset } = createRenderableProject();
+  const outputPath = path.join(tempDir, "exports", "render.mp4");
+  const attemptedCommands: string[] = [];
+
+  const result = await exportEditorProjectWithSystemFfmpeg({
+    project,
+    assets: [{ asset, absolutePath: "/media/clip.mp4" }],
+    resolution: "1080p",
+    outputPath,
+    overwrite: true,
+    ffmpegPath: "/mock/bin/ffmpeg",
+    commandRunner: async (command) => {
+      attemptedCommands.push(command);
+      if (command === "ffmpeg") {
+        const error = new Error("spawn ffmpeg ENOENT") as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      await writeFile(outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+
+  assert.deepEqual(attemptedCommands, ["ffmpeg", "/mock/bin/ffmpeg"]);
+  assert.equal(result.sizeBytes, 2048);
+});
+
 test("exportEditorProjectWithSystemFfmpeg fails clearly when ffmpeg is missing", async () => {
   const { project, asset } = createRenderableProject();
 
@@ -89,13 +126,14 @@ test("exportEditorProjectWithSystemFfmpeg fails clearly when ffmpeg is missing",
         assets: [{ asset, absolutePath: "/media/clip.mp4" }],
         resolution: "1080p",
         outputPath: "/tmp/render.mp4",
+        ffmpegPath: "",
         commandRunner: async () => {
           const error = new Error("spawn ffmpeg ENOENT") as NodeJS.ErrnoException;
           error.code = "ENOENT";
           throw error;
         },
       }),
-    /ffmpeg is required on PATH/
+    /ffmpeg is required to export timeline projects/
   );
 });
 

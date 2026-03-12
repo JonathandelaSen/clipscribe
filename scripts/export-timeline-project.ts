@@ -6,6 +6,7 @@ import {
   normalizeExportTimelineProjectOptions,
   parseExportTimelineProjectArgs,
 } from "../src/lib/editor/workspace-cli";
+import { promptForExportResolution, promptForWorkspaceProjectPath, withInteractiveReadline } from "../src/lib/editor/node-interactive";
 
 let wantsJson = false;
 
@@ -16,6 +17,19 @@ async function main() {
   if (parsed.help) {
     console.log(getExportTimelineProjectHelpText());
     return;
+  }
+
+  if (!parsed.projectPath) {
+    if (parsed.json) {
+      throw new Error("--project is required when using --json.");
+    }
+
+    await withInteractiveReadline(async (rl) => {
+      parsed.projectPath = await promptForWorkspaceProjectPath(rl, process.cwd());
+      if (!parsed.resolution) {
+        parsed.resolution = await promptForExportResolution(rl, "1080p");
+      }
+    });
   }
 
   const options = normalizeExportTimelineProjectOptions(parsed, process.cwd());

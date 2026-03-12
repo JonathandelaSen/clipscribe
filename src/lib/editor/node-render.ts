@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { buildEditorExportPlan } from "./core/export-plan";
 import type { CommandRunResult, CommandRunner } from "./node-media";
+import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
 import type { EditorAssetRecord, EditorProjectRecord, EditorResolution } from "./types";
 
 export interface NodeEditorExportAsset {
@@ -20,6 +21,7 @@ export interface NodeEditorExportInput {
   overwrite?: boolean;
   dryRun?: boolean;
   commandRunner?: CommandRunner;
+  ffmpegPath?: string | null;
 }
 
 export interface NodeEditorExportResult {
@@ -191,14 +193,26 @@ export async function exportEditorProjectWithSystemFfmpeg(
   await mkdir(path.dirname(outputPath), { recursive: true });
   if (!input.dryRun) {
     const runner = input.commandRunner ?? runCommand;
-    let result: CommandRunResult;
-    try {
-      result = await runner("ffmpeg", command.ffmpegArgs);
-    } catch (error) {
-      if (typeof error === "object" && error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-        throw new Error("ffmpeg is required on PATH to export timeline projects from the CLI.");
+    const commandCandidates = [
+      "ffmpeg",
+      input.ffmpegPath ?? getBundledBinaryPath("ffmpeg"),
+    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+    let result: CommandRunResult | null = null;
+    for (const commandName of commandCandidates) {
+      try {
+        result = await runner(commandName, command.ffmpegArgs);
+        break;
+      } catch (error) {
+        if (isEnoentError(error)) {
+          continue;
+        }
+        throw error;
       }
-      throw error;
+    }
+
+    if (!result) {
+      throw new Error(buildMissingBinaryMessage("ffmpeg"));
     }
 
     if (result.code !== 0) {

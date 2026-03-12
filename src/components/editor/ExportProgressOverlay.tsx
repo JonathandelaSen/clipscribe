@@ -32,7 +32,7 @@ const PHASE_COPY: Record<
     rendering: {
       badge: "Rendering",
       title: "Rendering your timeline",
-      description: "FFmpeg.wasm is encoding the current edit directly in this browser session.",
+      description: "",
       helper: "Editing is locked until the MP4 render finishes.",
       label: "Timeline Export",
     },

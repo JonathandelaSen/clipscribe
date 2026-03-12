@@ -121,11 +121,13 @@ npm run export:timeline-project -- \
   --resolution 1080p
 ```
 
-The export command writes the final MP4 to `exports/<project-name>__<aspect>__<resolution>.mp4` inside the workspace by default. Use `--dry-run` to preview the render plan, `--output` to choose another destination, and `--json` for machine-readable CLI output.
+If you run either command without `--bundle` or `--project`, the CLI opens an interactive browser starting in the current directory so you can pick the folder or `project.json` file with the keyboard.
+
+The export command writes the final MP4 to `exports/<project-name>__<aspect>__<resolution>.mp4` inside the workspace by default. Use `--dry-run` to preview the render plan, `--output` to choose another destination, and `--json` for machine-readable CLI output. The CLI now ships with bundled `ffmpeg` and `ffprobe` binaries from npm, so a separate Homebrew install is no longer required after `npm install`.
 
 ## Vibe Coding
 
-This project was intentionally built using an AI-assisted development approach, where the architecture, design, and code were **vibe coded with Gemini Pro 3.1**.
+This project was intentionally built using an AI-assisted development approach, where the architecture, design, and code were **vibe coded with Codex**.
 
 ## License
 

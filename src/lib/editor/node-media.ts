@@ -4,6 +4,7 @@ import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
 import type { EditorProjectBundleResolvedMedia } from "./bundle";
+import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
 
 export interface CommandRunResult {
   code: number;
@@ -15,6 +16,7 @@ export type CommandRunner = (command: string, args: readonly string[]) => Promis
 
 export interface ProbeMediaFileOptions {
   commandRunner?: CommandRunner;
+  ffprobePath?: string | null;
 }
 
 interface FfprobeStream {
@@ -103,22 +105,34 @@ export async function probeMediaFileWithFfprobe(
   }
 
   const runner = options.commandRunner ?? runCommand;
-  let result: CommandRunResult;
-  try {
-    result = await runner("ffprobe", [
-      "-v",
-      "error",
-      "-print_format",
-      "json",
-      "-show_streams",
-      "-show_format",
-      absolutePath,
-    ]);
-  } catch (error) {
-    if (typeof error === "object" && error && "code" in error && (error as NodeJS.ErrnoException).code === "ENOENT") {
-      throw new Error("ffprobe is required on PATH to import timeline bundles from the CLI.");
+  const commandCandidates = [
+    "ffprobe",
+    options.ffprobePath ?? getBundledBinaryPath("ffprobe"),
+  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+  let result: CommandRunResult | null = null;
+  for (const command of commandCandidates) {
+    try {
+      result = await runner(command, [
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        absolutePath,
+      ]);
+      break;
+    } catch (error) {
+      if (isEnoentError(error)) {
+        continue;
+      }
+      throw error;
     }
-    throw error;
+  }
+
+  if (!result) {
+    throw new Error(buildMissingBinaryMessage("ffprobe"));
   }
 
   if (result.code !== 0) {

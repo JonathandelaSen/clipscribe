@@ -1,5 +1,5 @@
 import { getFFmpeg, resetFFmpeg } from "../ffmpeg";
-import { getFfmpegExecTimeoutMs } from "../ffmpeg-config";
+import { getFfmpegRenderStallTimeoutMs } from "../ffmpeg-config";
 import {
   isBrowserRenderCanceledError,
   setBrowserRenderStage,
@@ -10,7 +10,12 @@ import { buildProjectCaptionTimeline } from "./core/captions";
 import { getEditorOutputDimensions } from "./core/aspect-ratio";
 import { buildEditorExportPlan } from "./core/export-plan";
 import { buildEditorExportFilename } from "./export-output";
-import { isEditorFfmpegExecDiagnosticMessage, runEditorFfmpegExec } from "./local-render-runtime";
+import {
+  createEditorFfmpegActivityWatchdog,
+  isEditorFfmpegExecDiagnosticMessage,
+  runEditorFfmpegExec,
+  type EditorFfmpegActivityWatchdog,
+} from "./local-render-runtime";
 import { renderTimelineSubtitlesToPngs } from "./subtitle-canvas";
 import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "./types";
 import type { HistoryItem } from "../history";
@@ -23,6 +28,9 @@ const LOCAL_EDITOR_EXPORT_PROGRESS = {
   readOutput: 95,
   packaged: 100,
 } as const;
+
+const FFMPEG_INTERESTING_LOG_PATTERN =
+  /(error\b|failed\b|invalid\b|could not\b|cannot\b|unable\b|too many packets buffered\b|non[- ]monoton|no space left\b|trailer\b|av_interleaved_write_frame\b|resource temporarily unavailable\b|out of memory\b)/i;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -77,13 +85,17 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
 
   const fileInputRefs: Array<{ assetId: string; inputIndex: number; path: string; file: File }> = [];
   const ffmpegLogTail: string[] = [];
+  const ffmpegLogHighlights: string[] = [];
   const renderClipCount = input.project.timeline.videoClips.length;
 
   let lastProgressPct = 0;
   let renderDurationSeconds = 0;
-  let timeoutMs = 0;
+  let stallTimeoutMs = 0;
+  let subtitleFrameCount = 0;
   let progressTimeBaselineSeconds: number | null = null;
   let logTimeBaselineSeconds: number | null = null;
+  let activityWatchdog: EditorFfmpegActivityWatchdog | null = null;
+  const renderAudioItemCount = input.project.timeline.audioItems.length;
 
   const emitProgress = (pct: number) => {
     const next = Math.round(clampNumber(pct, 0, 100));
@@ -118,6 +130,8 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
   };
 
   const progressHandler = ({ progress, time }: { progress: number; time: number }) => {
+    activityWatchdog?.markActivity();
+
     if (renderDurationSeconds > 0 && Number.isFinite(time) && time > 0) {
       const processedSeconds = normalizeProcessedSeconds(time / 1_000_000, "progress");
       if (processedSeconds > 0) {
@@ -135,8 +149,15 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
   const logHandler = ({ message }: { message: string }) => {
     const text = String(message ?? "").trim();
     if (text) {
+      activityWatchdog?.markActivity();
       ffmpegLogTail.push(text);
-      if (ffmpegLogTail.length > 30) ffmpegLogTail.shift();
+      if (FFMPEG_INTERESTING_LOG_PATTERN.test(text) || text === "Conversion failed!") {
+        if (ffmpegLogHighlights[ffmpegLogHighlights.length - 1] !== text) {
+          ffmpegLogHighlights.push(text);
+          if (ffmpegLogHighlights.length > 24) ffmpegLogHighlights.shift();
+        }
+      }
+      if (ffmpegLogTail.length > 60) ffmpegLogTail.shift();
     }
     if (renderDurationSeconds <= 0) return;
 
@@ -173,17 +194,26 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     }, 250);
 
     try {
+      activityWatchdog = createEditorFfmpegActivityWatchdog({
+        stallTimeoutMs,
+        onStall: resetFFmpeg,
+      });
       await runEditorFfmpegExec({
         ff,
         args,
-        timeoutMs,
         resolution: input.resolution,
         clipCount: renderClipCount,
         durationSeconds: renderDurationSeconds,
         logTail: ffmpegLogTail,
+        logHighlights: ffmpegLogHighlights,
+        audioItemCount: renderAudioItemCount,
+        subtitleFrameCount,
+        activityWatchdog,
         resetFfmpeg: resetFFmpeg,
+        lifecycle: input.renderLifecycle,
       });
     } finally {
+      activityWatchdog = null;
       clearInterval(timer);
     }
   };
@@ -222,7 +252,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       resolution: input.resolution,
     });
     renderDurationSeconds = Math.max(exportPlan.durationSeconds, 0.5);
-    timeoutMs = getFfmpegExecTimeoutMs(input.resolution, exportPlan.durationSeconds);
+    stallTimeoutMs = getFfmpegRenderStallTimeoutMs(input.resolution);
 
     const timelineCaptions = buildProjectCaptionTimeline({
       project: input.project,
@@ -236,6 +266,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       height: exportPlan.height,
       signal: input.renderLifecycle?.signal,
     });
+    subtitleFrameCount = subtitleFrames.length;
 
     for (const frame of subtitleFrames) {
       throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
@@ -269,6 +300,8 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       `[${finalVideoLabel}]`,
       "-map",
       `[${exportPlan.mixedAudioLabel ?? exportPlan.videoTrackLabel}]`,
+      "-max_muxing_queue_size",
+      "4096",
       "-c:v",
       "libx264",
       "-preset",
@@ -279,8 +312,6 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       "aac",
       "-b:a",
       "192k",
-      "-movflags",
-      "+faststart",
       outputPath,
     ];
 
@@ -322,6 +353,9 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
           ? `${input.project.timeline.audioItems.length} audio track item${input.project.timeline.audioItems.length === 1 ? "" : "s"} mixed with clip audio.`
           : "Clip audio only.",
         subtitleFrames.length > 0 ? `${subtitleFrames.length} subtitle frames burned into the output.` : "No subtitle burn-in frames were rendered.",
+        "Browser timeline export disables +faststart so long local renders avoid a second MP4 rewrite pass.",
+        "Muxing queue size raised to 4096 packets to reduce long-timeline stream buffering failures.",
+        `Render stall watchdog: ${Math.round(stallTimeoutMs / 1000)}s without FFmpeg activity before abort.`,
         input.resolution === "4K" ? "4K is experimental in browser and may fail on lower-memory devices." : "Standard browser export preset.",
       ],
     };
