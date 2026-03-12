@@ -86,14 +86,32 @@ export interface ExportedTimelineProjectWorkspaceResult {
   ffmpegCommandPreview: string[];
 }
 
+export interface TimelineProjectCliProgressUpdate {
+  stage: "prepare" | "probe" | "render" | "write" | "done";
+  message: string;
+  percent: number;
+}
+
 export interface ImportTimelineProjectDependencies {
   now?: () => number;
   probeMedia?: typeof probeMediaFileWithFfprobe;
+  onProgress?: (update: TimelineProjectCliProgressUpdate) => void;
 }
 
 export interface ExportTimelineProjectDependencies {
   now?: () => number;
   exportProject?: (input: Parameters<typeof exportEditorProjectWithSystemFfmpeg>[0]) => Promise<NodeEditorExportResult>;
+  onProgress?: (update: TimelineProjectCliProgressUpdate) => void;
+}
+
+function emitCliProgress(
+  callback: ImportTimelineProjectDependencies["onProgress"] | ExportTimelineProjectDependencies["onProgress"] | undefined,
+  update: TimelineProjectCliProgressUpdate
+) {
+  callback?.({
+    ...update,
+    percent: Math.round(Math.min(100, Math.max(0, update.percent))),
+  });
 }
 
 function readRequiredValue(args: readonly string[], index: number, flag: string): string {
@@ -345,15 +363,21 @@ export async function importTimelineProjectWorkspace(
   options: ImportTimelineProjectOptions,
   dependencies: ImportTimelineProjectDependencies = {}
 ): Promise<ImportedTimelineProjectWorkspaceResult> {
+  emitCliProgress(dependencies.onProgress, {
+    stage: "prepare",
+    percent: 0,
+    message: "Reading bundle manifest",
+  });
   const bundlePath = path.resolve(options.bundlePath);
   const manifestPath = path.join(bundlePath, "manifest.json");
   await assertReadableFile(manifestPath, "Bundle manifest");
 
   const manifest = parseEditorProjectBundleManifest(await readFile(manifestPath, "utf8"));
+  const expectedPaths = getEditorProjectBundleExpectedPaths(manifest);
   const mediaPaths = new Map<string, string>();
   const missingPaths: string[] = [];
 
-  for (const bundleRelativePath of getEditorProjectBundleExpectedPaths(manifest)) {
+  for (const bundleRelativePath of expectedPaths) {
     const absolutePath = resolveWorkspaceRelativePath(bundlePath, bundleRelativePath, `Bundle media path "${bundleRelativePath}"`);
     if (!(await pathExists(absolutePath))) {
       missingPaths.push(bundleRelativePath);
@@ -368,6 +392,14 @@ export async function importTimelineProjectWorkspace(
 
   const now = dependencies.now?.() ?? Date.now();
   const probeMedia = dependencies.probeMedia ?? probeMediaFileWithFfprobe;
+  const totalProbeCount = expectedPaths.length;
+  let probedCount = 0;
+
+  emitCliProgress(dependencies.onProgress, {
+    stage: "prepare",
+    percent: totalProbeCount === 0 ? 70 : 10,
+    message: "Bundle verified",
+  });
   const { project, assets, assetPathsById } = await materializeEditorProjectBundleWithResolver({
     manifest,
     now,
@@ -376,7 +408,14 @@ export async function importTimelineProjectWorkspace(
       if (!absolutePath) {
         throw new Error(`Bundle media file "${bundleRelativePath}" is missing.`);
       }
-      return probeMedia(absolutePath);
+      const result = await probeMedia(absolutePath);
+      probedCount += 1;
+      emitCliProgress(dependencies.onProgress, {
+        stage: "probe",
+        percent: 10 + (probedCount / Math.max(1, totalProbeCount)) * 75,
+        message: `Probed ${probedCount}/${totalProbeCount} media file${totalProbeCount === 1 ? "" : "s"}`,
+      });
+      return result;
     },
   });
 
@@ -392,7 +431,17 @@ export async function importTimelineProjectWorkspace(
     throw new Error(`Project workspace already exists: ${workspacePath}`);
   }
 
+  emitCliProgress(dependencies.onProgress, {
+    stage: "write",
+    percent: 92,
+    message: "Writing workspace file",
+  });
   await writeWorkspaceFile(workspacePath, workspace);
+  emitCliProgress(dependencies.onProgress, {
+    stage: "done",
+    percent: 100,
+    message: "Workspace ready",
+  });
 
   return {
     command: "import:timeline-project",
@@ -409,6 +458,11 @@ export async function exportTimelineProjectWorkspace(
   options: ExportTimelineProjectOptions,
   dependencies: ExportTimelineProjectDependencies = {}
 ): Promise<ExportedTimelineProjectWorkspaceResult> {
+  emitCliProgress(dependencies.onProgress, {
+    stage: "prepare",
+    percent: 0,
+    message: "Loading workspace",
+  });
   const { workspace, workspaceDirectory, workspacePath } = await loadWorkspaceFromDisk(options.projectPath);
   const resolvedOutputPath =
     options.outputPath ??
@@ -421,7 +475,17 @@ export async function exportTimelineProjectWorkspace(
   const exportProject = dependencies.exportProject ?? exportEditorProjectWithSystemFfmpeg;
 
   if (options.dryRun) {
+    emitCliProgress(dependencies.onProgress, {
+      stage: "prepare",
+      percent: 35,
+      message: "Resolving workspace assets",
+    });
     const resolvedAssets = await resolveWorkspaceAssetsForExport(workspace, workspaceDirectory);
+    emitCliProgress(dependencies.onProgress, {
+      stage: "render",
+      percent: 80,
+      message: "Building render plan",
+    });
     const result = await exportProject({
       project: workspace.project,
       assets: resolvedAssets,
@@ -429,6 +493,11 @@ export async function exportTimelineProjectWorkspace(
       outputPath: resolvedOutputPath,
       overwrite: options.force,
       dryRun: true,
+    });
+    emitCliProgress(dependencies.onProgress, {
+      stage: "done",
+      percent: 100,
+      message: "Plan ready",
     });
 
     return {
@@ -451,12 +520,22 @@ export async function exportTimelineProjectWorkspace(
     serializeEditorProjectForPersistence(workspace.project, workspace.project.timeline.playheadSeconds),
     startTime
   );
+  emitCliProgress(dependencies.onProgress, {
+    stage: "prepare",
+    percent: 8,
+    message: "Preparing workspace export state",
+  });
   await writeWorkspaceFile(workspacePath, {
     ...workspace,
     project: exportingProject,
   });
 
   try {
+    emitCliProgress(dependencies.onProgress, {
+      stage: "prepare",
+      percent: 14,
+      message: "Resolving workspace assets",
+    });
     const resolvedAssets = await resolveWorkspaceAssetsForExport(workspace, workspaceDirectory);
     const result = await exportProject({
       project: exportingProject,
@@ -464,11 +543,19 @@ export async function exportTimelineProjectWorkspace(
       resolution: options.resolution,
       outputPath: resolvedOutputPath,
       overwrite: options.force,
+      onProgress: (progress) => {
+        emitCliProgress(dependencies.onProgress, {
+          stage: "render",
+          percent: 18 + progress.percent * 0.76,
+          message: `Rendering ${Math.round(progress.percent)}%`,
+        });
+      },
     });
 
     const completedAt = dependencies.now?.() ?? Date.now();
     const exportRecord = buildEditorExportRecord({
       projectId: exportingProject.id,
+      engine: "system",
       filename: result.filename,
       mimeType: "video/mp4",
       sizeBytes: result.sizeBytes,
@@ -491,15 +578,26 @@ export async function exportTimelineProjectWorkspace(
           filename: exportRecord.filename,
           aspectRatio: exportRecord.aspectRatio,
           resolution: exportRecord.resolution,
+          engine: exportRecord.engine,
           status: exportRecord.status,
         },
         lastError: undefined,
       },
       completedAt
     );
+    emitCliProgress(dependencies.onProgress, {
+      stage: "write",
+      percent: 96,
+      message: "Writing export metadata",
+    });
     await writeWorkspaceFile(workspacePath, {
       ...workspace,
       project: nextProject,
+    });
+    emitCliProgress(dependencies.onProgress, {
+      stage: "done",
+      percent: 100,
+      message: "Export complete",
     });
 
     return {

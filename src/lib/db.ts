@@ -44,6 +44,16 @@ export class AudioTranscriberDB extends Dexie {
       editorAssets: 'id, projectId, createdAt, updatedAt, kind, sourceType',
       editorExports: 'id, projectId, createdAt, status, resolution, aspectRatio'
     });
+
+    this.version(4).stores({
+      history: 'id, timestamp',
+      mediaFiles: 'id',
+      creatorShortProjects: 'id, sourceProjectId, sourceMediaId, updatedAt, createdAt, status, platform',
+      creatorShortExports: 'id, shortProjectId, sourceProjectId, createdAt, status, platform',
+      editorProjects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio',
+      editorAssets: 'id, projectId, createdAt, updatedAt, kind, sourceType',
+      editorExports: 'id, projectId, createdAt, status, engine, resolution, aspectRatio'
+    });
   }
 }
 

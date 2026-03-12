@@ -3,6 +3,7 @@ import { access, mkdir, stat } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
+import { getEditorExportCapability } from "./export-capabilities";
 import { buildEditorExportPlan } from "./core/export-plan";
 import type { CommandRunResult, CommandRunner } from "./node-media";
 import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
@@ -22,6 +23,14 @@ export interface NodeEditorExportInput {
   dryRun?: boolean;
   commandRunner?: CommandRunner;
   ffmpegPath?: string | null;
+  onProgress?: (progress: NodeEditorExportProgress) => void;
+  signal?: AbortSignal;
+}
+
+export interface NodeEditorExportProgress {
+  percent: number;
+  processedSeconds: number;
+  durationSeconds: number;
 }
 
 export interface NodeEditorExportResult {
@@ -37,14 +46,73 @@ export interface NodeEditorExportResult {
   dryRun: boolean;
 }
 
-async function runCommand(command: string, args: readonly string[]): Promise<CommandRunResult> {
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function parseFfmpegTimecodeToSeconds(timecode: string): number | null {
+  const match = timecode.match(/^(\d+):(\d{2}):(\d{2})(?:\.(\d+))?$/);
+  if (!match) return null;
+  const [, hoursRaw, minutesRaw, secondsRaw, fractionRaw] = match;
+  const hours = Number(hoursRaw);
+  const minutes = Number(minutesRaw);
+  const seconds = Number(secondsRaw);
+  const fraction = fractionRaw ? Number(`0.${fractionRaw}`) : 0;
+  if (![hours, minutes, seconds, fraction].every(Number.isFinite)) return null;
+  return hours * 3600 + minutes * 60 + seconds + fraction;
+}
+
+function parseFfmpegProgressSeconds(message: string): number | null {
+  const matches = [...message.matchAll(/\btime=(\d+:\d{2}:\d{2}(?:\.\d+)?)\b/g)];
+  if (matches.length === 0) return null;
+  return parseFfmpegTimecodeToSeconds(matches[matches.length - 1]?.[1] ?? "");
+}
+
+function createAbortError() {
+  const error = new Error("Export canceled.");
+  error.name = "AbortError";
+  return error;
+}
+
+export function isNodeEditorExportCanceledError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+async function runCommand(
+  command: string,
+  args: readonly string[],
+  options: {
+    onStderrChunk?: (chunk: string) => void;
+    signal?: AbortSignal;
+  } = {}
+): Promise<CommandRunResult> {
   return new Promise<CommandRunResult>((resolve, reject) => {
+    if (options.signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+
     const child = spawn(command, [...args], {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
     let stdout = "";
     let stderr = "";
+    let settled = false;
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener("abort", handleAbort);
+      callback();
+    };
+
+    const handleAbort = () => {
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+      finish(() => reject(createAbortError()));
+    };
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -54,15 +122,22 @@ async function runCommand(command: string, args: readonly string[]): Promise<Com
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
+      options.onStderrChunk?.(chunk);
     });
 
-    child.on("error", reject);
+    options.signal?.addEventListener("abort", handleAbort, { once: true });
+
+    child.on("error", (error) => {
+      finish(() => reject(error));
+    });
     child.on("close", (code) => {
-      resolve({
-        code: code ?? 1,
-        stdout,
-        stderr,
-      });
+      finish(() =>
+        resolve({
+          code: code ?? 1,
+          stdout,
+          stderr,
+        })
+      );
     });
   });
 }
@@ -79,18 +154,13 @@ function assertCliExportSupported(
   project: EditorProjectRecord,
   assets: readonly NodeEditorExportAsset[]
 ) {
-  const unsupportedSourceAsset = assets.find(({ asset }) => asset.sourceType !== "upload");
-  if (unsupportedSourceAsset) {
-    throw new Error(`CLI export currently supports only upload assets. Asset "${unsupportedSourceAsset.asset.filename}" uses sourceType "${unsupportedSourceAsset.asset.sourceType}".`);
-  }
-
-  const captionedAsset = assets.find(({ asset }) => asset.captionSource.kind !== "none");
-  if (captionedAsset) {
-    throw new Error(`CLI export does not support captionSource "${captionedAsset.asset.captionSource.kind}" yet. Use browser export or remove subtitles first.`);
-  }
-
-  if (project.timeline.videoClips.length === 0) {
-    throw new Error("CLI export requires at least one video clip.");
+  const capability = getEditorExportCapability({
+    engine: "system",
+    project,
+    assets,
+  });
+  if (!capability.supported) {
+    throw new Error(capability.reasons.join("\n"));
   }
 }
 
@@ -192,16 +262,41 @@ export async function exportEditorProjectWithSystemFfmpeg(
 
   await mkdir(path.dirname(outputPath), { recursive: true });
   if (!input.dryRun) {
-    const runner = input.commandRunner ?? runCommand;
     const commandCandidates = [
       "ffmpeg",
       input.ffmpegPath ?? getBundledBinaryPath("ffmpeg"),
     ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
 
     let result: CommandRunResult | null = null;
+    let lastProgressPercent = -1;
+    const emitProgress = (processedSeconds: number) => {
+      if (!input.onProgress || command.durationSeconds <= 0) return;
+      const percent = clampNumber((processedSeconds / command.durationSeconds) * 100, 0, 100);
+      if (percent <= lastProgressPercent + 0.25 && percent < 100) return;
+      lastProgressPercent = percent;
+      input.onProgress({
+        percent,
+        processedSeconds,
+        durationSeconds: command.durationSeconds,
+      });
+    };
+
+    emitProgress(0);
     for (const commandName of commandCandidates) {
       try {
-        result = await runner(commandName, command.ffmpegArgs);
+        if (input.commandRunner) {
+          result = await input.commandRunner(commandName, command.ffmpegArgs);
+        } else {
+          result = await runCommand(commandName, command.ffmpegArgs, {
+            onStderrChunk: (chunk) => {
+              const processedSeconds = parseFfmpegProgressSeconds(chunk);
+              if (processedSeconds != null) {
+                emitProgress(processedSeconds);
+              }
+            },
+            signal: input.signal,
+          });
+        }
         break;
       } catch (error) {
         if (isEnoentError(error)) {
@@ -212,6 +307,9 @@ export async function exportEditorProjectWithSystemFfmpeg(
     }
 
     if (!result) {
+      if (input.signal?.aborted) {
+        throw createAbortError();
+      }
       throw new Error(buildMissingBinaryMessage("ffmpeg"));
     }
 
@@ -219,6 +317,8 @@ export async function exportEditorProjectWithSystemFfmpeg(
       const detail = getStderrTail(result.stderr) || result.stdout.trim() || "Unknown ffmpeg failure.";
       throw new Error(`ffmpeg failed while rendering the timeline.\n${detail}`);
     }
+
+    emitProgress(command.durationSeconds);
   }
 
   const outputStats = input.dryRun ? null : await stat(outputPath);

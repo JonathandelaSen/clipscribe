@@ -39,7 +39,7 @@ const PHASE_COPY: Record<
     handoff: {
       badge: "Finalizing",
       title: "Finalizing the MP4",
-      description: "The video is being packaged for download and the export audit trail is being wrapped up.",
+      description: "The rendered video is being written to the selected destination and the export audit trail is being wrapped up.",
       helper: "The file is almost ready. Avoid refreshing or closing this tab now.",
       label: "Timeline Export",
     },
@@ -92,6 +92,9 @@ export function ExportProgressOverlay({
   mode,
   projectName,
   resolution,
+  outputLabel,
+  engineLabel,
+  destinationName,
   progressPct,
   stage,
   canCancel,
@@ -101,6 +104,9 @@ export function ExportProgressOverlay({
   mode: EditorProgressMode;
   projectName: string;
   resolution: EditorResolution;
+  outputLabel?: string;
+  engineLabel?: string;
+  destinationName?: string | null;
   progressPct: number;
   stage: BrowserRenderStage;
   canCancel?: boolean;
@@ -167,11 +173,17 @@ export function ExportProgressOverlay({
             </div>
             <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
               <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Output</div>
-              <div className="mt-2 text-sm font-medium text-white">{resolution}</div>
+              <div className="mt-2 text-sm font-medium text-white">{outputLabel ?? resolution}</div>
             </div>
             <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
               <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Engine</div>
-              <div className="mt-2 text-sm font-medium text-white">FFmpeg.wasm</div>
+              <div className="mt-2 text-sm font-medium text-white">{engineLabel ?? "FFmpeg.wasm"}</div>
+            </div>
+            <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
+              <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Destination</div>
+              <div className="mt-2 truncate text-sm font-medium text-white" title={destinationName ?? undefined}>
+                {destinationName || "Preparing destination"}
+              </div>
             </div>
           </div>
 

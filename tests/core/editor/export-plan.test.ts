@@ -6,7 +6,10 @@ import {
   normalizeEditorProjectBundleManifest,
 } from "../../../src/lib/editor/bundle";
 import { getEditorOutputDimensions } from "../../../src/lib/editor/core/aspect-ratio";
-import { buildEditorExportPlan } from "../../../src/lib/editor/core/export-plan";
+import {
+  buildEditorAudioExportPlan,
+  buildEditorExportPlan,
+} from "../../../src/lib/editor/core/export-plan";
 import {
   createDefaultAudioTrack,
   createDefaultVideoClip,
@@ -408,4 +411,103 @@ test("buildEditorExportPlan keeps concat inputs interleaved when a clip uses fal
     /\[vseg0\]\[aseg0\]\[vseg1\]\[aseg1\]\[vseg2\]\[aseg2\]concat=n=3:v=1:a=1\[video_track\]\[clip_audio_track\]/
   );
   assert.ok(plan.filterComplex.includes("anullsrc=r=48000:cl=stereo,atrim=duration=4.000[aseg1]"));
+});
+
+test("buildEditorExportPlan can build a video-only concat graph for segmented browser renders", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const videoA = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "a.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 5,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const videoB = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "b.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 4,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  project.assetIds = [videoA.id, videoB.id];
+  project.timeline.videoClips = [
+    createDefaultVideoClip({ assetId: videoA.id, label: "A", durationSeconds: 5 }),
+    createDefaultVideoClip({ assetId: videoB.id, label: "B", durationSeconds: 4 }),
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: videoA.id, path: "a.mp4", asset: videoA },
+      { inputIndex: 1, assetId: videoB.id, path: "b.mp4", asset: videoB },
+    ],
+    resolution: "1080p",
+    includeAudio: false,
+  });
+
+  assert.equal(plan.mixedAudioLabel, null);
+  assert.ok(plan.filterComplex.includes("[vseg0][vseg1]concat=n=2:v=1:a=0[video_track]"));
+  assert.doesNotMatch(plan.filterComplex, /\[aseg0\]/);
+});
+
+test("buildEditorAudioExportPlan builds one audio-only mix for clip audio plus timeline audio", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const video = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "a.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 8,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const audio = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "audio",
+    filename: "bed.mp3",
+    mimeType: "audio/mpeg",
+    sizeBytes: 10,
+    durationSeconds: 20,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  project.assetIds = [video.id, audio.id];
+  project.timeline.videoClips = [createDefaultVideoClip({ assetId: video.id, label: "A", durationSeconds: 8 })];
+  project.timeline.audioItems = [
+    {
+      ...createDefaultAudioTrack({ assetId: audio.id, durationSeconds: 20 }),
+      startOffsetSeconds: 1.5,
+      trimEndSeconds: 12,
+    },
+  ];
+
+  const plan = buildEditorAudioExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: video.id, path: "a.mp4", asset: video },
+      { inputIndex: 1, assetId: audio.id, path: "bed.mp3", asset: audio },
+    ],
+  });
+
+  assert.equal(plan.durationSeconds, 13.5);
+  assert.equal(plan.mixedAudioLabel, "mixed_audio_0");
+  assert.ok(plan.filterComplex.includes("concat=n=1:v=0:a=1[clip_audio_track]"));
+  assert.ok(plan.filterComplex.includes("adelay=1500|1500"));
+  assert.ok(plan.filterComplex.includes("amix=inputs=2:duration=longest:dropout_transition=0[mixed_audio_0]"));
 });

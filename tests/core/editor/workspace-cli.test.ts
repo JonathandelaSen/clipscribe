@@ -114,6 +114,61 @@ test("importTimelineProjectWorkspace writes project.json and deduplicates repeat
   assert.equal(workspace.assets[0]?.path, "media/shared.mp4");
 });
 
+test("importTimelineProjectWorkspace emits progress updates while probing and writing", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const bundleDir = path.join(tempDir, "progress.clipscribe-project");
+  await mkdir(path.join(bundleDir, "media"), { recursive: true });
+  await writeFile(
+    path.join(bundleDir, "manifest.json"),
+    JSON.stringify(
+      {
+        schemaVersion: 1,
+        createdAt: 10,
+        name: "Progress",
+        aspectRatio: "16:9",
+        videoClips: [{ path: "media/shared.mp4" }],
+      },
+      null,
+      2
+    ),
+    "utf8"
+  );
+  await writeFile(path.join(bundleDir, "media", "shared.mp4"), "video", "utf8");
+
+  const updates: string[] = [];
+  await importTimelineProjectWorkspace(
+    {
+      bundlePath: bundleDir,
+      force: false,
+      json: false,
+    },
+    {
+      probeMedia: async () => ({
+        kind: "video",
+        filename: "shared.mp4",
+        mimeType: "video/mp4",
+        sizeBytes: 128,
+        durationSeconds: 8,
+        width: 1920,
+        height: 1080,
+        hasAudio: true,
+      }),
+      onProgress: (update) => {
+        updates.push(`${update.stage}:${update.message}:${update.percent}`);
+      },
+    }
+  );
+
+  assert.ok(updates.some((update) => update.includes("prepare:Reading bundle manifest")));
+  assert.ok(updates.some((update) => update.includes("probe:Probed 1/1 media file")));
+  assert.ok(updates.some((update) => update.includes("write:Writing workspace file")));
+  assert.ok(updates.some((update) => update.endsWith(":100")));
+});
+
 test("importTimelineProjectWorkspace fails when a manifest references missing media", async (t) => {
   const tempDir = await createTempDirectory();
   t.after(async () => {
@@ -353,6 +408,96 @@ test("exportTimelineProjectWorkspace persists latestExport on success", async (t
   assert.equal(workspaceAfterExport.project.lastError, undefined);
   assert.equal(workspaceAfterExport.project.latestExport?.filename, path.basename(result.outputPath));
   assert.equal(workspaceAfterExport.project.latestExport?.resolution, "1080p");
+  assert.equal(workspaceAfterExport.project.latestExport?.engine, "system");
+});
+
+test("exportTimelineProjectWorkspace forwards renderer progress updates", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const workspaceDir = path.join(tempDir, "progress-export.clipscribe-project");
+  await mkdir(workspaceDir, { recursive: true });
+  await mkdir(path.join(workspaceDir, "media"), { recursive: true });
+  await writeFile(path.join(workspaceDir, "media", "clip.mp4"), "clip", "utf8");
+
+  const project = createEmptyEditorProject({
+    id: "project_progress",
+    now: 200,
+    name: "Progress Export",
+    aspectRatio: "16:9",
+  });
+  const asset = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "clip.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 64,
+    durationSeconds: 6,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+    id: "asset_progress",
+    now: 200,
+  });
+  project.assetIds = [asset.id];
+  project.timeline.videoClips = [
+    createDefaultVideoClip({ assetId: asset.id, label: "Clip", durationSeconds: 6 }),
+  ];
+  await writeFile(
+    path.join(workspaceDir, "project.json"),
+    serializeEditorProjectWorkspace(
+      createEditorProjectWorkspace({
+        project,
+        assets: [asset],
+        assetPathsById: new Map([[asset.id, "media/clip.mp4"]]),
+        createdAt: 200,
+      })
+    ),
+    "utf8"
+  );
+
+  const percents: number[] = [];
+  await exportTimelineProjectWorkspace(
+    {
+      projectPath: workspaceDir,
+      resolution: "1080p",
+      dryRun: false,
+      force: true,
+      json: false,
+    },
+    {
+      exportProject: async (input) => {
+        input.onProgress?.({
+          percent: 40,
+          processedSeconds: 2.4,
+          durationSeconds: 6,
+        });
+        return {
+          outputPath: path.join(workspaceDir, "exports", "progress.mp4"),
+          filename: "progress.mp4",
+          width: 1920,
+          height: 1080,
+          sizeBytes: 2048,
+          durationSeconds: 6,
+          warnings: [],
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: [],
+          dryRun: false,
+        };
+      },
+      onProgress: (update) => {
+        percents.push(update.percent);
+      },
+    }
+  );
+
+  assert.ok(percents.some((value) => value === 0));
+  assert.ok(percents.some((value) => value >= 48 && value <= 49));
+  assert.ok(percents.some((value) => value === 100));
 });
 
 test("exportTimelineProjectWorkspace persists failure state when export errors", async (t) => {

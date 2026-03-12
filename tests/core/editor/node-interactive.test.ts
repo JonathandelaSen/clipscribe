@@ -4,7 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { listInteractivePathPickerOptions } from "../../../src/lib/editor/node-interactive";
+import {
+  listInteractivePathPickerOptions,
+  validatePromptNumberValue,
+} from "../../../src/lib/editor/node-interactive";
 
 async function createTempDirectory() {
   return mkdtemp(path.join(os.tmpdir(), "clipscribe-node-interactive-test-"));
@@ -63,4 +66,28 @@ test("workspace picker includes project.json files as selectable entries", async
   assert.ok(options.some((option) => option.label === "Open demo.clipscribe-project/"));
   assert.ok(options.some((option) => option.action.path === path.join(tempDir, "project.json")));
   assert.ok(options.every((option) => option.action.path !== path.join(tempDir, "notes.txt")));
+});
+
+test("validatePromptNumberValue accepts the empty placeholder so Enter can use the initial number", () => {
+  assert.equal(
+    validatePromptNumberValue("", {
+      initial: 0,
+      min: 0,
+    }),
+    true
+  );
+  assert.equal(
+    validatePromptNumberValue(undefined, {
+      initial: 0,
+      min: 0,
+    }),
+    true
+  );
+  assert.equal(
+    validatePromptNumberValue(-1, {
+      initial: 0,
+      min: 0,
+    }),
+    "Enter a number greater than or equal to 0."
+  );
 });

@@ -124,8 +124,9 @@ export async function renderReversedClipPreview(input: {
       }
 
       const bytes = output instanceof Uint8Array ? new Uint8Array(output) : new Uint8Array(output as Uint8Array);
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
-      return new File([arrayBuffer], sanitizeFilename(`${input.clip.label || input.file.name}_reversed_preview.mp4`), {
+      const ownedBytes = new Uint8Array(new ArrayBuffer(bytes.byteLength));
+      ownedBytes.set(bytes);
+      return new File([ownedBytes], sanitizeFilename(`${input.clip.label || input.file.name}_reversed_preview.mp4`), {
         type: "video/mp4",
       });
     } finally {

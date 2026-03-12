@@ -13,6 +13,7 @@
     "plugins": []
   },
   "include": [
+    "prompts.d.ts",
     "src/lib/creator/core/**/*.ts",
     "src/lib/editor/**/*.ts",
     "src/lib/transcriber/core/**/*.ts",

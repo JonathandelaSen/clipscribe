@@ -6,9 +6,11 @@ import {
   normalizeEditorProjectBundleManifest,
 } from "../../../src/lib/editor/bundle";
 import {
+  buildEditorExportRecord,
   createDefaultVideoClip,
   createEmptyEditorProject,
   getEditorProjectPersistenceFingerprint,
+  normalizeLegacyEditorProjectRecord,
   restoreEditorProjectAfterCanceledExport,
   serializeEditorProjectForPersistence,
 } from "../../../src/lib/editor/storage";
@@ -86,6 +88,7 @@ test("restoreEditorProjectAfterCanceledExport keeps current edit and restores pr
     filename: "prev.mp4",
     aspectRatio: "16:9",
     resolution: "1080p",
+    engine: "browser",
     status: "completed",
   };
   project.lastError = undefined;
@@ -106,6 +109,37 @@ test("restoreEditorProjectAfterCanceledExport keeps current edit and restores pr
   assert.equal(restored.lastError, "Previous failure");
   assert.equal(restored.latestExport?.id, "exp_prev");
   assert.equal(restored.updatedAt, 1234);
+});
+
+test("editor export records persist engine metadata and legacy project summaries default to browser", () => {
+  const exportRecord = buildEditorExportRecord({
+    projectId: "project_1",
+    engine: "system",
+    filename: "timeline.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 2048,
+    durationSeconds: 12,
+    aspectRatio: "16:9",
+    resolution: "1080p",
+    width: 1920,
+    height: 1080,
+  });
+
+  assert.equal(exportRecord.engine, "system");
+
+  const normalizedProject = normalizeLegacyEditorProjectRecord({
+    ...createEmptyEditorProject(),
+    latestExport: {
+      id: "legacy_exp",
+      createdAt: 10,
+      filename: "legacy.mp4",
+      aspectRatio: "16:9",
+      resolution: "720p",
+      status: "completed",
+    },
+  } as ReturnType<typeof createEmptyEditorProject>);
+
+  assert.equal(normalizedProject.latestExport?.engine, "browser");
 });
 
 test("imported projects stay stable under persistence serialization helpers", async () => {

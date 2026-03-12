@@ -16,6 +16,7 @@ import {
 } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   Copy,
@@ -49,8 +50,12 @@ import {
   type TimelineCaptionChunk,
 } from "@/lib/editor/core/captions";
 import {
+  EDITOR_EXPORT_ENGINE_LABELS,
+  getEditorExportCapability,
+  getEditorExportOutputLabel,
+} from "@/lib/editor/export-capabilities";
+import {
   EDITOR_ASPECT_RATIO_LABELS,
-  EDITOR_RESOLUTION_LABELS,
   getAspectRatioNumber,
 } from "@/lib/editor/core/aspect-ratio";
 import {
@@ -91,6 +96,14 @@ import {
 } from "@/lib/editor/core/timeline";
 import { prepareTimelineClipBake } from "@/lib/editor/core/bake";
 import { localEditorExportService } from "@/lib/editor/export-service";
+import { buildEditorExportFilename } from "@/lib/editor/export-output";
+import {
+  isEditorSavePickerSupported,
+  pickEditorSaveFileHandle,
+  writeBlobToEditorSaveFileHandle,
+  type EditorSaveFileHandle,
+} from "@/lib/editor/save-file";
+import { requestSystemEditorExport } from "@/lib/editor/system-export-client";
 import {
   createActiveBrowserRenderSession,
   isBrowserRenderCancelableStage,
@@ -120,6 +133,7 @@ import {
 import type {
   EditorAssetRecord,
   EditorAspectRatio,
+  EditorExportEngine,
   EditorProjectRecord,
   EditorResolution,
   ResolvedEditorAsset,
@@ -133,6 +147,16 @@ import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -143,10 +167,10 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
+import { ExportSettingsDialog } from "@/components/editor/ExportSettingsDialog";
 import { ExportProgressOverlay } from "@/components/editor/ExportProgressOverlay";
 
 const ASPECT_OPTIONS: EditorAspectRatio[] = ["16:9", "9:16", "1:1", "4:5"];
-const RESOLUTION_OPTIONS: EditorResolution[] = ["720p", "1080p", "4K"];
 const EDITOR_PANEL_CLASS =
   "h-full gap-0 overflow-hidden rounded-[0.9rem] border border-white/7 bg-[linear-gradient(180deg,rgba(13,17,24,0.98),rgba(7,10,15,0.98))] py-0 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.035),0_12px_28px_rgba(0,0,0,0.18)]";
 const EDITOR_PANEL_CONTENT_CLASS = "flex h-full min-h-0 flex-col gap-0 p-0";
@@ -192,8 +216,17 @@ type TimelineClipboardItem =
       item: TimelineAudioItem;
     };
 
+type ExportDestination = {
+  handle: EditorSaveFileHandle;
+  name: string;
+};
+
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function isAbortLikeError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function omitReversePreviewCacheKeys(cache: Record<string, File>, keys: Set<string>) {
@@ -402,14 +435,12 @@ function ProjectAssetThumbnail({
 const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
   projectName,
   projectAspectRatio,
-  exportResolution,
   lastError,
   saveState,
   panelVisibility,
   isRenderBusy,
   onProjectNameChange,
   onAspectRatioChange,
-  onExportResolutionChange,
   onTogglePanel,
   onCopyLastError,
   onDeleteLastError,
@@ -417,14 +448,12 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
 }: {
   projectName: string;
   projectAspectRatio: EditorAspectRatio;
-  exportResolution: EditorResolution;
   lastError?: string | null;
   saveState: "saved" | "saving" | "dirty";
   panelVisibility: PanelVisibilityState;
   isRenderBusy: boolean;
   onProjectNameChange: (value: string) => void;
   onAspectRatioChange: (value: EditorAspectRatio) => void;
-  onExportResolutionChange: (value: EditorResolution) => void;
   onTogglePanel: (panel: keyof PanelVisibilityState) => void;
   onCopyLastError?: () => void | Promise<void>;
   onDeleteLastError?: () => void | Promise<void>;
@@ -475,21 +504,6 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
               ))}
             </SelectContent>
           </Select>
-          <Select
-            value={exportResolution}
-            onValueChange={(value) => onExportResolutionChange(value as EditorResolution)}
-          >
-            <SelectTrigger className="h-9 w-[146px] rounded-lg border-white/8 bg-white/[0.04] text-white">
-              <SelectValue placeholder="Resolution" />
-            </SelectTrigger>
-            <SelectContent className="border-white/10 bg-slate-950 text-white">
-              {RESOLUTION_OPTIONS.map((resolution) => (
-                <SelectItem key={resolution} value={resolution}>
-                  {EDITOR_RESOLUTION_LABELS[resolution]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
           <div className="mx-1 h-7 w-px bg-white/8" />
           <div className="flex flex-wrap items-center gap-1 rounded-[0.9rem] border border-white/8 bg-black/25 p-1">
             {([
@@ -520,43 +534,59 @@ const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
             {isRenderBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
             Export
           </Button>
+          {lastError && (
+            <Dialog>
+              <DialogTrigger asChild>
+                <Button
+                  variant="ghost"
+                  className="h-9 px-3 text-red-500 hover:bg-red-500/10 hover:text-red-400"
+                >
+                  <AlertTriangle className="mr-2 h-4 w-4" />
+                  Export Error
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="border-red-500/20 bg-slate-950 sm:max-w-md">
+                <DialogHeader>
+                  <DialogTitle className="text-red-500">Last Export Error</DialogTitle>
+                  <DialogDescription className="text-sm text-slate-400">
+                    {errorHeadline}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="mt-2">
+                  <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded-md border border-red-500/20 bg-red-950/20 p-3 text-[11px] leading-5 text-red-200/90">
+                    {lastError}
+                  </pre>
+                </div>
+                <DialogFooter className="mt-4 sm:justify-between">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="text-slate-400 hover:text-slate-300"
+                    onClick={() => void onDeleteLastError?.()}
+                  >
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    Clear Error
+                  </Button>
+                  <div className="flex gap-2">
+                    <DialogClose asChild>
+                      <Button type="button" variant="outline" className="border-white/10 bg-transparent text-white hover:bg-white/5">
+                        Close
+                      </Button>
+                    </DialogClose>
+                    <Button
+                      type="button"
+                      className="bg-red-500 text-white hover:bg-red-600 border-red-500"
+                      onClick={() => void onCopyLastError?.()}
+                    >
+                      <Copy className="mr-2 h-4 w-4" />
+                      Copy Details
+                    </Button>
+                  </div>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
         </div>
-
-        {lastError ? (
-          <div className="rounded-lg border border-red-400/18 bg-red-500/10 px-3 py-3 text-red-50/90">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-[10px] uppercase tracking-[0.24em] text-red-100/72">Last Export Error</div>
-                <div className="mt-2 text-sm font-medium text-red-50">{errorHeadline}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 rounded-md border border-red-300/14 bg-black/20 px-2.5 text-[11px] text-red-50/78 hover:bg-black/30 hover:text-red-50"
-                  onClick={() => void onCopyLastError?.()}
-                >
-                  <Copy className="mr-1.5 h-3.5 w-3.5" />
-                  Copy
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 rounded-md border border-red-300/14 bg-black/20 px-2.5 text-[11px] text-red-50/78 hover:bg-black/30 hover:text-red-50"
-                  onClick={() => void onDeleteLastError?.()}
-                >
-                  <Trash2 className="mr-1.5 h-3.5 w-3.5" />
-                  Delete
-                </Button>
-              </div>
-            </div>
-            <pre className="mt-3 max-h-32 overflow-auto rounded-md border border-red-300/14 bg-black/20 p-3 text-[11px] leading-5 text-red-50/78 whitespace-pre-wrap">
-              {lastError}
-            </pre>
-          </div>
-        ) : null}
       </div>
     </header>
   );
@@ -614,6 +644,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const deferredLibrarySearch = useDeferredValue(librarySearch);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [exportResolution, setExportResolution] = useState<EditorResolution>("1080p");
+  const [exportEngine, setExportEngine] = useState<EditorExportEngine>("browser");
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [exportDestination, setExportDestination] = useState<ExportDestination | null>(null);
+  const [isPickingExportDestination, setIsPickingExportDestination] = useState(false);
+  const [isSavePickerSupported, setIsSavePickerSupported] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
   const [isExporting, setIsExporting] = useState(false);
   const [exportStage, setExportStage] = useState<BrowserRenderStage>("preparing");
@@ -645,6 +680,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     rightPct: 24,
   });
   const isRenderBusy = isExporting || isBakingClip;
+  const systemExportProgressTimerRef = useRef<number | null>(null);
 
   const beginRenderSession = useCallback(() => {
     return createActiveBrowserRenderSession(++renderSessionCounterRef.current);
@@ -674,6 +710,68 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     },
     [saveProject]
   );
+
+  useEffect(() => {
+    setIsSavePickerSupported(isEditorSavePickerSupported());
+  }, []);
+
+  const stopSystemExportProgressRamp = useCallback(() => {
+    if (systemExportProgressTimerRef.current == null) return;
+    window.clearInterval(systemExportProgressTimerRef.current);
+    systemExportProgressTimerRef.current = null;
+  }, []);
+
+  const startSystemExportProgressRamp = useCallback(() => {
+    stopSystemExportProgressRamp();
+    systemExportProgressTimerRef.current = window.setInterval(() => {
+      setExportProgress((current) => {
+        if (current >= 92) return current;
+        const remaining = 92 - current;
+        const step = Math.max(1, Math.round(remaining * 0.12));
+        return Math.min(92, current + step);
+      });
+    }, 450);
+  }, [stopSystemExportProgressRamp]);
+
+  const handleOpenExportDialog = useCallback(() => {
+    setIsExportDialogOpen(true);
+  }, []);
+
+  const handleExportResolutionChange = useCallback((nextResolution: EditorResolution) => {
+    setExportResolution(nextResolution);
+    setExportDestination(null);
+  }, []);
+
+  const handleExportEngineChange = useCallback((nextEngine: EditorExportEngine) => {
+    setExportEngine(nextEngine);
+    setExportDestination(null);
+  }, []);
+
+  const handlePickExportDestination = useCallback(async () => {
+    if (!project) return;
+
+    setIsPickingExportDestination(true);
+    try {
+      const suggestedName = buildEditorExportFilename(
+        project.name,
+        project.aspectRatio,
+        exportResolution
+      );
+      const handle = await pickEditorSaveFileHandle(suggestedName);
+      if (!handle) return;
+      setExportDestination({
+        handle,
+        name: handle.name,
+      });
+    } catch (error) {
+      console.error("Failed to choose export destination", error);
+      const message =
+        error instanceof Error ? error.message : "Could not choose an export destination.";
+      toast.error(message);
+    } finally {
+      setIsPickingExportDestination(false);
+    }
+  }, [exportResolution, project]);
 
   useEffect(() => {
     if (!loadedProject) return;
@@ -807,6 +905,44 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     [project]
   );
   const projectDuration = useMemo(() => (project ? getProjectDuration(project) : 0), [project]);
+  const exportCapability = useMemo(
+    () =>
+      project
+        ? getEditorExportCapability({
+            engine: exportEngine,
+            project,
+            assets: resolvedAssets.map(({ asset }) => ({ asset })),
+          })
+        : { supported: false, reasons: [] as string[] },
+    [exportEngine, project, resolvedAssets]
+  );
+  const exportBlockingReasons = useMemo(() => {
+    const reasons = [...exportCapability.reasons];
+
+    if (!project) {
+      reasons.push("Project data is still loading.");
+      return reasons;
+    }
+
+    const missingTimelineAsset = project.timeline.videoClips.some(
+      (clip) => resolvedAssetsMap.get(clip.assetId)?.missing
+    );
+    const missingAudioAsset = project.timeline.audioItems.some(
+      (item) => resolvedAssetsMap.get(item.assetId)?.missing
+    );
+    if (missingTimelineAsset || missingAudioAsset) {
+      reasons.push("One or more timeline assets are missing. Replace them before exporting.");
+    }
+    if (isSavePickerSupported && !exportDestination) {
+      reasons.push("Choose where to save the exported MP4.");
+    }
+
+    return reasons;
+  }, [exportCapability.reasons, exportDestination, isSavePickerSupported, project, resolvedAssetsMap]);
+  const exportOutputLabel = useMemo(
+    () => getEditorExportOutputLabel(exportResolution),
+    [exportResolution]
+  );
 
   const selectedItem = project?.timeline.selectedItem;
   const selectedClip = useMemo(
@@ -1672,11 +1808,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
 
     session.controller.abort();
-    resetFFmpeg();
+    if (exportEngine === "browser") {
+      resetFFmpeg();
+    }
+    stopSystemExportProgressRamp();
     exportSessionRef.current = null;
     setIsExporting(false);
     setExportStage("preparing");
     setExportProgress(0);
+    setExportDestination(null);
 
     const exportingProject = exportProjectRef.current;
     const projectToRestore =
@@ -1694,7 +1834,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }
 
     toast("Export canceled");
-  }, [commitCanceledExportRestore]);
+  }, [commitCanceledExportRestore, exportEngine, stopSystemExportProgressRamp]);
 
   const bakeSelectedTimelineGroup = async () => {
     if (!project || !selectedVideoGroup || selectedGroupClipPlacements.length !== selectedVideoGroup.clipIds.length) {
@@ -2282,21 +2422,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const handleExport = useCallback(async () => {
     if (!project) return;
-    if (project.timeline.videoClips.length === 0) {
-      toast.error("Add at least one video clip to export the project.");
-      return;
-    }
-    const missingTimelineAsset = project.timeline.videoClips.some(
-      (clip) => resolvedAssetsMap.get(clip.assetId)?.missing
-    );
-    const missingAudioAsset = project.timeline.audioItems.some(
-      (item) => resolvedAssetsMap.get(item.assetId)?.missing
-    );
-    if (missingTimelineAsset || missingAudioAsset) {
-      toast.error("One or more timeline assets are missing. Replace them before exporting.");
+    if (exportBlockingReasons.length > 0) {
+      toast.error(exportBlockingReasons[0] || "Export settings are incomplete.");
       return;
     }
 
+    const selectedEngine = exportEngine;
+    const selectedResolution = exportResolution;
+    const destination = exportDestination;
+    const usesSavePicker = Boolean(isSavePickerSupported && destination);
     const exportingProject = markEditorProjectExporting(
       serializeEditorProjectForPersistence(project, persistedPlayheadSecondsRef.current),
       Date.now()
@@ -2309,6 +2443,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       lastError: project.lastError,
     };
     exportProjectRef.current = exportingProject;
+    setIsExportDialogOpen(false);
     setProject(exportingProject);
     setIsExporting(true);
     setExportStage(session.stage);
@@ -2318,28 +2453,61 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       await saveProject(exportingProject);
       if (exportSessionRef.current?.id !== session.id) return;
 
-      const result = await localEditorExportService.exportProject({
-        project: exportingProject,
-        resolvedAssets,
-        historyMap,
-        resolution: exportResolution,
-        onProgress: setExportProgress,
-        renderLifecycle: {
-          signal: session.controller.signal,
-          onStageChange: (stage) => syncExportStage(session.id, stage),
-        },
-      });
+      const result =
+        selectedEngine === "browser"
+          ? await localEditorExportService.exportProject({
+              project: exportingProject,
+              resolvedAssets,
+              historyMap,
+              resolution: selectedResolution,
+              onProgress: setExportProgress,
+              renderLifecycle: {
+                signal: session.controller.signal,
+                onStageChange: (stage) => syncExportStage(session.id, stage),
+              },
+            })
+          : await (async () => {
+              setExportProgress(10);
+              syncExportStage(session.id, "rendering");
+              setExportProgress(18);
+              startSystemExportProgressRamp();
+              const systemResult = await requestSystemEditorExport({
+                project: exportingProject,
+                resolvedAssets,
+                resolution: selectedResolution,
+                signal: session.controller.signal,
+              });
+              stopSystemExportProgressRamp();
+              return {
+                file: systemResult.file,
+                width: systemResult.width,
+                height: systemResult.height,
+                warnings: systemResult.warnings,
+                ffmpegCommandPreview: systemResult.debugFfmpegCommand,
+                notes: systemResult.debugNotes,
+              };
+            })();
       if (exportSessionRef.current?.id !== session.id) return;
 
-      downloadBlob(result.file);
+      syncExportStage(session.id, "handoff");
+      setExportProgress((current) => Math.max(current, 96));
+      if (usesSavePicker && destination) {
+        await writeBlobToEditorSaveFileHandle(destination.handle, result.file);
+      } else {
+        downloadBlob(result.file);
+      }
+      if (exportSessionRef.current?.id !== session.id) return;
+
+      const recordedFilename = usesSavePicker && destination ? destination.name : result.file.name;
       const exportRecord = buildEditorExportRecord({
         projectId: exportingProject.id,
-        filename: result.file.name,
+        engine: selectedEngine,
+        filename: recordedFilename,
         mimeType: result.file.type,
         sizeBytes: result.file.size,
         durationSeconds: projectDuration,
         aspectRatio: exportingProject.aspectRatio,
-        resolution: exportResolution,
+        resolution: selectedResolution,
         width: result.width,
         height: result.height,
         warnings: result.warnings,
@@ -2358,6 +2526,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             filename: exportRecord.filename,
             aspectRatio: exportRecord.aspectRatio,
             resolution: exportRecord.resolution,
+            engine: exportRecord.engine,
             status: exportRecord.status,
           },
           lastError: undefined,
@@ -2368,9 +2537,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       if (exportSessionRef.current?.id !== session.id) return;
       syncExportStage(session.id, "complete");
       setProject(nextProject);
-      toast.success(`Exported ${result.file.name}`);
+      toast.success(`Exported ${recordedFilename}`);
     } catch (err) {
+      stopSystemExportProgressRamp();
       if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted) {
+        return;
+      }
+      if (isAbortLikeError(err)) {
         return;
       }
 
@@ -2379,12 +2552,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       try {
         const failedRecord = buildEditorExportRecord({
           projectId: exportingProject.id,
-          filename: `${exportingProject.name}.mp4`,
+          engine: selectedEngine,
+          filename: usesSavePicker && destination
+            ? destination.name
+            : buildEditorExportFilename(exportingProject.name, exportingProject.aspectRatio, selectedResolution),
           mimeType: "video/mp4",
           sizeBytes: 0,
           durationSeconds: projectDuration,
           aspectRatio: exportingProject.aspectRatio,
-          resolution: exportResolution,
+          resolution: selectedResolution,
           width: 0,
           height: 0,
           error: message,
@@ -2404,6 +2580,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }
       toast.error(toastMessage);
     } finally {
+      stopSystemExportProgressRamp();
       if (exportSessionRef.current?.id === session.id) {
         exportSessionRef.current = null;
         exportProjectRef.current = null;
@@ -2411,18 +2588,24 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         setIsExporting(false);
         setExportStage("preparing");
         setExportProgress(0);
+        setExportDestination(null);
       }
     }
   }, [
     beginRenderSession,
+    exportBlockingReasons,
+    exportDestination,
+    exportEngine,
     exportResolution,
     historyMap,
+    isSavePickerSupported,
     project,
     projectDuration,
     resolvedAssets,
-    resolvedAssetsMap,
     saveExport,
     saveProject,
+    startSystemExportProgressRamp,
+    stopSystemExportProgressRamp,
     syncExportStage,
   ]);
 
@@ -2486,6 +2669,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
     const usesCommand = event.metaKey || event.ctrlKey;
     const lowerKey = event.key.toLowerCase();
+    const selection = window.getSelection();
+    const isTextSelected = Boolean(selection && selection.type === "Range" && selection.toString().length > 0);
 
     if (!usesCommand && !event.altKey && event.code === "Space" && previewMode.kind === "timeline") {
       event.preventDefault();
@@ -2494,6 +2679,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }
 
     if (usesCommand && !event.altKey && !event.shiftKey && lowerKey === "c") {
+      if (isTextSelected) return;
       if (copySelectedTimelineItem()) {
         event.preventDefault();
       }
@@ -2545,10 +2731,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       aspectRatio: nextAspectRatio,
     }));
   }, [updateProject]);
-
-  const handleExportResolutionChange = useCallback((nextResolution: EditorResolution) => {
-    setExportResolution(nextResolution);
-  }, []);
 
   if (isLoading || !project) {
     return (
@@ -2608,6 +2790,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const overlayProgress = isBakingClip ? bakeProgress : exportProgress;
   const overlayProjectName = isBakingClip ? bakeProjectName || project.name : project.name;
   const overlayStage = isBakingClip ? bakeStage : exportStage;
+  const overlayDestinationName = isBakingClip
+    ? "Timeline Studio"
+    : exportDestination?.name ?? (isSavePickerSupported ? "Preparing destination" : "Browser download");
   const overlayCanCancel = isBakingClip
     ? isBrowserRenderCancelableStage(bakeStage)
     : isBrowserRenderCancelableStage(exportStage);
@@ -2646,18 +2831,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         <TimelineWorkspaceHeader
           projectName={project.name}
           projectAspectRatio={project.aspectRatio}
-          exportResolution={exportResolution}
           lastError={project.lastError}
           saveState={saveState}
           panelVisibility={panelVisibility}
           isRenderBusy={isRenderBusy}
           onProjectNameChange={handleProjectNameChange}
           onAspectRatioChange={handleAspectRatioChange}
-          onExportResolutionChange={handleExportResolutionChange}
           onTogglePanel={togglePanel}
           onCopyLastError={handleCopyLastError}
           onDeleteLastError={handleDeleteLastError}
-          onExport={handleExport}
+          onExport={handleOpenExportDialog}
         />
 
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.95fr)_minmax(320px,0.82fr)] gap-[6px]">
@@ -4099,11 +4282,29 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           </Card>
         </div>
       </div>
+      <ExportSettingsDialog
+        open={isExportDialogOpen}
+        onOpenChange={setIsExportDialogOpen}
+        resolution={exportResolution}
+        engine={exportEngine}
+        destinationName={exportDestination?.name}
+        canUseSavePicker={isSavePickerSupported}
+        isPickingDestination={isPickingExportDestination}
+        isSubmitting={isExporting}
+        blockingReasons={exportBlockingReasons}
+        onResolutionChange={handleExportResolutionChange}
+        onEngineChange={handleExportEngineChange}
+        onPickDestination={handlePickExportDestination}
+        onConfirm={handleExport}
+      />
       <ExportProgressOverlay
         open={isRenderBusy}
         mode={overlayMode}
         projectName={overlayProjectName}
         resolution={exportResolution}
+        outputLabel={exportOutputLabel}
+        engineLabel={EDITOR_EXPORT_ENGINE_LABELS[exportEngine]}
+        destinationName={overlayDestinationName}
         progressPct={overlayProgress}
         stage={overlayStage}
         canCancel={overlayCanCancel}

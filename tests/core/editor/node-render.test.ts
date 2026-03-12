@@ -79,6 +79,39 @@ test("exportEditorProjectWithSystemFfmpeg returns render details after a success
   assert.ok(result.ffmpegCommandPreview.includes("ffmpeg"));
 });
 
+test("exportEditorProjectWithSystemFfmpeg emits progress callbacks when rendering succeeds", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const { project, asset } = createRenderableProject();
+  const outputPath = path.join(tempDir, "exports", "render.mp4");
+  const percents: number[] = [];
+
+  await exportEditorProjectWithSystemFfmpeg({
+    project,
+    assets: [{ asset, absolutePath: "/media/clip.mp4" }],
+    resolution: "1080p",
+    outputPath,
+    overwrite: true,
+    onProgress: (progress) => {
+      percents.push(Math.round(progress.percent));
+    },
+    commandRunner: async () => {
+      await writeFile(outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+
+  assert.equal(percents[0], 0);
+  assert.equal(percents[percents.length - 1], 100);
+});
+
 test("exportEditorProjectWithSystemFfmpeg falls back to the bundled binary when ffmpeg is missing on PATH", async (t) => {
   const tempDir = await createTempDirectory();
   t.after(async () => {

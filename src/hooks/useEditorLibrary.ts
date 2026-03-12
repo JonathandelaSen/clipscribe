@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createDexieEditorRepository, groupEditorExportsByProjectId } from "@/lib/repositories/editor-repo";
-import { normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
+import { normalizeLegacyEditorExportRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import type { EditorAssetRecord, EditorExportRecord, EditorProjectRecord } from "@/lib/editor/types";
 
 const editorRepository = createDexieEditorRepository();
@@ -19,7 +19,7 @@ export function useEditorLibrary() {
       const allProjects = await editorRepository.listProjects();
       const allExports = await Promise.all(allProjects.map((project) => editorRepository.listProjectExports(project.id)));
       setProjects(allProjects.map((project) => normalizeLegacyEditorProjectRecord(project)));
-      setExports(allExports.flat());
+      setExports(allExports.flat().map((record) => normalizeLegacyEditorExportRecord(record)));
     } catch (err) {
       console.error("Failed to load editor library", err);
       setError(err instanceof Error ? err.message : "Failed to load editor library");
@@ -54,9 +54,10 @@ export function useEditorLibrary() {
 
   const upsertExport = useCallback(async (record: EditorExportRecord) => {
     await editorRepository.putExport(record);
+    const normalizedRecord = normalizeLegacyEditorExportRecord(record);
     setExports((prev) => {
-      const next = prev.filter((item) => item.id !== record.id);
-      next.push(record);
+      const next = prev.filter((item) => item.id !== normalizedRecord.id);
+      next.push(normalizedRecord);
       return next.sort((a, b) => b.createdAt - a.createdAt);
     });
   }, []);
@@ -108,7 +109,7 @@ export function useEditorProject(projectId: string | undefined) {
       ]);
       setProject(projectRecord ? normalizeLegacyEditorProjectRecord(projectRecord) : null);
       setAssets(projectAssets);
-      setExports(projectExports);
+      setExports(projectExports.map((record) => normalizeLegacyEditorExportRecord(record)));
     } catch (err) {
       console.error("Failed to load editor project", err);
       setError(err instanceof Error ? err.message : "Failed to load editor project");
@@ -144,9 +145,10 @@ export function useEditorProject(projectId: string | undefined) {
 
   const saveExport = useCallback(async (record: EditorExportRecord) => {
     await editorRepository.putExport(record);
+    const normalizedRecord = normalizeLegacyEditorExportRecord(record);
     setExports((prev) => {
-      const next = prev.filter((item) => item.id !== record.id);
-      next.push(record);
+      const next = prev.filter((item) => item.id !== normalizedRecord.id);
+      next.push(normalizedRecord);
       return next.sort((a, b) => b.createdAt - a.createdAt);
     });
   }, []);

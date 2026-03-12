@@ -6,9 +6,11 @@ import {
   normalizeExportTimelineProjectOptions,
   parseExportTimelineProjectArgs,
 } from "../src/lib/editor/workspace-cli";
-import { promptForExportResolution, promptForWorkspaceProjectPath, withInteractiveReadline } from "../src/lib/editor/node-interactive";
+import { createCliProgressBar } from "../src/lib/editor/cli-progress";
+import { promptForExportResolution, promptForWorkspaceProjectPath } from "../src/lib/editor/node-interactive";
 
 let wantsJson = false;
+let progressBar: ReturnType<typeof createCliProgressBar> | null = null;
 
 async function main() {
   const parsed = parseExportTimelineProjectArgs(process.argv.slice(2));
@@ -24,16 +26,19 @@ async function main() {
       throw new Error("--project is required when using --json.");
     }
 
-    await withInteractiveReadline(async (rl) => {
-      parsed.projectPath = await promptForWorkspaceProjectPath(rl, process.cwd());
-      if (!parsed.resolution) {
-        parsed.resolution = await promptForExportResolution(rl, "1080p");
-      }
-    });
+    parsed.projectPath = await promptForWorkspaceProjectPath(process.cwd());
+    if (!parsed.resolution) {
+      parsed.resolution = await promptForExportResolution("1080p");
+    }
   }
 
   const options = normalizeExportTimelineProjectOptions(parsed, process.cwd());
-  const result = await exportTimelineProjectWorkspace(options);
+  progressBar = wantsJson ? null : createCliProgressBar({ label: "Export" });
+  const result = await exportTimelineProjectWorkspace(options, {
+    onProgress: (update) => {
+      progressBar?.setPercent(update.percent, update.message);
+    },
+  });
 
   if (wantsJson) {
     console.log(JSON.stringify({ ok: true, ...result }, null, 2));
@@ -53,6 +58,7 @@ main().catch((error) => {
   if (wantsJson) {
     console.error(JSON.stringify({ ok: false, error: message }, null, 2));
   } else {
+    progressBar?.fail("Failed");
     console.error(message);
   }
   process.exitCode = 1;

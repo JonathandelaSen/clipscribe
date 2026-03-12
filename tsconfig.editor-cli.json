@@ -16,6 +16,7 @@
     "src/lib/creator/**/*.ts",
     "src/lib/editor/**/*.ts",
     "src/lib/history.ts",
+    "scripts/create-and-export-timeline-project.ts",
     "scripts/import-timeline-project.ts",
     "scripts/export-timeline-project.ts"
   ],

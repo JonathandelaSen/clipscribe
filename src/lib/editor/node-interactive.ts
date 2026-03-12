@@ -2,17 +2,15 @@ import { constants as fsConstants } from "node:fs";
 import type { Dirent } from "node:fs";
 import { access, readdir } from "node:fs/promises";
 import path from "node:path";
-import { stdin as input, stdout as output } from "node:process";
-import { emitKeypressEvents } from "node:readline";
-import { createInterface } from "node:readline/promises";
+
+import prompts, { type Choice } from "prompts";
 
 import type { EditorResolution } from "./types";
-import { EDITOR_PROJECT_WORKSPACE_FILENAME } from "./workspace";
 
-export type InteractiveReadline = ReturnType<typeof createInterface>;
+const EDITOR_PROJECT_WORKSPACE_FILENAME = "project.json";
 
 interface InteractiveMenuOption<T> {
-  label: string;
+  title: string;
   value: T;
   description?: string;
 }
@@ -50,6 +48,22 @@ function shouldHideEntry(entry: Dirent): boolean {
   return entry.name === "node_modules" || entry.name.startsWith(".");
 }
 
+function throwCanceled(): never {
+  throw new Error("Canceled by user.");
+}
+
+function getSelectInitialIndex<T>(options: readonly InteractiveMenuOption<T>[], fallback?: T): number | undefined {
+  if (fallback === undefined) return undefined;
+  const index = options.findIndex((option) => Object.is(option.value, fallback));
+  return index >= 0 ? index : undefined;
+}
+
+function createPromptOptions() {
+  return {
+    onCancel: () => throwCanceled(),
+  };
+}
+
 async function isReadableFile(filePath: string): Promise<boolean> {
   try {
     await access(filePath, fsConstants.R_OK);
@@ -59,126 +73,119 @@ async function isReadableFile(filePath: string): Promise<boolean> {
   }
 }
 
-async function askQuestion(rl: InteractiveReadline, prompt: string, fallback?: string): Promise<string> {
-  const suffix = fallback == null || fallback === "" ? "" : ` [${fallback}]`;
-  const answer = (await rl.question(`${prompt}${suffix}: `)).trim();
-  return answer || fallback || "";
+export async function promptTextValue(input: {
+  message: string;
+  initial?: string;
+  validate?: (value: string) => true | string;
+}): Promise<string> {
+  const result = await prompts(
+    {
+      type: "text",
+      name: "value",
+      message: input.message,
+      initial: input.initial,
+      validate: input.validate,
+    },
+    createPromptOptions()
+  );
+
+  return typeof result.value === "string" ? result.value : input.initial ?? "";
 }
 
-export async function askSelect<T>(
-  rl: InteractiveReadline,
-  prompt: string,
-  options: Array<InteractiveMenuOption<T>>,
-  fallback: T
-): Promise<T> {
-  const fallbackIndex = Math.max(0, options.findIndex((option) => option.value === fallback));
-  if (!input.isTTY || !output.isTTY) {
-    console.log(prompt);
-    options.forEach((option, index) => {
-      const description = option.description ? ` - ${option.description}` : "";
-      console.log(`  ${index + 1}. ${option.label}${description}`);
-    });
-    while (true) {
-      const answer = await askQuestion(rl, "Choose option number", String(fallbackIndex + 1));
-      const parsed = Number(answer);
-      if (Number.isInteger(parsed) && parsed >= 1 && parsed <= options.length) {
-        return options[parsed - 1].value;
-      }
-      console.log(`Choose a number between 1 and ${options.length}.`);
-    }
-  }
+export async function promptConfirmValue(input: {
+  message: string;
+  initial: boolean;
+}): Promise<boolean> {
+  const result = await prompts(
+    {
+      type: "confirm",
+      name: "value",
+      message: input.message,
+      initial: input.initial,
+    },
+    createPromptOptions()
+  );
 
-  return new Promise<T>((resolve, reject) => {
-    let selectedIndex = fallbackIndex;
-    let renderedLineCount = 0;
-    const ttyInput = input as typeof input & { isRaw?: boolean; setRawMode?: (value: boolean) => void };
-    const previousRawMode = Boolean(ttyInput.isRaw);
-
-    const render = () => {
-      const lines = [
-        prompt,
-        ...options.map((option, index) => {
-          const pointer = index === selectedIndex ? ">" : " ";
-          const description = option.description ? ` ${option.description}` : "";
-          return `${pointer} ${option.label}${description}`;
-        }),
-        "  Use arrow keys and Enter.",
-      ];
-
-      if (renderedLineCount > 0) {
-        output.write(`\x1b[${renderedLineCount}A`);
-        output.write("\x1b[J");
-      }
-
-      output.write(`${lines.join("\n")}\n`);
-      renderedLineCount = lines.length;
-    };
-
-    const finish = (nextValue: T) => {
-      input.off("keypress", onKeypress);
-      if (ttyInput.setRawMode) {
-        ttyInput.setRawMode(previousRawMode);
-      }
-      if (renderedLineCount > 0) {
-        output.write(`\x1b[${renderedLineCount}A`);
-        output.write("\x1b[J");
-      }
-      const selectedOption = options.find((option) => option.value === nextValue);
-      output.write(`${prompt}: ${selectedOption?.label ?? String(nextValue)}\n`);
-      resolve(nextValue);
-    };
-
-    const cancel = () => {
-      input.off("keypress", onKeypress);
-      if (ttyInput.setRawMode) {
-        ttyInput.setRawMode(previousRawMode);
-      }
-      if (renderedLineCount > 0) {
-        output.write(`\x1b[${renderedLineCount}A`);
-        output.write("\x1b[J");
-      }
-      reject(new Error("Canceled by user."));
-    };
-
-    const onKeypress = (_value: string, key: { name?: string; ctrl?: boolean }) => {
-      if (key.ctrl && key.name === "c") {
-        cancel();
-        return;
-      }
-      if (key.name === "up" || key.name === "k") {
-        selectedIndex = selectedIndex === 0 ? options.length - 1 : selectedIndex - 1;
-        render();
-        return;
-      }
-      if (key.name === "down" || key.name === "j") {
-        selectedIndex = selectedIndex === options.length - 1 ? 0 : selectedIndex + 1;
-        render();
-        return;
-      }
-      if (key.name === "return" || key.name === "enter") {
-        finish(options[selectedIndex].value);
-      }
-    };
-
-    emitKeypressEvents(input);
-    if (ttyInput.setRawMode) {
-      ttyInput.setRawMode(true);
-    }
-    input.on("keypress", onKeypress);
-    input.resume();
-    render();
-  });
+  return typeof result.value === "boolean" ? result.value : input.initial;
 }
 
-export async function withInteractiveReadline<T>(
-  callback: (rl: InteractiveReadline) => Promise<T>
-): Promise<T> {
-  const rl = createInterface({ input, output });
-  try {
-    return await callback(rl);
-  } finally {
-    rl.close();
+export async function promptSelectValue<T>(input: {
+  message: string;
+  choices: Array<InteractiveMenuOption<T>>;
+  initial?: T;
+}): Promise<T> {
+  const promptChoices: Choice[] = input.choices.map((choice) => ({
+    title: choice.title,
+    value: choice.value,
+    description: choice.description,
+  }));
+
+  const result = await prompts(
+    {
+      type: "select",
+      name: "value",
+      message: input.message,
+      choices: promptChoices,
+      initial: getSelectInitialIndex(input.choices, input.initial),
+    },
+    createPromptOptions()
+  );
+
+  if (!("value" in result)) {
+    throwCanceled();
   }
+  return result.value as T;
+}
+
+export function validatePromptNumberValue(
+  value: number | "" | null | undefined,
+  input: {
+    initial: number;
+    min?: number;
+    max?: number;
+    integer?: boolean;
+  }
+): true | string {
+  // prompts validates the placeholder as "" until the user types, even when Enter will later
+  // resolve to the numeric initial value.
+  if (value === "" || value == null) {
+    return true;
+  }
+  if (!Number.isFinite(value)) return "Enter a valid number.";
+  if (typeof input.min === "number" && value < input.min) {
+    return `Enter a number greater than or equal to ${input.min}.`;
+  }
+  if (typeof input.max === "number" && value > input.max) {
+    return `Enter a number less than or equal to ${input.max}.`;
+  }
+  if (input.integer && !Number.isInteger(value)) {
+    return "Enter a whole number.";
+  }
+  return true;
+}
+
+export async function promptNumberValue(input: {
+  message: string;
+  initial: number;
+  min?: number;
+  max?: number;
+  integer?: boolean;
+}): Promise<number> {
+  const result = await prompts(
+    {
+      type: "number",
+      name: "value",
+      message: input.message,
+      initial: input.initial,
+      min: input.min,
+      max: input.max,
+      float: !input.integer,
+      validate: (value) => validatePromptNumberValue(value, input),
+    },
+    createPromptOptions()
+  );
+
+  return typeof result.value === "number" ? result.value : input.initial;
 }
 
 export async function listInteractivePathPickerOptions(
@@ -262,10 +269,7 @@ export async function listInteractivePathPickerOptions(
   return pickerOptions;
 }
 
-export async function browseForPath(
-  rl: InteractiveReadline,
-  options: PathPickerOptions
-): Promise<string> {
+export async function browseForPath(options: PathPickerOptions): Promise<string> {
   let currentDirectory = path.resolve(options.startDirectory);
 
   while (true) {
@@ -278,16 +282,15 @@ export async function browseForPath(
       throw new Error(`No selectable files or folders were found in ${currentDirectory}.`);
     }
 
-    const selected = await askSelect(
-      rl,
-      `${options.prompt}\nCurrent folder: ${currentDirectory}`,
-      pickerOptions.map((option) => ({
-        label: option.label,
+    const selected = await promptSelectValue<PathPickerAction>({
+      message: `${options.prompt}\nCurrent folder: ${currentDirectory}`,
+      choices: pickerOptions.map((option) => ({
+        title: option.label,
         description: option.description,
         value: option.action,
       })),
-      pickerOptions[0].action
-    );
+      initial: pickerOptions[0]?.action,
+    });
 
     if (selected.type === "select") {
       return selected.path;
@@ -297,11 +300,8 @@ export async function browseForPath(
   }
 }
 
-export async function promptForBundlePath(
-  rl: InteractiveReadline,
-  startDirectory = process.cwd()
-): Promise<string> {
-  return browseForPath(rl, {
+export async function promptForBundlePath(startDirectory = process.cwd()): Promise<string> {
+  return browseForPath({
     prompt: "Choose a .clipscribe-project bundle to import",
     currentDirectoryLabel: "Select this folder",
     currentDirectorySelectLabel: "Use this bundle folder",
@@ -314,11 +314,8 @@ export async function promptForBundlePath(
   });
 }
 
-export async function promptForWorkspaceProjectPath(
-  rl: InteractiveReadline,
-  startDirectory = process.cwd()
-): Promise<string> {
-  return browseForPath(rl, {
+export async function promptForWorkspaceProjectPath(startDirectory = process.cwd()): Promise<string> {
+  return browseForPath({
     prompt: "Choose a workspace folder or project.json to export",
     currentDirectoryLabel: "Select this workspace folder",
     currentDirectorySelectLabel: "Use this workspace folder",
@@ -333,18 +330,14 @@ export async function promptForWorkspaceProjectPath(
   });
 }
 
-export async function promptForExportResolution(
-  rl: InteractiveReadline,
-  fallback: EditorResolution
-): Promise<EditorResolution> {
-  return askSelect(
-    rl,
-    "Export resolution",
-    [
-      { label: "720p", value: "720p", description: "Faster preview export" },
-      { label: "1080p", value: "1080p", description: "Best default balance" },
-      { label: "4K", value: "4K", description: "Largest output size" },
+export async function promptForExportResolution(fallback: EditorResolution): Promise<EditorResolution> {
+  return promptSelectValue<EditorResolution>({
+    message: "Export resolution",
+    choices: [
+      { title: "720p", value: "720p", description: "Faster preview export" },
+      { title: "1080p", value: "1080p", description: "Best default balance" },
+      { title: "4K", value: "4K", description: "Largest output size" },
     ],
-    fallback
-  );
+    initial: fallback,
+  });
 }

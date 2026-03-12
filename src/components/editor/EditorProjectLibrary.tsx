@@ -8,6 +8,7 @@ import { toast } from "sonner";
 
 import { useEditorLibrary } from "@/hooks/useEditorLibrary";
 import type { EditorProjectBundleBrowserFile, LoadedEditorProjectBundle } from "@/lib/editor/bundle";
+import { EDITOR_EXPORT_ENGINE_LABELS } from "@/lib/editor/export-capabilities";
 import { loadEditorProjectBundleFromFiles, materializeEditorProjectBundle } from "@/lib/editor/bundle";
 import { readMediaMetadata } from "@/lib/editor/media";
 import { createEmptyEditorProject } from "@/lib/editor/storage";
@@ -239,7 +240,7 @@ export function EditorProjectLibrary() {
                             </div>
                             {project.latestExport ? (
                               <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/8 px-4 py-3 text-sm text-emerald-50/85">
-                                Last export: {project.latestExport.resolution} · {project.latestExport.aspectRatio} · {formatRelativeDate(project.latestExport.createdAt)}
+                                Last export: {project.latestExport.resolution} · {project.latestExport.aspectRatio} · {EDITOR_EXPORT_ENGINE_LABELS[project.latestExport.engine]} · {formatRelativeDate(project.latestExport.createdAt)}
                               </div>
                             ) : (
                               <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/45">

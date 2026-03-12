@@ -5,6 +5,7 @@ export type EditorAspectRatio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EditorResolution = "720p" | "1080p" | "4K";
 export type EditorProjectStatus = "draft" | "exporting" | "error";
 export type EditorExportStatus = "completed" | "failed";
+export type EditorExportEngine = "browser" | "system";
 export type EditorAssetSource = "history" | "upload";
 export type EditorAssetKind = "video" | "audio";
 
@@ -99,6 +100,7 @@ export interface EditorExportSummary {
   filename: string;
   aspectRatio: EditorAspectRatio;
   resolution: EditorResolution;
+  engine: EditorExportEngine;
   status: EditorExportStatus;
 }
 
@@ -142,6 +144,7 @@ export interface EditorExportRecord {
   projectId: string;
   createdAt: number;
   status: EditorExportStatus;
+  engine: EditorExportEngine;
   filename: string;
   mimeType: string;
   sizeBytes: number;

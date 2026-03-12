@@ -8,6 +8,7 @@ import type {
   EditorAssetKind,
   EditorAssetRecord,
   EditorCanvasState,
+  EditorExportEngine,
   EditorExportRecord,
   EditorProjectRecord,
   EditorSubtitlePreset,
@@ -34,6 +35,14 @@ type LegacyEditorProjectTimelineState = Partial<EditorProjectRecord["timeline"]>
 
 type LegacyEditorProjectRecord = Omit<EditorProjectRecord, "timeline"> & {
   timeline: LegacyEditorProjectTimelineState;
+};
+
+type LegacyEditorExportSummary = EditorProjectRecord["latestExport"] & {
+  engine?: EditorExportEngine;
+};
+
+type LegacyEditorExportRecord = Omit<EditorExportRecord, "engine"> & {
+  engine?: EditorExportEngine;
 };
 
 export function getDefaultEditorCanvasState(): EditorCanvasState {
@@ -157,6 +166,12 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
 
   return {
     ...project,
+    latestExport: project.latestExport
+      ? {
+          ...(project.latestExport as LegacyEditorExportSummary),
+          engine: project.latestExport.engine === "system" ? "system" : "browser",
+        }
+      : undefined,
     timeline: {
       playheadSeconds: timeline.playheadSeconds ?? 0,
       zoomLevel: timeline.zoomLevel ?? 1,
@@ -169,6 +184,15 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
         : [],
       audioItems,
     },
+  };
+}
+
+export function normalizeLegacyEditorExportRecord(
+  record: EditorExportRecord | LegacyEditorExportRecord
+): EditorExportRecord {
+  return {
+    ...record,
+    engine: record.engine === "system" ? "system" : "browser",
   };
 }
 
@@ -288,6 +312,7 @@ export function getEditorProjectPersistenceFingerprint(
 export function buildEditorExportRecord(input: {
   id?: string;
   projectId: string;
+  engine: EditorExportEngine;
   filename: string;
   mimeType: string;
   sizeBytes: number;
@@ -308,6 +333,7 @@ export function buildEditorExportRecord(input: {
     projectId: input.projectId,
     createdAt: input.createdAt ?? Date.now(),
     status: input.status ?? (input.error ? "failed" : "completed"),
+    engine: input.engine,
     filename: input.filename,
     mimeType: input.mimeType,
     sizeBytes: input.sizeBytes,
