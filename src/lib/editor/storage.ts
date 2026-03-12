@@ -11,6 +11,7 @@ import type {
   EditorExportRecord,
   EditorProjectRecord,
   EditorSubtitlePreset,
+  TimelineClipGroup,
   TimelineSelection,
   TimelineAudioItem,
   TimelineVideoClipActions,
@@ -58,6 +59,17 @@ export function normalizeTimelineVideoClip(
       ...DEFAULT_TIMELINE_VIDEO_CLIP_ACTIONS,
       ...(clip.actions ?? {}),
     },
+  };
+}
+
+export function normalizeTimelineClipGroup(
+  group: TimelineClipGroup | (Partial<TimelineClipGroup> & Pick<TimelineClipGroup, "id">)
+): TimelineClipGroup {
+  return {
+    id: group.id,
+    kind: "joined",
+    clipIds: Array.isArray(group.clipIds) ? group.clipIds.filter((clipId) => typeof clipId === "string") : [],
+    label: typeof group.label === "string" ? group.label : "",
   };
 }
 
@@ -116,6 +128,7 @@ export function createEmptyEditorProject(input?: {
       zoomLevel: 1,
       selectedItem: undefined,
       videoClips: [],
+      videoClipGroups: [],
       audioItems: [],
     },
     subtitles: {
@@ -150,6 +163,9 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
       selectedItem,
       videoClips: Array.isArray(timeline.videoClips)
         ? timeline.videoClips.map((clip) => normalizeTimelineVideoClip(clip))
+        : [],
+      videoClipGroups: Array.isArray(timeline.videoClipGroups)
+        ? timeline.videoClipGroups.map((group) => normalizeTimelineClipGroup(group))
         : [],
       audioItems,
     },

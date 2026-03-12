@@ -14,34 +14,71 @@ import {
 } from "@/components/ui/dialog";
 
 export type EditorExportPhase = "preparing" | "rendering" | "finalizing" | "complete";
+export type EditorProgressMode = "export" | "bake";
 
 const PHASE_COPY: Record<
-  EditorExportPhase,
-  { badge: string; title: string; description: string; helper: string }
+  EditorProgressMode,
+  Record<EditorExportPhase, { badge: string; title: string; description: string; helper: string; label: string }>
 > = {
-  preparing: {
-    badge: "Preparing",
-    title: "Preparing assets and subtitles",
-    description: "Setting up the browser render workspace, validating media, and staging caption frames.",
-    helper: "Keep this tab open while Timeline Studio assembles the export pipeline.",
+  export: {
+    preparing: {
+      badge: "Preparing",
+      title: "Preparing assets and subtitles",
+      description: "Setting up the browser render workspace, validating media, and staging caption frames.",
+      helper: "Keep this tab open while Timeline Studio assembles the export pipeline.",
+      label: "Timeline Export",
+    },
+    rendering: {
+      badge: "Rendering",
+      title: "Rendering your timeline",
+      description: "FFmpeg.wasm is encoding the current edit directly in this browser session.",
+      helper: "Editing is locked until the MP4 render finishes.",
+      label: "Timeline Export",
+    },
+    finalizing: {
+      badge: "Finalizing",
+      title: "Finalizing the MP4",
+      description: "The video is being packaged for download and the export audit trail is being wrapped up.",
+      helper: "The file is almost ready. Avoid refreshing or closing this tab now.",
+      label: "Timeline Export",
+    },
+    complete: {
+      badge: "Complete",
+      title: "Export complete",
+      description: "Handing off the finished file and saving the final export metadata before control returns.",
+      helper: "One more moment while the editor closes out the export cleanly.",
+      label: "Timeline Export",
+    },
   },
-  rendering: {
-    badge: "Rendering",
-    title: "Rendering your timeline",
-    description: "FFmpeg.wasm is encoding the current edit directly in this browser session.",
-    helper: "Editing is locked until the MP4 render finishes.",
-  },
-  finalizing: {
-    badge: "Finalizing",
-    title: "Finalizing the MP4",
-    description: "The video is being packaged for download and the export audit trail is being wrapped up.",
-    helper: "The file is almost ready. Avoid refreshing or closing this tab now.",
-  },
-  complete: {
-    badge: "Complete",
-    title: "Export complete",
-    description: "Handing off the finished file and saving the final export metadata before control returns.",
-    helper: "One more moment while the editor closes out the export cleanly.",
+  bake: {
+    preparing: {
+      badge: "Preparing",
+      title: "Preparing the bake pass",
+      description: "Staging the joined clips and building a temporary render timeline for the baked output.",
+      helper: "Keep this tab open while FFmpeg.wasm prepares the bake workspace.",
+      label: "Bake Clip",
+    },
+    rendering: {
+      badge: "Rendering",
+      title: "Baking the joined clip",
+      description: "FFmpeg.wasm is rendering the selected joined block into one standalone clip.",
+      helper: "Timeline interactions are paused until the baked clip is ready.",
+      label: "Bake Clip",
+    },
+    finalizing: {
+      badge: "Finalizing",
+      title: "Packaging the baked video",
+      description: "The baked MP4 is being validated and prepared for insertion back into the timeline.",
+      helper: "The rendered clip is almost ready. Avoid refreshing or closing this tab now.",
+      label: "Bake Clip",
+    },
+    complete: {
+      badge: "Complete",
+      title: "Bake complete",
+      description: "Wrapping up the baked clip so Timeline Studio can replace the joined block cleanly.",
+      helper: "One more moment while the baked clip is inserted into your project.",
+      label: "Bake Clip",
+    },
   },
 };
 
@@ -51,19 +88,21 @@ function clampProgress(progressPct: number) {
 
 export function ExportProgressOverlay({
   open,
+  mode,
   projectName,
   resolution,
   progressPct,
   phase,
 }: {
   open: boolean;
+  mode: EditorProgressMode;
   projectName: string;
   resolution: EditorResolution;
   progressPct: number;
   phase: EditorExportPhase;
 }) {
   const safeProgress = clampProgress(progressPct);
-  const copy = PHASE_COPY[phase];
+  const copy = PHASE_COPY[mode][phase];
 
   return (
     <Dialog open={open}>
@@ -79,7 +118,7 @@ export function ExportProgressOverlay({
           <div className="flex items-start justify-between gap-4">
             <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-cyan-100">
               <Film className="h-3.5 w-3.5" />
-              Timeline Export
+              {copy.label}
             </div>
             <div
               aria-live="polite"

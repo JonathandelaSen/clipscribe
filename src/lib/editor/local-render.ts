@@ -1,10 +1,21 @@
-import { getFFmpeg } from "@/lib/ffmpeg";
-import { buildProjectCaptionTimeline } from "@/lib/editor/core/captions";
-import { getEditorOutputDimensions } from "@/lib/editor/core/aspect-ratio";
-import { buildEditorExportPlan } from "@/lib/editor/core/export-plan";
-import { renderTimelineSubtitlesToPngs } from "@/lib/editor/subtitle-canvas";
-import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "@/lib/editor/types";
-import type { HistoryItem } from "@/lib/history";
+import { getFFmpeg, resetFFmpeg } from "../ffmpeg";
+import { getFfmpegExecTimeoutMs } from "../ffmpeg-config";
+import { buildProjectCaptionTimeline } from "./core/captions";
+import { getEditorOutputDimensions } from "./core/aspect-ratio";
+import { buildEditorExportPlan } from "./core/export-plan";
+import { isEditorFfmpegExecDiagnosticMessage, runEditorFfmpegExec } from "./local-render-runtime";
+import { renderTimelineSubtitlesToPngs } from "./subtitle-canvas";
+import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "./types";
+import type { HistoryItem } from "../history";
+
+const LOCAL_EDITOR_EXPORT_PROGRESS = {
+  init: 2,
+  mounted: 8,
+  preRender: 15,
+  renderMax: 92,
+  readOutput: 95,
+  packaged: 100,
+} as const;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -59,7 +70,15 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
   }
 
   const fileInputRefs: Array<{ assetId: string; inputIndex: number; path: string; file: File }> = [];
+  const ffmpegLogTail: string[] = [];
+  const renderClipCount = input.project.timeline.videoClips.length;
+
   let lastProgressPct = 0;
+  let renderDurationSeconds = 0;
+  let timeoutMs = 0;
+  let progressTimeBaselineSeconds: number | null = null;
+  let logTimeBaselineSeconds: number | null = null;
+
   const emitProgress = (pct: number) => {
     const next = Math.round(clampNumber(pct, 0, 100));
     if (next <= lastProgressPct) return;
@@ -67,27 +86,104 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     input.onProgress?.(next);
   };
 
-  const progressHandler = ({ progress }: { progress: number }) => {
+  const emitRenderProgress = (renderPct: number) => {
+    const safeRenderPct = clampNumber(renderPct, 0, 100);
+    const span = LOCAL_EDITOR_EXPORT_PROGRESS.renderMax - LOCAL_EDITOR_EXPORT_PROGRESS.preRender;
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender + (safeRenderPct / 100) * span);
+  };
+
+  const resetProgressTimeBaselines = () => {
+    progressTimeBaselineSeconds = null;
+    logTimeBaselineSeconds = null;
+  };
+
+  const normalizeProcessedSeconds = (seconds: number, source: "progress" | "log"): number => {
+    if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+    const baseline = source === "progress" ? progressTimeBaselineSeconds : logTimeBaselineSeconds;
+    if (baseline == null || seconds + 0.25 < baseline) {
+      if (source === "progress") {
+        progressTimeBaselineSeconds = seconds;
+      } else {
+        logTimeBaselineSeconds = seconds;
+      }
+      return 0;
+    }
+    return Math.max(0, seconds - baseline);
+  };
+
+  const progressHandler = ({ progress, time }: { progress: number; time: number }) => {
+    if (renderDurationSeconds > 0 && Number.isFinite(time) && time > 0) {
+      const processedSeconds = normalizeProcessedSeconds(time / 1_000_000, "progress");
+      if (processedSeconds > 0) {
+        emitRenderProgress((processedSeconds / renderDurationSeconds) * 100);
+        return;
+      }
+    }
+
     if (Number.isFinite(progress) && progress > 0 && progress <= 1.05) {
-      emitProgress(progress * 92);
+      emitRenderProgress(progress * 100);
     }
   };
   ff.on("progress", progressHandler);
 
-  const ffmpegLogTail: string[] = [];
   const logHandler = ({ message }: { message: string }) => {
     const text = String(message ?? "").trim();
     if (text) {
       ffmpegLogTail.push(text);
       if (ffmpegLogTail.length > 30) ffmpegLogTail.shift();
     }
-    const seconds = parseFfmpegLogProgressSeconds(text);
-    if (!seconds || !Number.isFinite(seconds)) return;
+    if (renderDurationSeconds <= 0) return;
+
+    const rawSeconds = parseFfmpegLogProgressSeconds(text);
+    if (rawSeconds == null || rawSeconds <= 0) return;
+    const processedSeconds = normalizeProcessedSeconds(rawSeconds, "log");
+    if (processedSeconds <= 0) return;
+    emitRenderProgress((processedSeconds / renderDurationSeconds) * 100);
   };
   ff.on("log", logHandler);
 
+  const runFfmpegExecWithFallbackProgress = async (args: string[]) => {
+    const startPct = Math.max(lastProgressPct, LOCAL_EDITOR_EXPORT_PROGRESS.preRender);
+    const startedAt = Date.now();
+    const quickRampMs = Math.max(4_000, renderDurationSeconds * 2_500);
+    const tailTauMs = Math.max(12_000, renderDurationSeconds * 5_000);
+    const quickTarget = 82;
+    const fallbackCeiling = LOCAL_EDITOR_EXPORT_PROGRESS.renderMax - 1;
+
+    resetProgressTimeBaselines();
+
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - startedAt;
+      if (elapsed <= quickRampMs) {
+        const linear = clampNumber(elapsed / quickRampMs, 0, 1);
+        const eased = 1 - Math.pow(1 - linear, 3);
+        emitProgress(startPct + (quickTarget - startPct) * eased);
+        return;
+      }
+
+      const tailElapsed = elapsed - quickRampMs;
+      const tailEased = 1 - Math.exp(-tailElapsed / tailTauMs);
+      emitProgress(quickTarget + (fallbackCeiling - quickTarget) * tailEased);
+    }, 250);
+
+    try {
+      await runEditorFfmpegExec({
+        ff,
+        args,
+        timeoutMs,
+        resolution: input.resolution,
+        clipCount: renderClipCount,
+        durationSeconds: renderDurationSeconds,
+        logTail: ffmpegLogTail,
+        resetFfmpeg: resetFFmpeg,
+      });
+    } finally {
+      clearInterval(timer);
+    }
+  };
+
   try {
-    emitProgress(2);
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.init);
     await ff.createDir(mountRoot);
     for (const [index, resolved] of availableAssets.entries()) {
       const assetDir = `${mountRoot}/${resolved.asset.id}`;
@@ -100,7 +196,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         file: resolved.file!,
       });
     }
-    emitProgress(8);
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.mounted);
 
     const exportPlan = buildEditorExportPlan({
       project: input.project,
@@ -118,6 +214,8 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       }),
       resolution: input.resolution,
     });
+    renderDurationSeconds = Math.max(exportPlan.durationSeconds, 0.5);
+    timeoutMs = getFfmpegExecTimeoutMs(input.resolution, exportPlan.durationSeconds);
 
     const timelineCaptions = buildProjectCaptionTimeline({
       project: input.project,
@@ -134,7 +232,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     for (const frame of subtitleFrames) {
       await ff.writeFile(frame.vfsPath, frame.pngBytes);
     }
-    emitProgress(15);
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender);
 
     const extraInputs = subtitleFrames.flatMap((frame) => ["-loop", "1", "-i", frame.vfsPath]);
     let finalVideoLabel = exportPlan.videoTrackLabel;
@@ -177,8 +275,8 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       outputPath,
     ];
 
-    await ff.exec(args);
-    emitProgress(95);
+    await runFfmpegExecWithFallbackProgress(args);
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.readOutput);
 
     const output = await ff.readFile(outputPath);
     if (typeof output === "string") {
@@ -195,7 +293,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       `${input.project.name.replace(/\.[^/.]+$/, "")}__${input.project.aspectRatio.replace(":", "x")}__${input.resolution}.mp4`
     );
     const file = new File([arrayBuffer], filename, { type: "video/mp4" });
-    emitProgress(100);
+    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.packaged);
 
     return {
       file,
@@ -218,6 +316,10 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     };
   } catch (error) {
     const rawMessage = error instanceof Error ? error.message : String(error);
+    if (isEditorFfmpegExecDiagnosticMessage(rawMessage)) {
+      throw error instanceof Error ? error : new Error(rawMessage);
+    }
+
     const logTail = ffmpegLogTail.slice(-8).join("\n");
     throw new Error(logTail ? `${rawMessage}\nffmpeg-log-tail:\n${logTail}` : rawMessage);
   } finally {

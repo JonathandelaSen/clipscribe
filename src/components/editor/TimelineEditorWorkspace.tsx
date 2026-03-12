@@ -55,34 +55,47 @@ import {
   appendTimelineAudioItem,
   clampAudioItemToAsset,
   clampVideoClipToAsset,
+  canJoinTimelineClips,
+  createJoinedTimelineClipGroup,
   createClonedTimelineAudioItem,
   createClonedTimelineClip,
+  duplicateTimelineClipGroup,
   ensureProjectSelection,
+  findTimelineClipGroup,
   getVideoClipMediaTime,
   getProjectDuration,
   getSelectionForLaneIndex,
   getTimelineAudioPlacements,
   getTimelineClipPlacements,
+  getTimelineSelectionForVideoBlock,
+  getTimelineVideoBlockPlacements,
   insertTimelineAudioItemAfter,
   insertTimelineClipAfter,
   removeTimelineAudioItem,
   removeTimelineClip,
-  replaceTimelineClipsWithMergedClip,
-  reorderTimelineClip,
+  removeTimelineClipGroup,
+  reorderTimelineVideoBlock,
   replaceTimelineAudioItem,
   replaceTimelineClip,
+  replaceTimelineClipGroupWithClip,
   resetTimelineAudioItemTrack,
   resetTimelineAudioItemTrim,
   resetTimelineVideoClipAudio,
   resetTimelineVideoClipFrame,
   resetTimelineVideoClipTrim,
   splitTimelineClip,
+  unjoinTimelineClipGroup,
+  type TimelineVideoBlockPlacement,
 } from "@/lib/editor/core/timeline";
+import { prepareTimelineClipBake } from "@/lib/editor/core/bake";
 import { localEditorExportService } from "@/lib/editor/export-service";
+import {
+  buildReversedClipPreviewCacheKey,
+  renderReversedClipPreview,
+} from "@/lib/editor/preview-proxy";
 import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
-  createEmptyEditorProject,
   createDefaultAudioTrack,
   createDefaultVideoClip,
   createEditorAssetRecord,
@@ -98,6 +111,7 @@ import type {
   EditorResolution,
   ResolvedEditorAsset,
   TimelineAudioItem,
+  TimelineClipGroup,
   TimelineSelection,
   TimelineVideoClip,
 } from "@/lib/editor/types";
@@ -136,7 +150,7 @@ const EDITOR_TOOLBAR_BUTTON_CLASS =
   "h-8 rounded-[0.85rem] border border-white/8 bg-white/[0.035] px-3 text-xs text-white/72 hover:bg-white/[0.08] hover:text-white";
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
 
-type InspectorVideoTab = "edit" | "transform" | "combine";
+type InspectorVideoTab = "edit" | "transform" | "join";
 
 type PreviewMode =
   | {
@@ -159,12 +173,30 @@ type TimelineClipboardItem =
       item: TimelineVideoClip;
     }
   | {
+      kind: "video-group";
+      item: TimelineClipGroup;
+      clips: TimelineVideoClip[];
+    }
+  | {
       kind: "audio";
       item: TimelineAudioItem;
     };
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function omitReversePreviewCacheKeys(cache: Record<string, File>, keys: Set<string>) {
+  let removed = false;
+  const nextCache: Record<string, File> = {};
+  for (const [key, file] of Object.entries(cache)) {
+    if (keys.has(key)) {
+      removed = true;
+      continue;
+    }
+    nextCache[key] = file;
+  }
+  return removed ? nextCache : cache;
 }
 
 function isShortcutTargetEditable(target: EventTarget | null): boolean {
@@ -356,9 +388,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const isTimelinePreviewRef = useRef(false);
   const projectDurationRef = useRef(0);
   const clipboardRef = useRef<TimelineClipboardItem | null>(null);
-  const dragClipIdRef = useRef<string | null>(null);
+  const dragVideoBlockRef = useRef<Pick<TimelineVideoBlockPlacement, "id" | "kind"> | null>(null);
   const dragAssetIdRef = useRef<string | null>(null);
   const dragAssetKindRef = useRef<EditorAssetRecord["kind"] | null>(null);
+  const reversePreviewKeysByClipIdRef = useRef(new Map<string, Set<string>>());
+  const reversePreviewInflightRef = useRef(new Map<string, Promise<void>>());
+  const reversePreviewTokensRef = useRef(new Map<string, number>());
+  const reversePreviewSessionRef = useRef(0);
 
   const {
     project: loadedProject,
@@ -382,17 +418,22 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
   const [isExporting, setIsExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
+  const [bakeProgress, setBakeProgress] = useState(0);
+  const [bakeProjectName, setBakeProjectName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>({ kind: "timeline" });
   const [inspectorVideoTab, setInspectorVideoTab] = useState<InspectorVideoTab>("edit");
   const [selectedVideoClipIds, setSelectedVideoClipIds] = useState<string[]>([]);
-  const [isMergingClips, setIsMergingClips] = useState(false);
-  const isReversePreviewLoading = false;
-  const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
+  const [isBakingClip, setIsBakingClip] = useState(false);
+  const [reversePreviewCache, setReversePreviewCache] = useState<Record<string, File>>({});
+  const [reversePreviewLoadingKeys, setReversePreviewLoadingKeys] = useState<string[]>([]);
+  const [reversePreviewFailedKeys, setReversePreviewFailedKeys] = useState<string[]>([]);
+  const [draggingVideoBlockId, setDraggingVideoBlockId] = useState<string | null>(null);
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null);
   const [draggingAssetKind, setDraggingAssetKind] = useState<EditorAssetRecord["kind"] | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [focusedJoinedClipId, setFocusedJoinedClipId] = useState<string | null>(null);
   const [panelVisibility, setPanelVisibility] = useState<PanelVisibilityState>({
     left: true,
     center: true,
@@ -402,6 +443,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     leftPct: 24,
     rightPct: 24,
   });
+  const isRenderBusy = isExporting || isBakingClip;
 
   useEffect(() => {
     if (!loadedProject) return;
@@ -456,6 +498,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [assets, resolveHistoryMediaFile]);
 
   useEffect(() => {
+    reversePreviewSessionRef.current += 1;
+    reversePreviewKeysByClipIdRef.current.clear();
+    reversePreviewInflightRef.current.clear();
+    reversePreviewTokensRef.current.clear();
+    setReversePreviewCache({});
+    setReversePreviewLoadingKeys([]);
+    setReversePreviewFailedKeys([]);
+  }, [projectId]);
+
+  useEffect(() => {
     if (!project) return;
     const snapshot = JSON.stringify({
       project,
@@ -492,6 +544,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     () => (project ? getTimelineClipPlacements(project.timeline.videoClips) : []),
     [project]
   );
+  const videoClipGroups = useMemo(
+    () => project?.timeline.videoClipGroups ?? [],
+    [project]
+  );
+  const videoBlockPlacements = useMemo(
+    () => (project ? getTimelineVideoBlockPlacements(project.timeline.videoClips, project.timeline.videoClipGroups) : []),
+    [project]
+  );
   const audioPlacements = useMemo(
     () => (project ? getTimelineAudioPlacements(project.timeline.audioItems) : []),
     [project]
@@ -505,6 +565,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : undefined,
     [project, selectedItem]
   );
+  const selectedVideoGroup = useMemo(
+    () =>
+      selectedItem?.kind === "video-group"
+        ? findTimelineClipGroup(videoClipGroups, selectedItem.id)
+        : undefined,
+    [selectedItem, videoClipGroups]
+  );
   const selectedAudioItem = useMemo(
     () =>
       selectedItem?.kind === "audio"
@@ -512,9 +579,26 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : undefined,
     [project, selectedItem]
   );
-  const selectedClipAsset = useMemo(
-    () => (selectedClip ? assetMap.get(selectedClip.assetId) : undefined),
-    [assetMap, selectedClip]
+  const selectedGroupClipPlacements = useMemo(
+    () =>
+      selectedVideoGroup
+        ? clipPlacements.filter((placement) => selectedVideoGroup.clipIds.includes(placement.clip.id))
+        : [],
+    [clipPlacements, selectedVideoGroup]
+  );
+  const focusedJoinedClip = useMemo(() => {
+    if (!selectedVideoGroup || !project) return undefined;
+    const fallbackClipId = selectedVideoGroup.clipIds[0];
+    const focusedClipId =
+      focusedJoinedClipId && selectedVideoGroup.clipIds.includes(focusedJoinedClipId)
+        ? focusedJoinedClipId
+        : fallbackClipId;
+    return project.timeline.videoClips.find((clip) => clip.id === focusedClipId);
+  }, [focusedJoinedClipId, project, selectedVideoGroup]);
+  const inspectorClip = selectedClip ?? focusedJoinedClip;
+  const inspectorClipAsset = useMemo(
+    () => (inspectorClip ? assetMap.get(inspectorClip.assetId) : undefined),
+    [assetMap, inspectorClip]
   );
   const selectedAudioAsset = useMemo(
     () => (selectedAudioItem ? assetMap.get(selectedAudioItem.assetId) : undefined),
@@ -573,6 +657,35 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     : undefined;
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const activeReversePreviewRequest = useMemo(() => {
+    if (!isTimelinePreview || !activePlacement?.clip.actions.reverse || !activeResolvedAsset?.file) {
+      return null;
+    }
+
+    return {
+      key: buildReversedClipPreviewCacheKey({
+        clip: activePlacement.clip,
+        file: activeResolvedAsset.file,
+      }),
+      clipId: activePlacement.clip.id,
+      clip: activePlacement.clip,
+      file: activeResolvedAsset.file,
+      hasAudio: Boolean(activeResolvedAsset.asset.hasAudio),
+    };
+  }, [activePlacement, activeResolvedAsset, isTimelinePreview]);
+  const activeReversePreviewFile =
+    activeReversePreviewRequest != null
+      ? reversePreviewCache[activeReversePreviewRequest.key] ?? null
+      : null;
+  const activeReversePreviewUrl = useObjectUrl(activeReversePreviewFile);
+  const activeReversePreviewFailed =
+    activeReversePreviewRequest != null &&
+    reversePreviewFailedKeys.includes(activeReversePreviewRequest.key);
+  const isReversePreviewLoading =
+    activeReversePreviewRequest != null &&
+    reversePreviewLoadingKeys.includes(activeReversePreviewRequest.key);
+  const isUsingActiveReversePreview =
+    activeReversePreviewRequest != null && activeReversePreviewUrl != null;
   const selectedVideoClipSet = useMemo(() => new Set(selectedVideoClipIds), [selectedVideoClipIds]);
   const selectedVideoPlacements = useMemo(
     () =>
@@ -581,10 +694,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         .sort((left, right) => left.index - right.index),
     [clipPlacements, selectedVideoClipSet]
   );
-  const canMergeSelectedVideoClips =
-    selectedVideoPlacements.length === 2 &&
-    selectedVideoPlacements[1].index === selectedVideoPlacements[0].index + 1;
-  const effectiveTimelineVideoUrl = previewVideoUrl;
+  const canJoinSelectedVideoClips = useMemo(
+    () => (project ? canJoinTimelineClips(project.timeline.videoClips, project.timeline.videoClipGroups, selectedVideoClipIds) : false),
+    [project, selectedVideoClipIds]
+  );
+  const effectiveTimelineVideoUrl =
+    isTimelinePreview && activePlacement?.clip.actions.reverse
+      ? activeReversePreviewFailed
+        ? previewVideoUrl
+        : activeReversePreviewUrl
+      : previewVideoUrl;
   const timelineZoomLevel = Math.max(1, project?.timeline.zoomLevel ?? 1);
   const maxVisibleDuration = Math.max(projectDuration, 1);
   const minVisibleDuration = Math.min(maxVisibleDuration, Math.max(3, maxVisibleDuration * 0.15));
@@ -616,20 +735,20 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }
     return ticks;
   }, [timelineMinorTickStep, timelineTicks, visibleEnd, visibleStart]);
-  const visibleClipPlacements = useMemo(() => {
-    return clipPlacements.flatMap((placement) => {
-      const overlapStart = Math.max(placement.startSeconds, visibleStart);
-      const overlapEnd = Math.min(placement.endSeconds, visibleEnd);
+  const visibleVideoBlocks = useMemo(() => {
+    return videoBlockPlacements.flatMap((block) => {
+      const overlapStart = Math.max(block.startSeconds, visibleStart);
+      const overlapEnd = Math.min(block.endSeconds, visibleEnd);
       if (overlapEnd <= overlapStart) return [];
       return [
         {
-          ...placement,
+          ...block,
           leftPct: ((overlapStart - visibleStart) / visibleDuration) * 100,
           widthPct: ((overlapEnd - overlapStart) / visibleDuration) * 100,
         },
       ];
     });
-  }, [clipPlacements, visibleDuration, visibleEnd, visibleStart]);
+  }, [videoBlockPlacements, visibleDuration, visibleEnd, visibleStart]);
   const visibleAudioPlacements = useMemo(() => {
     return audioPlacements.flatMap((placement) => {
       const overlapStart = Math.max(placement.startSeconds, visibleStart);
@@ -667,7 +786,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [panelVisibility.left]);
 
   useEffect(() => {
-    if (!isHistoryOpen || isExporting) return;
+    if (!isHistoryOpen || isRenderBusy) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && (historyPanelRef.current?.contains(target) || historyButtonRef.current?.contains(target))) {
@@ -686,16 +805,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isExporting, isHistoryOpen]);
+  }, [isHistoryOpen, isRenderBusy]);
 
   useEffect(() => {
-    if (!isExporting) return;
+    if (!isRenderBusy) return;
     setIsHistoryOpen(false);
     setIsPlaying(false);
-  }, [isExporting]);
+  }, [isRenderBusy]);
 
   useEffect(() => {
-    if (!isExporting) return;
+    if (!isRenderBusy) return;
 
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
       event.preventDefault();
@@ -706,7 +825,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
-  }, [isExporting]);
+  }, [isRenderBusy]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -724,22 +843,29 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       activePlacement.clip.trimEndSeconds - 0.001
     );
     const nextTime = clampNumber(
-      getVideoClipMediaTime(
-        activePlacement.clip,
-        activePlacement.startSeconds,
-        project.timeline.playheadSeconds
-      ),
-      activePlacement.clip.trimStartSeconds,
-      clipMaxTime
+      isUsingActiveReversePreview
+        ? project.timeline.playheadSeconds - activePlacement.startSeconds
+        : getVideoClipMediaTime(
+            activePlacement.clip,
+            activePlacement.startSeconds,
+            project.timeline.playheadSeconds
+          ),
+      isUsingActiveReversePreview ? 0 : activePlacement.clip.trimStartSeconds,
+      isUsingActiveReversePreview ? Math.max(0, activePlacement.durationSeconds - 0.001) : clipMaxTime
     );
     if (!Number.isFinite(nextTime)) return;
-    const seekThreshold = activePlacement.clip.actions.reverse ? 0.015 : isPlaying ? 0.35 : 0.05;
+    const seekThreshold =
+      activePlacement.clip.actions.reverse && !isUsingActiveReversePreview
+        ? 0.015
+        : isPlaying
+          ? 0.35
+          : 0.05;
     if (Math.abs(video.currentTime - nextTime) > seekThreshold) {
       try {
         video.currentTime = nextTime;
       } catch {}
     }
-    if (activePlacement.clip.actions.reverse) {
+    if (activePlacement.clip.actions.reverse && !isUsingActiveReversePreview) {
       video.pause();
       return;
     }
@@ -748,14 +874,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     } else {
       video.pause();
     }
-  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, project]);
+  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview, project]);
 
   useEffect(() => {
     const video = videoRef.current;
     if (!video || !isTimelinePreview || !activePlacement) return;
-    video.muted = activePlacement.clip.actions.reverse || activePlacement.clip.muted;
-    video.volume = activePlacement.clip.actions.reverse ? 0 : clampNumber(activePlacement.clip.volume, 0, 1);
-  }, [activePlacement, effectiveTimelineVideoUrl, isTimelinePreview]);
+    const shouldMute = activePlacement.clip.actions.reverse
+      ? !isUsingActiveReversePreview || activePlacement.clip.muted
+      : activePlacement.clip.muted;
+    video.muted = shouldMute;
+    video.volume = shouldMute ? 0 : clampNumber(activePlacement.clip.volume, 0, 1);
+  }, [activePlacement, effectiveTimelineVideoUrl, isTimelinePreview, isUsingActiveReversePreview]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -859,25 +988,138 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const validVideoClipIds = new Set(project?.timeline.videoClips.map((clip) => clip.id) ?? []);
     setSelectedVideoClipIds((current) => {
       const filtered = current.filter((clipId) => validVideoClipIds.has(clipId));
+      let next: string[];
       if (selectedItem?.kind !== "video") {
-        return [];
+        next = [];
+      } else if (filtered.length === 0 || !filtered.includes(selectedItem.id)) {
+        next = [selectedItem.id];
+      } else {
+        next = filtered.slice(-2);
       }
-      if (filtered.length === 0) {
-        return [selectedItem.id];
+      
+      // Prevent returning a new array reference if contents are identical
+      if (current.length === next.length && current.every((val, i) => val === next[i])) {
+        return current;
       }
-      if (!filtered.includes(selectedItem.id)) {
-        return [selectedItem.id];
-      }
-      return filtered.slice(-2);
+      return next;
     });
-    if (selectedItem?.kind !== "video") {
-      setInspectorVideoTab("edit");
+
+    if (selectedItem?.kind === "video-group") {
+      setFocusedJoinedClipId((current) => {
+        const nextClipId =
+          current && selectedVideoGroup?.clipIds.includes(current)
+            ? current
+            : selectedVideoGroup?.clipIds[0] ?? null;
+        return current === nextClipId ? current : nextClipId;
+      });
+    } else if (focusedJoinedClipId != null) {
+      setFocusedJoinedClipId(null);
     }
-  }, [project?.timeline.videoClips, selectedItem]);
+
+    if (selectedItem?.kind === "audio") {
+      setInspectorVideoTab((prev) => (prev === "edit" ? prev : "edit"));
+    }
+  }, [focusedJoinedClipId, project?.timeline.videoClips, selectedItem, selectedVideoGroup]);
 
   const invalidateReversePreviewCache = useCallback((clipId?: string) => {
-    void clipId;
+    if (!clipId) {
+      reversePreviewSessionRef.current += 1;
+      reversePreviewKeysByClipIdRef.current.clear();
+      reversePreviewInflightRef.current.clear();
+      reversePreviewTokensRef.current.clear();
+      setReversePreviewCache({});
+      setReversePreviewLoadingKeys([]);
+      setReversePreviewFailedKeys([]);
+      return;
+    }
+
+    const keys = [...(reversePreviewKeysByClipIdRef.current.get(clipId) ?? [])];
+    reversePreviewKeysByClipIdRef.current.delete(clipId);
+    if (!keys.length) return;
+
+    const keySet = new Set(keys);
+    keys.forEach((key) => {
+      reversePreviewTokensRef.current.set(
+        key,
+        (reversePreviewTokensRef.current.get(key) ?? 0) + 1
+      );
+      reversePreviewInflightRef.current.delete(key);
+    });
+    setReversePreviewCache((current) => omitReversePreviewCacheKeys(current, keySet));
+    setReversePreviewLoadingKeys((current) =>
+      current.some((key) => keySet.has(key))
+        ? current.filter((key) => !keySet.has(key))
+        : current
+    );
+    setReversePreviewFailedKeys((current) =>
+      current.some((key) => keySet.has(key))
+        ? current.filter((key) => !keySet.has(key))
+        : current
+    );
   }, []);
+
+  useEffect(() => {
+    if (!activeReversePreviewRequest) return;
+    const { key, clipId, clip, file, hasAudio } = activeReversePreviewRequest;
+    if (reversePreviewCache[key] || reversePreviewFailedKeys.includes(key)) return;
+
+    const clipKeys = reversePreviewKeysByClipIdRef.current.get(clipId) ?? new Set<string>();
+    clipKeys.add(key);
+    reversePreviewKeysByClipIdRef.current.set(clipId, clipKeys);
+
+    if (reversePreviewInflightRef.current.has(key)) return;
+
+    const sessionId = reversePreviewSessionRef.current;
+    const requestToken = reversePreviewTokensRef.current.get(key) ?? 0;
+    setReversePreviewLoadingKeys((current) =>
+      current.includes(key) ? current : [...current, key]
+    );
+
+    const request = renderReversedClipPreview({
+      clip,
+      file,
+      hasAudio,
+    })
+      .then((previewFile) => {
+        if (
+          reversePreviewSessionRef.current !== sessionId ||
+          (reversePreviewTokensRef.current.get(key) ?? 0) !== requestToken
+        ) {
+          return;
+        }
+        setReversePreviewCache((current) => ({
+          ...current,
+          [key]: previewFile,
+        }));
+        setReversePreviewFailedKeys((current) =>
+          current.includes(key) ? current.filter((entry) => entry !== key) : current
+        );
+      })
+      .catch((error) => {
+        if (
+          reversePreviewSessionRef.current !== sessionId ||
+          (reversePreviewTokensRef.current.get(key) ?? 0) !== requestToken
+        ) {
+          return;
+        }
+        console.error("Failed to prepare reversed preview proxy", error);
+        setReversePreviewFailedKeys((current) =>
+          current.includes(key) ? current : [...current, key]
+        );
+        toast.error("Could not build the reversed preview. Falling back to direct playback.");
+      })
+      .finally(() => {
+        if (reversePreviewInflightRef.current.get(key) !== request) {
+          return;
+        }
+        reversePreviewInflightRef.current.delete(key);
+        setReversePreviewLoadingKeys((current) =>
+          current.includes(key) ? current.filter((entry) => entry !== key) : current
+        );
+      });
+
+    reversePreviewInflightRef.current.set(key, request);
+  }, [activeReversePreviewRequest, reversePreviewCache, reversePreviewFailedKeys]);
 
   const updateProject = (updater: (current: EditorProjectRecord) => EditorProjectRecord) => {
     setProject((current) => {
@@ -887,10 +1129,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const clearTimelineDragState = () => {
-    dragClipIdRef.current = null;
+    dragVideoBlockRef.current = null;
     dragAssetIdRef.current = null;
     dragAssetKindRef.current = null;
-    setDraggingClipId(null);
+    setDraggingVideoBlockId(null);
     setDraggingAssetId(null);
     setDraggingAssetKind(null);
     setDropTargetIndex(null);
@@ -978,15 +1220,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     window.addEventListener("pointerup", onPointerUp, { once: true });
   };
 
-  const updateSelectedClip = (updater: (clip: TimelineVideoClip) => TimelineVideoClip) => {
-    if (!selectedClip || !selectedClipAsset) return;
-    const nextClip = clampVideoClipToAsset(updater(selectedClip), selectedClipAsset.durationSeconds);
+  const updateInspectorClip = (updater: (clip: TimelineVideoClip) => TimelineVideoClip) => {
+    if (!inspectorClip || !inspectorClipAsset) return;
+    const nextClip = clampVideoClipToAsset(updater(inspectorClip), inspectorClipAsset.durationSeconds);
     const needsReversePreviewRefresh =
-      selectedClip.trimStartSeconds !== nextClip.trimStartSeconds ||
-      selectedClip.trimEndSeconds !== nextClip.trimEndSeconds ||
-      selectedClip.actions.reverse !== nextClip.actions.reverse;
+      inspectorClip.trimStartSeconds !== nextClip.trimStartSeconds ||
+      inspectorClip.trimEndSeconds !== nextClip.trimEndSeconds ||
+      inspectorClip.actions.reverse !== nextClip.actions.reverse;
     if (needsReversePreviewRefresh) {
-      invalidateReversePreviewCache(selectedClip.id);
+      invalidateReversePreviewCache(inspectorClip.id);
     }
     updateProject((current) => ({
       ...current,
@@ -1011,21 +1253,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
-  const resetSelectedClipTrim = () => {
-    if (!selectedClipAsset) return;
-    updateSelectedClip((clip) => resetTimelineVideoClipTrim(clip, selectedClipAsset.durationSeconds));
+  const resetInspectorClipTrim = () => {
+    if (!inspectorClipAsset) return;
+    updateInspectorClip((clip) => resetTimelineVideoClipTrim(clip, inspectorClipAsset.durationSeconds));
   };
 
-  const resetSelectedClipFrame = () => {
-    updateSelectedClip(resetTimelineVideoClipFrame);
+  const resetInspectorClipFrame = () => {
+    updateInspectorClip(resetTimelineVideoClipFrame);
   };
 
-  const resetSelectedClipAudio = () => {
-    updateSelectedClip(resetTimelineVideoClipAudio);
+  const resetInspectorClipAudio = () => {
+    updateInspectorClip(resetTimelineVideoClipAudio);
   };
 
-  const resetSelectedClipTransform = () => {
-    updateSelectedClip((clip) => ({
+  const resetInspectorClipTransform = () => {
+    updateInspectorClip((clip) => ({
       ...clip,
       actions: {
         ...clip.actions,
@@ -1104,55 +1346,93 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     setPreviewMode({ kind: "timeline" });
   };
 
-  const mergeSelectedTimelineClips = async () => {
-    if (!project || !canMergeSelectedVideoClips) return;
+  const joinSelectedTimelineClips = () => {
+    if (!project || !canJoinSelectedVideoClips) return;
 
-    const mergePlacements = [...selectedVideoPlacements].sort((left, right) => left.index - right.index);
-    const mergeClipIds = mergePlacements.map((placement) => placement.clip.id);
-    const requiredAssetIds = new Set(mergePlacements.map((placement) => placement.clip.assetId));
-    const missingAsset = mergePlacements.find((placement) => resolvedAssetsMap.get(placement.clip.assetId)?.missing);
-    if (missingAsset) {
-      toast.error(`Missing source media for "${missingAsset.clip.label}". Replace it before merging.`);
+    const joinedGroup = createJoinedTimelineClipGroup({
+      clips: project.timeline.videoClips,
+      groups: project.timeline.videoClipGroups,
+      clipIds: selectedVideoPlacements.map((placement) => placement.clip.id),
+    });
+    if (!joinedGroup) return;
+
+    const firstPlacement = selectedVideoPlacements[0];
+    setPreviewMode({ kind: "timeline" });
+    setFocusedJoinedClipId(joinedGroup.clipIds[0] ?? null);
+    setSelectedVideoClipIds([]);
+    setInspectorVideoTab("join");
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        videoClipGroups: [...current.timeline.videoClipGroups, joinedGroup],
+        selectedItem: { kind: "video-group", id: joinedGroup.id },
+        playheadSeconds: firstPlacement?.startSeconds ?? current.timeline.playheadSeconds,
+      },
+    }));
+    toast.success(`Joined ${selectedVideoPlacements.length} clips into one timeline block`);
+  };
+
+  const unjoinSelectedTimelineGroup = () => {
+    if (!project || !selectedVideoGroup) return;
+    const firstClipId = selectedVideoGroup.clipIds[0];
+    const firstPlacement = selectedGroupClipPlacements[0];
+    setPreviewMode({ kind: "timeline" });
+    setFocusedJoinedClipId(null);
+    setSelectedVideoClipIds(selectedVideoGroup.clipIds.slice(0, 2));
+    setInspectorVideoTab("join");
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        videoClipGroups: unjoinTimelineClipGroup(current.timeline.videoClipGroups, selectedVideoGroup.id),
+        selectedItem: firstClipId ? { kind: "video", id: firstClipId } : current.timeline.selectedItem,
+        playheadSeconds: firstPlacement?.startSeconds ?? current.timeline.playheadSeconds,
+      },
+    }));
+    toast.success("Clips unjoined");
+  };
+
+  const bakeSelectedTimelineGroup = async () => {
+    if (!project || !selectedVideoGroup || selectedGroupClipPlacements.length !== selectedVideoGroup.clipIds.length) {
       return;
     }
 
-    const mergeProject = createEmptyEditorProject({
-      name: `${mergePlacements.map((placement) => placement.clip.label).join(" + ")} merged`,
-      aspectRatio: project.aspectRatio,
-    });
-    mergeProject.assetIds = [...requiredAssetIds];
-    mergeProject.timeline.videoClips = mergePlacements.map((placement) => ({
-      ...placement.clip,
-      canvas: { ...placement.clip.canvas },
-      actions: { ...placement.clip.actions },
-    }));
-    mergeProject.timeline.audioItems = [];
-    mergeProject.timeline.selectedItem = { kind: "video", id: mergePlacements[0].clip.id };
-    mergeProject.subtitles = {
-      ...project.subtitles,
-      enabled: false,
-    };
+    const missingAsset = selectedGroupClipPlacements.find(
+      (placement) => resolvedAssetsMap.get(placement.clip.assetId)?.missing
+    );
+    if (missingAsset) {
+      toast.error(`Missing source media for "${missingAsset.clip.label}". Replace it before baking.`);
+      return;
+    }
 
-    const mergeResolvedAssets = resolvedAssets.filter((resolved) => requiredAssetIds.has(resolved.asset.id));
-    setIsMergingClips(true);
+    const { bakeProject, bakedClipIds, bakedLabel, requiredAssetIds } = prepareTimelineClipBake({
+      project,
+      clipPlacements: selectedGroupClipPlacements,
+    });
+    const requiredAssetIdSet = new Set(requiredAssetIds);
+    const bakeResolvedAssets = resolvedAssets.filter((resolved) => requiredAssetIdSet.has(resolved.asset.id));
+    setBakeProjectName(bakeProject.name);
+    setBakeProgress(1);
+    setIsBakingClip(true);
     setIsPlaying(false);
 
     try {
       const result = await localEditorExportService.exportProject({
-        project: mergeProject,
-        resolvedAssets: mergeResolvedAssets,
+        project: bakeProject,
+        resolvedAssets: bakeResolvedAssets,
         historyMap,
         resolution: exportResolution,
+        onProgress: setBakeProgress,
       });
       const metadata = await readMediaMetadata(result.file);
-      const mergedLabel = mergePlacements.map((placement) => placement.clip.label).join(" + ");
-      const mergedAsset = createEditorAssetRecord({
+      const bakedAsset = createEditorAssetRecord({
         projectId: project.id,
         kind: "video",
         filename: result.file.name,
         mimeType: result.file.type || "video/mp4",
         sizeBytes: result.file.size,
-        durationSeconds: metadata.durationSeconds || getProjectDuration(mergeProject),
+        durationSeconds: metadata.durationSeconds || getProjectDuration(bakeProject),
         width: metadata.width ?? result.width,
         height: metadata.height ?? result.height,
         hasAudio: metadata.hasAudio,
@@ -1160,44 +1440,52 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         captionSource: { kind: "none" },
         fileBlob: result.file,
       });
-      const mergedClip = createDefaultVideoClip({
-        assetId: mergedAsset.id,
-        label: mergedLabel,
-        durationSeconds: mergedAsset.durationSeconds,
+      const bakedClip = createDefaultVideoClip({
+        assetId: bakedAsset.id,
+        label: bakedLabel,
+        durationSeconds: bakedAsset.durationSeconds,
       });
 
-      await saveAssets([mergedAsset]);
-      setAssets((current) => [...current, mergedAsset]);
-      mergeClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
+      await saveAssets([bakedAsset]);
+      setAssets((current) => [...current, bakedAsset]);
+      bakedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
       setPreviewMode({ kind: "timeline" });
       updateProject((current) => {
-        const nextClips = replaceTimelineClipsWithMergedClip(
+        const nextTimeline = replaceTimelineClipGroupWithClip(
           current.timeline.videoClips,
-          mergedClip,
-          mergeClipIds
+          current.timeline.videoClipGroups,
+          selectedVideoGroup.id,
+          bakedClip
         );
-        const mergedPlacement = getTimelineClipPlacements(nextClips).find((placement) => placement.clip.id === mergedClip.id);
+        const bakedPlacement = getTimelineClipPlacements(nextTimeline.videoClips).find(
+          (placement) => placement.clip.id === bakedClip.id
+        );
         return {
           ...current,
-          assetIds: current.assetIds.includes(mergedAsset.id)
+          assetIds: current.assetIds.includes(bakedAsset.id)
             ? current.assetIds
-            : [...current.assetIds, mergedAsset.id],
+            : [...current.assetIds, bakedAsset.id],
           timeline: {
             ...current.timeline,
-            videoClips: nextClips,
-            selectedItem: { kind: "video", id: mergedClip.id },
-            playheadSeconds: mergedPlacement?.startSeconds ?? current.timeline.playheadSeconds,
+            videoClips: nextTimeline.videoClips,
+            videoClipGroups: nextTimeline.videoClipGroups,
+            selectedItem: { kind: "video", id: bakedClip.id },
+            playheadSeconds: bakedPlacement?.startSeconds ?? current.timeline.playheadSeconds,
           },
         };
       });
-      setSelectedVideoClipIds([mergedClip.id]);
-      setInspectorVideoTab("combine");
-      toast.success(`Merged ${mergePlacements.length} clips into one video`);
+      setFocusedJoinedClipId(null);
+      setSelectedVideoClipIds([bakedClip.id]);
+      setInspectorVideoTab("edit");
+      toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to merge the selected clips.";
-      toast.error(message);
+      const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
+      console.error("Failed to bake joined clip", error);
+      toast.error(message.split("\n")[0] || "Failed to bake the joined clip.");
     } finally {
-      setIsMergingClips(false);
+      setIsBakingClip(false);
+      setBakeProgress(0);
+      setBakeProjectName("");
     }
   };
 
@@ -1236,6 +1524,33 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       };
       return true;
     }
+    if (selectedVideoGroup && project) {
+      const clipsById = new Map(project.timeline.videoClips.map((clip) => [clip.id, clip]));
+      const clips = selectedVideoGroup.clipIds.flatMap((clipId) => {
+        const clip = clipsById.get(clipId);
+        return clip
+          ? [
+              {
+                ...clip,
+                canvas: { ...clip.canvas },
+                actions: { ...clip.actions },
+              },
+            ]
+          : [];
+      });
+      if (clips.length !== selectedVideoGroup.clipIds.length) {
+        return false;
+      }
+      clipboardRef.current = {
+        kind: "video-group",
+        item: {
+          ...selectedVideoGroup,
+          clipIds: [...selectedVideoGroup.clipIds],
+        },
+        clips,
+      };
+      return true;
+    }
     if (selectedAudioItem) {
       clipboardRef.current = {
         kind: "audio",
@@ -1254,7 +1569,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (clipboardItem.kind === "video") {
       const nextClip = createClonedTimelineClip(clipboardItem.item);
       updateProject((current) => {
-        const afterClipId = current.timeline.selectedItem?.kind === "video" ? current.timeline.selectedItem.id : undefined;
+        const afterClipId =
+          current.timeline.selectedItem?.kind === "video"
+            ? current.timeline.selectedItem.id
+            : current.timeline.selectedItem?.kind === "video-group"
+              ? findTimelineClipGroup(current.timeline.videoClipGroups, current.timeline.selectedItem.id)?.clipIds.at(-1)
+              : undefined;
         const nextClips = insertTimelineClipAfter(current.timeline.videoClips, nextClip, afterClipId);
         const placement = getTimelineClipPlacements(nextClips).find((item) => item.clip.id === nextClip.id);
         return {
@@ -1267,6 +1587,50 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           },
         };
       });
+      return true;
+    }
+
+    if (clipboardItem.kind === "video-group") {
+      if (!project) return false;
+      const clonedClips = clipboardItem.clips.map((clip) => createClonedTimelineClip(clip));
+      const firstInsertedClipId = clonedClips[0]?.id;
+      const afterClipId =
+        project.timeline.selectedItem?.kind === "video"
+          ? project.timeline.selectedItem.id
+          : project.timeline.selectedItem?.kind === "video-group"
+            ? findTimelineClipGroup(project.timeline.videoClipGroups, project.timeline.selectedItem.id)?.clipIds.at(-1)
+            : undefined;
+      let nextClips = project.timeline.videoClips;
+      clonedClips.forEach((clip, index) => {
+        nextClips = insertTimelineClipAfter(nextClips, clip, index === 0 ? afterClipId : clonedClips[index - 1]?.id);
+      });
+      const insertedGroup = createJoinedTimelineClipGroup({
+        clips: nextClips,
+        groups: project.timeline.videoClipGroups,
+        clipIds: clonedClips.map((clip) => clip.id),
+      });
+      const placement = firstInsertedClipId
+        ? getTimelineClipPlacements(nextClips).find((item) => item.clip.id === firstInsertedClipId)
+        : undefined;
+      updateProject((current) => {
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            videoClips: nextClips,
+            videoClipGroups: insertedGroup
+              ? [...current.timeline.videoClipGroups, insertedGroup]
+              : current.timeline.videoClipGroups,
+            selectedItem: insertedGroup
+              ? { kind: "video-group", id: insertedGroup.id }
+              : firstInsertedClipId
+                ? { kind: "video", id: firstInsertedClipId }
+                : current.timeline.selectedItem,
+            playheadSeconds: placement?.startSeconds ?? current.timeline.playheadSeconds,
+          },
+        };
+      });
+      setFocusedJoinedClipId(insertedGroup?.clipIds[0] ?? null);
       return true;
     }
 
@@ -1289,6 +1653,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const duplicateSelectedTimelineItem = () => {
+    if (selectedVideoGroup) {
+      if (!project) return false;
+      const result = duplicateTimelineClipGroup(
+        project.timeline.videoClips,
+        project.timeline.videoClipGroups,
+        selectedVideoGroup.id
+      );
+      if (!result) return false;
+      const duplicatedStartSeconds = getTimelineClipPlacements(result.videoClips).find(
+        (placement) => placement.clip.id === result.duplicatedGroup.clipIds[0]
+      )?.startSeconds;
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => {
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            videoClips: result.videoClips,
+            videoClipGroups: result.videoClipGroups,
+            selectedItem: { kind: "video-group", id: result.duplicatedGroup.id },
+            playheadSeconds: duplicatedStartSeconds ?? current.timeline.playheadSeconds,
+          },
+        };
+      });
+      setFocusedJoinedClipId(result.duplicatedGroup.clipIds[0] ?? null);
+      return true;
+    }
+
     if (selectedClip) {
       const nextClip = createClonedTimelineClip(selectedClip);
       setPreviewMode({ kind: "timeline" });
@@ -1333,6 +1725,45 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const removeSelectedTimelineItem = () => {
     if (!project?.timeline.selectedItem) return false;
 
+    if (project.timeline.selectedItem.kind === "video-group") {
+      const removedBlockIndex = videoBlockPlacements.findIndex(
+        (block) => block.kind === "group" && block.id === project.timeline.selectedItem?.id
+      );
+      if (removedBlockIndex < 0 || !selectedVideoGroup) return false;
+      selectedVideoGroup.clipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
+      setPreviewMode({ kind: "timeline" });
+      setFocusedJoinedClipId(null);
+      updateProject((current) => {
+        const nextTimeline = removeTimelineClipGroup(
+          current.timeline.videoClips,
+          current.timeline.videoClipGroups,
+          project.timeline.selectedItem?.id ?? ""
+        );
+        const nextBlocks = getTimelineVideoBlockPlacements(nextTimeline.videoClips, nextTimeline.videoClipGroups);
+        const nextSelection =
+          nextBlocks[removedBlockIndex] ??
+          nextBlocks[Math.max(0, removedBlockIndex - 1)];
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            videoClips: nextTimeline.videoClips,
+            videoClipGroups: nextTimeline.videoClipGroups,
+            selectedItem: nextSelection
+              ? getTimelineSelectionForVideoBlock(nextSelection)
+              : getSelectionForLaneIndex(
+                  "audio",
+                  0,
+                  nextTimeline.videoClips,
+                  current.timeline.audioItems,
+                  nextTimeline.videoClipGroups
+                ),
+          },
+        };
+      });
+      return true;
+    }
+
     if (project.timeline.selectedItem.kind === "video") {
       const removedIndex = project.timeline.videoClips.findIndex((clip) => clip.id === project.timeline.selectedItem?.id);
       if (removedIndex < 0) return false;
@@ -1345,7 +1776,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           timeline: {
             ...current.timeline,
             videoClips: nextClips,
-            selectedItem: getSelectionForLaneIndex("video", removedIndex, nextClips, current.timeline.audioItems),
+            selectedItem: getSelectionForLaneIndex(
+              "video",
+              removedIndex,
+              nextClips,
+              current.timeline.audioItems,
+              current.timeline.videoClipGroups
+            ),
           },
         };
       });
@@ -1362,7 +1799,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         timeline: {
           ...current.timeline,
           audioItems: nextAudioItems,
-          selectedItem: getSelectionForLaneIndex("audio", removedIndex, current.timeline.videoClips, nextAudioItems),
+          selectedItem: getSelectionForLaneIndex(
+            "audio",
+            removedIndex,
+            current.timeline.videoClips,
+            nextAudioItems,
+            current.timeline.videoClipGroups
+          ),
         },
       };
     });
@@ -1609,7 +2052,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (isExporting) return;
+    if (isRenderBusy) return;
     if (isShortcutTargetEditable(event.target)) return;
 
     const usesCommand = event.metaKey || event.ctrlKey;
@@ -1706,19 +2149,24 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : "Asset clip"
       : `${project.aspectRatio} timeline`;
   const selectedTimelineLabel =
-    selectedItem?.kind === "video"
-      ? selectedClip?.label
+    selectedItem?.kind === "video-group"
+      ? selectedVideoGroup?.label
+      : selectedItem?.kind === "video"
+        ? selectedClip?.label
       : selectedAudioAsset?.filename ?? (selectedAudioItem ? "Audio item" : undefined);
   const visibleWindowLabel = `${secondsToClock(visibleStart)} - ${secondsToClock(
     Math.min(projectDuration, visibleEnd)
   )}`;
-  const exportPhase = getEditorExportPhase(exportProgress);
+  const overlayMode = isBakingClip ? "bake" : "export";
+  const overlayProgress = isBakingClip ? bakeProgress : exportProgress;
+  const overlayProjectName = isBakingClip ? bakeProjectName || project.name : project.name;
+  const overlayPhase = getEditorExportPhase(overlayProgress);
   const dropIndicatorPct = (() => {
-    if (!draggingClipId && draggingAssetKind !== "video") return null;
-    if (dropTargetIndex != null && visibleClipPlacements[dropTargetIndex]) {
-      return visibleClipPlacements[dropTargetIndex].leftPct;
+    if (!draggingVideoBlockId && draggingAssetKind !== "video") return null;
+    if (dropTargetIndex != null && visibleVideoBlocks[dropTargetIndex]) {
+      return visibleVideoBlocks[dropTargetIndex].leftPct;
     }
-    const lastVisiblePlacement = visibleClipPlacements[visibleClipPlacements.length - 1];
+    const lastVisiblePlacement = visibleVideoBlocks[visibleVideoBlocks.length - 1];
     if (lastVisiblePlacement) {
       return Math.min(100, lastVisiblePlacement.leftPct + lastVisiblePlacement.widthPct);
     }
@@ -1726,7 +2174,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   })();
 
   return (
-    <main className="h-[100dvh] overflow-hidden px-2 sm:px-3 lg:px-4" aria-busy={isExporting}>
+    <main className="h-[100dvh] overflow-hidden px-2 sm:px-3 lg:px-4" aria-busy={isRenderBusy}>
       <input
         ref={mediaInputRef}
         type="file"
@@ -1743,7 +2191,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         onChange={(event) => void handleAttachSrt(event.target.files)}
       />
 
-      <div className={cn("mx-auto flex h-full w-full flex-col gap-[6px]", isExporting && "pointer-events-none select-none")}>
+      <div className={cn("mx-auto flex h-full w-full flex-col gap-[6px]", isRenderBusy && "pointer-events-none select-none")}>
         <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
           <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
             <div className="flex flex-wrap items-center gap-3">
@@ -1835,10 +2283,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               </div>
               <Button
                 onClick={handleExport}
-                disabled={isExporting}
+                disabled={isRenderBusy}
                 className="h-9 rounded-lg border border-amber-300/15 bg-amber-300/90 px-4 text-sm font-semibold text-slate-950 hover:bg-amber-200"
               >
-                {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+                {isRenderBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
                 Export
               </Button>
             </div>
@@ -1966,9 +2414,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                         dragAssetKindRef.current = asset.kind;
                                         setDraggingAssetId(asset.id);
                                         setDraggingAssetKind(asset.kind);
-                                        setDraggingClipId(null);
-                                        dragClipIdRef.current = null;
-                                        setDropTargetIndex(asset.kind === "video" ? clipPlacements.length : null);
+                                        setDraggingVideoBlockId(null);
+                                        dragVideoBlockRef.current = null;
+                                        setDropTargetIndex(asset.kind === "video" ? videoBlockPlacements.length : null);
                                       }}
                                       onDragEnd={clearTimelineDragState}
                                       isDragging={draggingAssetId === asset.id}
@@ -2276,24 +2724,46 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
                     <div className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 pt-1.5 sm:px-2 sm:pb-2">
                       <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                        {selectedClip && selectedClipAsset ? (
+                        {inspectorClip && inspectorClipAsset ? (
                           <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
                               <div className="flex items-start justify-between gap-3">
                                 <div>
-                                  <div className={EDITOR_LABEL_CLASS}>Selected Clip</div>
-                                  <div className="mt-2 text-lg font-semibold text-white">{selectedClip.label}</div>
-                                  <div className="mt-1 text-sm text-white/50">{selectedClipAsset.filename}</div>
+                                  <div className={EDITOR_LABEL_CLASS}>{selectedVideoGroup ? "Joined Block" : "Selected Clip"}</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">
+                                    {selectedVideoGroup ? selectedVideoGroup.label : inspectorClip.label}
+                                  </div>
+                                  <div className="mt-1 text-sm text-white/50">
+                                    {selectedVideoGroup
+                                      ? `${selectedGroupClipPlacements.length} clips · ${secondsToClock(
+                                          selectedGroupClipPlacements.reduce(
+                                            (total, placement) => total + placement.durationSeconds,
+                                            0
+                                          )
+                                        )}`
+                                      : inspectorClipAsset.filename}
+                                  </div>
+                                  {selectedVideoGroup ? (
+                                    <div className="mt-2 text-sm text-white/45">
+                                      Focused child clip: {inspectorClip.label}
+                                    </div>
+                                  ) : null}
                                 </div>
                                 <div
                                   className={cn(
                                     "rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]",
-                                    selectedClip.actions.reverse
+                                    selectedVideoGroup
+                                      ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+                                      : inspectorClip.actions.reverse
                                       ? "border border-cyan-300/24 bg-cyan-300/12 text-cyan-100"
                                       : "border border-white/8 bg-white/[0.04] text-white/45"
                                   )}
                                 >
-                                  {selectedClip.actions.reverse ? "Reverse On" : "Normal"}
+                                  {selectedVideoGroup
+                                    ? "Joined"
+                                    : inspectorClip.actions.reverse
+                                      ? "Reverse On"
+                                      : "Normal"}
                                 </div>
                               </div>
                             </div>
@@ -2310,8 +2780,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 <TabsTrigger value="transform" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
                                   Transform
                                 </TabsTrigger>
-                                <TabsTrigger value="combine" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
-                                  Combine
+                                <TabsTrigger value="join" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
+                                  Join
                                 </TabsTrigger>
                               </TabsList>
 
@@ -2319,19 +2789,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
                                   <div className="flex items-center justify-between gap-3">
                                     <div className={EDITOR_LABEL_CLASS}>Trim</div>
-                                    <SectionResetButton onClick={resetSelectedClipTrim} />
+                                    <SectionResetButton onClick={resetInspectorClipTrim} />
                                   </div>
                                   <label className="text-xs uppercase tracking-[0.24em] text-white/45">
-                                    Trim Start · {secondsToClock(selectedClip.trimStartSeconds)}
+                                    Trim Start · {secondsToClock(inspectorClip.trimStartSeconds)}
                                   </label>
                                   <input
                                     type="range"
                                     min={0}
-                                    max={Math.max(selectedClipAsset.durationSeconds - 0.5, 0.5)}
+                                    max={Math.max(inspectorClipAsset.durationSeconds - 0.5, 0.5)}
                                     step={0.01}
-                                    value={selectedClip.trimStartSeconds}
+                                    value={inspectorClip.trimStartSeconds}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         trimStartSeconds: Number(event.target.value),
                                       }))
@@ -2339,16 +2809,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     className="w-full"
                                   />
                                   <label className="text-xs uppercase tracking-[0.24em] text-white/45">
-                                    Trim End · {secondsToClock(selectedClip.trimEndSeconds)}
+                                    Trim End · {secondsToClock(inspectorClip.trimEndSeconds)}
                                   </label>
                                   <input
                                     type="range"
-                                    min={Math.min(selectedClip.trimStartSeconds + 0.5, selectedClipAsset.durationSeconds)}
-                                    max={selectedClipAsset.durationSeconds}
+                                    min={Math.min(inspectorClip.trimStartSeconds + 0.5, inspectorClipAsset.durationSeconds)}
+                                    max={inspectorClipAsset.durationSeconds}
                                     step={0.01}
-                                    value={selectedClip.trimEndSeconds}
+                                    value={inspectorClip.trimEndSeconds}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         trimEndSeconds: Number(event.target.value),
                                       }))
@@ -2360,17 +2830,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
                                   <div className="flex items-center justify-between gap-3">
                                     <div className={EDITOR_LABEL_CLASS}>Frame</div>
-                                    <SectionResetButton onClick={resetSelectedClipFrame} />
+                                    <SectionResetButton onClick={resetInspectorClipFrame} />
                                   </div>
-                                  <label className="text-xs text-white/55">Zoom · {selectedClip.canvas.zoom.toFixed(2)}x</label>
+                                  <label className="text-xs text-white/55">Zoom · {inspectorClip.canvas.zoom.toFixed(2)}x</label>
                                   <input
                                     type="range"
                                     min={0.6}
                                     max={2.4}
                                     step={0.01}
-                                    value={selectedClip.canvas.zoom}
+                                    value={inspectorClip.canvas.zoom}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         canvas: {
                                           ...clip.canvas,
@@ -2380,15 +2850,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     }
                                     className="w-full"
                                   />
-                                  <label className="text-xs text-white/55">Pan X · {Math.round(selectedClip.canvas.panX)}px</label>
+                                  <label className="text-xs text-white/55">Pan X · {Math.round(inspectorClip.canvas.panX)}px</label>
                                   <input
                                     type="range"
                                     min={-240}
                                     max={240}
                                     step={1}
-                                    value={selectedClip.canvas.panX}
+                                    value={inspectorClip.canvas.panX}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         canvas: {
                                           ...clip.canvas,
@@ -2398,15 +2868,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     }
                                     className="w-full"
                                   />
-                                  <label className="text-xs text-white/55">Pan Y · {Math.round(selectedClip.canvas.panY)}px</label>
+                                  <label className="text-xs text-white/55">Pan Y · {Math.round(inspectorClip.canvas.panY)}px</label>
                                   <input
                                     type="range"
                                     min={-240}
                                     max={240}
                                     step={1}
-                                    value={selectedClip.canvas.panY}
+                                    value={inspectorClip.canvas.panY}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         canvas: {
                                           ...clip.canvas,
@@ -2422,31 +2892,31 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                   <div className="flex items-center justify-between">
                                     <div className="flex items-center gap-2">
                                       <div className={EDITOR_LABEL_CLASS}>Clip Audio</div>
-                                      <SectionResetButton onClick={resetSelectedClipAudio} />
+                                      <SectionResetButton onClick={resetInspectorClipAudio} />
                                     </div>
                                     <Button
                                       size="sm"
                                       variant="ghost"
                                       className="h-8 rounded-lg px-2 text-white/60 hover:bg-white/[0.06] hover:text-white"
                                       onClick={() =>
-                                        updateSelectedClip((clip) => ({
+                                        updateInspectorClip((clip) => ({
                                           ...clip,
                                           muted: !clip.muted,
                                         }))
                                       }
                                     >
-                                      {selectedClip.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                      {inspectorClip.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                                     </Button>
                                   </div>
-                                  <label className="text-xs text-white/55">Volume · {Math.round(selectedClip.volume * 100)}%</label>
+                                  <label className="text-xs text-white/55">Volume · {Math.round(inspectorClip.volume * 100)}%</label>
                                   <input
                                     type="range"
                                     min={0}
                                     max={1}
                                     step={0.01}
-                                    value={selectedClip.volume}
+                                    value={inspectorClip.volume}
                                     onChange={(event) =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         volume: Number(event.target.value),
                                       }))
@@ -2461,11 +2931,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                   <div className="flex items-center justify-between gap-3">
                                     <div>
                                       <div className={EDITOR_LABEL_CLASS}>Reverse Clip</div>
-                                      <div className="mt-1 text-sm text-white/55">
-                                        Reverse playback in the editor preview and in exported output.
-                                      </div>
                                     </div>
-                                    <SectionResetButton onClick={resetSelectedClipTransform} />
+                                    <SectionResetButton onClick={resetInspectorClipTransform} />
                                   </div>
                                   <Button
                                     type="button"
@@ -2473,12 +2940,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     className={cn(
                                       EDITOR_TOOLBAR_BUTTON_CLASS,
                                       "h-10 w-full justify-center rounded-[0.95rem] border-white/10 text-sm",
-                                      selectedClip.actions.reverse
+                                      inspectorClip.actions.reverse
                                         ? "border-cyan-300/24 bg-cyan-300/12 text-cyan-100 hover:bg-cyan-300/18"
                                         : ""
                                     )}
                                     onClick={() =>
-                                      updateSelectedClip((clip) => ({
+                                      updateInspectorClip((clip) => ({
                                         ...clip,
                                         actions: {
                                           ...clip.actions,
@@ -2487,66 +2954,122 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       }))
                                     }
                                   >
-                                    {selectedClip.actions.reverse ? <Check className="mr-2 h-4 w-4" /> : null}
-                                    {selectedClip.actions.reverse ? "Reversed" : "Enable Reverse"}
+                                    {inspectorClip.actions.reverse ? <Check className="mr-2 h-4 w-4" /> : null}
+                                    {inspectorClip.actions.reverse ? "Reversed" : "Enable Reverse"}
                                   </Button>
-                                  <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
-                                    {selectedClip.actions.reverse
-                                      ? "This clip now plays backward as a regular transformed clip."
-                                      : "Clip playback remains forward until reverse is enabled."}
-                                  </div>
+                                  {inspectorClip.actions.reverse ? (
+                                    <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                      This clip now plays backward as a regular transformed clip.
+                                    </div>
+                                  ) : null}
                                 </div>
                               </TabsContent>
 
-                              <TabsContent value="combine" className="mt-2 space-y-2.5">
-                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                                  <div className="flex items-center justify-between gap-3">
-                                    <div>
-                                      <div className={EDITOR_LABEL_CLASS}>Merge Selected Clips</div>
-                                      <div className="mt-1 text-sm text-white/55">
-                                        Select exactly two adjacent video clips in the timeline, then merge them into one video clip.
+                              <TabsContent value="join" className="mt-2 space-y-2.5">
+                                {selectedVideoGroup ? (
+                                  <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div className={EDITOR_LABEL_CLASS}>Joined Block</div>
+                                      <div className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
+                                        {selectedGroupClipPlacements.length} clips
                                       </div>
                                     </div>
-                                    <div className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
-                                      {selectedVideoPlacements.length} selected
+                                    <div className="space-y-2">
+                                      {selectedGroupClipPlacements.map((placement, index) => {
+                                        const isFocused = inspectorClip.id === placement.clip.id;
+                                        return (
+                                          <button
+                                            key={placement.clip.id}
+                                            type="button"
+                                            onClick={() => setFocusedJoinedClipId(placement.clip.id)}
+                                            className={cn(
+                                              "flex w-full items-center justify-between rounded-[0.85rem] border px-3 py-2 text-left text-sm transition-colors",
+                                              isFocused
+                                                ? "border-cyan-300/24 bg-cyan-300/10 text-cyan-50"
+                                                : "border-white/8 bg-white/[0.03] text-white/72 hover:border-white/16 hover:bg-white/[0.05]"
+                                            )}
+                                          >
+                                            <span className="truncate pr-3">
+                                              Clip {index + 1} · {placement.clip.label}
+                                            </span>
+                                            <span className="font-mono text-[11px] text-white/42">
+                                              {secondsToClock(placement.durationSeconds)}
+                                            </span>
+                                          </button>
+                                        );
+                                      })}
                                     </div>
+
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                      <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-10 rounded-[0.95rem] border-white/10 text-sm text-white hover:bg-white/[0.08]"
+                                        onClick={unjoinSelectedTimelineGroup}
+                                      >
+                                        Unjoin
+                                      </Button>
+                                      <Button
+                                        type="button"
+                                        disabled={isBakingClip}
+                                        className="h-10 rounded-[0.95rem] border border-amber-300/18 bg-amber-300/90 text-sm font-semibold text-slate-950 hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={() => void bakeSelectedTimelineGroup()}
+                                      >
+                                        {isBakingClip ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                        Bake Clip
+                                      </Button>
+                                    </div>
+
                                   </div>
-                                  <div className="space-y-2">
-                                    {selectedVideoPlacements.length > 0 ? (
-                                      selectedVideoPlacements.map((placement) => (
-                                        <div
-                                          key={placement.clip.id}
-                                          className="flex items-center justify-between rounded-[0.85rem] border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-white/72"
-                                        >
-                                          <span className="truncate pr-3">{placement.clip.label}</span>
-                                          <span className="font-mono text-[11px] text-white/36">
-                                            {secondsToClock(placement.durationSeconds)}
-                                          </span>
+                                ) : (
+                                  <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                    <div className="flex items-center justify-between gap-3">
+                                      <div>
+                                        <div className={EDITOR_LABEL_CLASS}>Join Selected Clips</div>
+                                        <div className="mt-1 text-sm text-white/55">
+                                          Select exactly two adjacent, ungrouped clips in the timeline to make them behave like one block.
                                         </div>
-                                      ))
-                                    ) : (
-                                      <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-4 text-sm text-white/45">
-                                        Select one clip, open `Combine`, then click the second adjacent clip in the timeline.
                                       </div>
-                                    )}
+                                      <div className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
+                                        {selectedVideoPlacements.length} selected
+                                      </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                      {selectedVideoPlacements.length > 0 ? (
+                                        selectedVideoPlacements.map((placement) => (
+                                          <div
+                                            key={placement.clip.id}
+                                            className="flex items-center justify-between rounded-[0.85rem] border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-white/72"
+                                          >
+                                            <span className="truncate pr-3">{placement.clip.label}</span>
+                                            <span className="font-mono text-[11px] text-white/36">
+                                              {secondsToClock(placement.durationSeconds)}
+                                            </span>
+                                          </div>
+                                        ))
+                                      ) : (
+                                        <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-4 text-sm text-white/45">
+                                          Select one clip, open `Join`, then click the second adjacent clip in the timeline.
+                                        </div>
+                                      )}
+                                    </div>
+                                    <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                      {selectedVideoPlacements.length !== 2
+                                        ? "Join activates when exactly two video clips are selected."
+                                        : canJoinSelectedVideoClips
+                                          ? "The selected clips are adjacent and ready to join."
+                                          : "Join only works for two adjacent clips that are not already part of a joined block."}
+                                    </div>
+                                    <Button
+                                      type="button"
+                                      disabled={!canJoinSelectedVideoClips}
+                                      className="h-10 w-full rounded-[0.95rem] border border-cyan-300/18 bg-cyan-300/90 text-sm font-semibold text-slate-950 hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                      onClick={joinSelectedTimelineClips}
+                                    >
+                                      Join Selected Clips
+                                    </Button>
                                   </div>
-                                  <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
-                                    {selectedVideoPlacements.length !== 2
-                                      ? "Merge activates when exactly two video clips are selected."
-                                      : canMergeSelectedVideoClips
-                                        ? "The selected clips are adjacent and ready to become one video."
-                                        : "Select two adjacent clips. Non-adjacent clips cannot be merged."}
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    disabled={!canMergeSelectedVideoClips || isMergingClips}
-                                    className="h-10 w-full rounded-[0.95rem] border border-cyan-300/18 bg-cyan-300/90 text-sm font-semibold text-slate-950 hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
-                                    onClick={() => void mergeSelectedTimelineClips()}
-                                  >
-                                    {isMergingClips ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                                    Merge Selected Clips
-                                  </Button>
-                                </div>
+                                )}
                               </TabsContent>
                             </Tabs>
                           </div>
@@ -2761,7 +3284,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!selectedClip}
                         className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
                         onClick={() =>
-                          updateSelectedClip((clip) => ({
+                          updateInspectorClip((clip) => ({
                             ...clip,
                             muted: !clip.muted,
                           }))
@@ -2853,7 +3376,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       onDragOver={(event) => {
                         event.preventDefault();
                         if (dragAssetKindRef.current === "video") {
-                          setDropTargetIndex(visibleClipPlacements.length);
+                          setDropTargetIndex(visibleVideoBlocks.length);
                         }
                       }}
                       onDrop={(event) => {
@@ -2868,19 +3391,27 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           clearTimelineDragState();
                           return;
                         }
-                        const draggedClipId = dragClipIdRef.current;
-                        if (!draggedClipId) return;
-                        updateProject((current) => ({
-                          ...current,
-                          timeline: {
-                            ...current.timeline,
-                            videoClips: reorderTimelineClip(
+                        const draggedBlock = dragVideoBlockRef.current;
+                        if (!draggedBlock) return;
+                        updateProject((current) => {
+                          const nextTimeline = reorderTimelineVideoBlock(
+                            current.timeline.videoClips,
+                            current.timeline.videoClipGroups,
+                            draggedBlock,
+                            getTimelineVideoBlockPlacements(
                               current.timeline.videoClips,
-                              draggedClipId,
-                              current.timeline.videoClips.length - 1
-                            ),
-                          },
-                        }));
+                              current.timeline.videoClipGroups
+                            ).length - 1
+                          );
+                          return {
+                            ...current,
+                            timeline: {
+                              ...current.timeline,
+                              videoClips: nextTimeline.videoClips,
+                              videoClipGroups: nextTimeline.videoClipGroups,
+                            },
+                          };
+                        });
                         clearTimelineDragState();
                       }}
                     >
@@ -2917,28 +3448,31 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           <div className={EDITOR_LABEL_CLASS}>Video lane empty</div>
                           <div className="mt-2 text-sm text-white/56">Drag clips from the media bin to start cutting.</div>
                         </div>
-                      ) : visibleClipPlacements.length === 0 ? (
+                      ) : visibleVideoBlocks.length === 0 ? (
                         <div className="absolute left-[4%] top-1/2 w-[30%] min-w-[240px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-cyan-300/14 bg-cyan-300/[0.035] px-4 py-3 text-left">
                           <div className={EDITOR_LABEL_CLASS}>Sequence outside view</div>
                           <div className="mt-2 text-sm text-white/56">Move the playhead or reduce zoom to bring clips back into frame.</div>
                         </div>
                       ) : null}
 
-                      {visibleClipPlacements.map((placement, index) => {
-                        const isSelected = selectedVideoClipSet.has(placement.clip.id);
-                        const isPrimarySelected = selectedItem?.kind === "video" && selectedItem.id === placement.clip.id;
-                        const isDragging = draggingClipId === placement.clip.id;
-                        const isDropTarget = dropTargetIndex === index && draggingClipId !== placement.clip.id;
+                      {visibleVideoBlocks.map((block, index) => {
+                        const isPrimarySelected =
+                          (selectedItem?.kind === "video" && block.kind === "clip" && selectedItem.id === block.clip.id) ||
+                          (selectedItem?.kind === "video-group" && block.kind === "group" && selectedItem.id === block.group.id);
+                        const isSelected =
+                          isPrimarySelected || (block.kind === "clip" && selectedVideoClipSet.has(block.clip.id));
+                        const isDragging = draggingVideoBlockId === block.id;
+                        const isDropTarget = dropTargetIndex === index && draggingVideoBlockId !== block.id;
                         return (
                           <button
-                            key={placement.clip.id}
+                            key={block.id}
                             type="button"
                             draggable
                             onDragStart={() => {
-                              dragClipIdRef.current = placement.clip.id;
+                              dragVideoBlockRef.current = { id: block.id, kind: block.kind };
                               dragAssetIdRef.current = null;
                               dragAssetKindRef.current = null;
-                              setDraggingClipId(placement.clip.id);
+                              setDraggingVideoBlockId(block.id);
                               setDraggingAssetId(null);
                               setDraggingAssetKind(null);
                               setDropTargetIndex(index);
@@ -2949,7 +3483,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             onDragOver={(event) => {
                               event.preventDefault();
                               event.stopPropagation();
-                              if (dragAssetKindRef.current === "video" || dragClipIdRef.current) {
+                              if (dragAssetKindRef.current === "video" || dragVideoBlockRef.current) {
                                 setDropTargetIndex(index);
                               }
                             }}
@@ -2961,41 +3495,48 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               if (draggedAssetId && draggedAssetKind === "video") {
                                 const draggedAsset = assetMap.get(draggedAssetId);
                                 if (draggedAsset?.kind === "video") {
-                                  insertVideoAssetAtTimelineIndex(draggedAsset, placement.index);
+                                  insertVideoAssetAtTimelineIndex(
+                                    draggedAsset,
+                                    block.kind === "group" ? block.clipPlacements[0]?.index ?? project.timeline.videoClips.length : block.clipPlacement.index
+                                  );
                                 }
                                 clearTimelineDragState();
                                 return;
                               }
-                              const draggedClipId = dragClipIdRef.current;
-                              if (!draggedClipId) return;
-                              updateProject((current) => ({
-                                ...current,
-                                timeline: {
-                                  ...current.timeline,
-                                  videoClips: reorderTimelineClip(
-                                    current.timeline.videoClips,
-                                    draggedClipId,
-                                    placement.index
-                                  ),
-                                },
-                              }));
+                              const draggedBlock = dragVideoBlockRef.current;
+                              if (!draggedBlock) return;
+                              updateProject((current) => {
+                                const nextTimeline = reorderTimelineVideoBlock(
+                                  current.timeline.videoClips,
+                                  current.timeline.videoClipGroups,
+                                  draggedBlock,
+                                  block.index
+                                );
+                                return {
+                                  ...current,
+                                  timeline: {
+                                    ...current.timeline,
+                                    videoClips: nextTimeline.videoClips,
+                                    videoClipGroups: nextTimeline.videoClipGroups,
+                                  },
+                                };
+                              });
                               clearTimelineDragState();
                             }}
                             onClick={(event) => {
                               event.stopPropagation();
-                              const isMergeSelectionClick =
-                                inspectorVideoTab === "combine" &&
+                              const isJoinSelectionClick =
+                                block.kind === "clip" &&
+                                inspectorVideoTab === "join" &&
                                 selectedItem?.kind === "video" &&
-                                selectedItem.id !== placement.clip.id;
+                                selectedItem.id !== block.clip.id;
                               focusTimelineSelection(
-                                { kind: "video", id: placement.clip.id },
-                                placement.startSeconds,
+                                getTimelineSelectionForVideoBlock(block),
+                                block.startSeconds,
                                 {
                                   extendVideoSelection:
-                                    event.metaKey ||
-                                    event.ctrlKey ||
-                                    event.shiftKey ||
-                                    isMergeSelectionClick,
+                                    block.kind === "clip" &&
+                                    (event.metaKey || event.ctrlKey || event.shiftKey || isJoinSelectionClick),
                                 }
                               );
                             }}
@@ -3011,30 +3552,92 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               "cursor-grab active:cursor-grabbing"
                             )}
                             style={{
-                              left: `${placement.leftPct}%`,
-                              width: `${placement.widthPct}%`,
+                              left: `${block.leftPct}%`,
+                              width: `${block.widthPct}%`,
                             }}
                           >
                             <div className="pointer-events-none absolute inset-y-2 left-1.5 w-[4px] rounded-full bg-white/18" />
                             <div className="pointer-events-none absolute inset-y-2 right-1.5 w-[4px] rounded-full bg-white/10" />
+                            {block.kind === "group"
+                              ? block.clipPlacements.slice(0, -1).map((clipPlacement) => {
+                                  const dividerPct =
+                                    ((clipPlacement.endSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
+                                  return (
+                                    <div
+                                      key={`${block.id}-${clipPlacement.clip.id}-divider`}
+                                      className="pointer-events-none absolute inset-y-2 z-10 w-px bg-white/14"
+                                      style={{ left: `calc(${dividerPct}% - 0.5px)` }}
+                                    />
+                                  );
+                                })
+                              : null}
                             <div className="pointer-events-none flex h-full flex-col justify-between pl-2">
                               <div>
                                 <div className="flex items-center justify-between gap-2">
-                                  <div className="truncate text-sm font-medium text-white">{placement.clip.label}</div>
-                                  {placement.clip.actions.reverse ? (
+                                  <div className="truncate text-sm font-medium text-white">
+                                    {block.kind === "group" ? block.group.label : block.clip.label}
+                                  </div>
+                                  {block.kind === "group" ? (
+                                    <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-amber-100">
+                                      Join
+                                    </span>
+                                  ) : block.clip.actions.reverse ? (
                                     <span className="rounded-full border border-cyan-300/22 bg-cyan-300/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-cyan-100">
                                       Rev
                                     </span>
                                   ) : null}
                                 </div>
                                 <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/44">
-                                  <span className="truncate">{placement.clip.muted ? "Muted clip audio" : "Clip audio on"}</span>
-                                  <span className="font-mono">{secondsToClock(placement.durationSeconds)}</span>
+                                  <span className="truncate">
+                                    {block.kind === "group"
+                                      ? `${block.clipPlacements.length} clips joined`
+                                      : block.clip.muted
+                                        ? "Muted clip audio"
+                                        : "Clip audio on"}
+                                  </span>
+                                  <span className="font-mono">{secondsToClock(block.durationSeconds)}</span>
                                 </div>
                               </div>
                               <div className="mt-3 space-y-1.5">
-                                <div className="h-8 rounded-[0.7rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.02))]" />
-                                <div className="h-5 rounded-[0.6rem] bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.34)_0,rgba(56,189,248,0.34)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]" />
+                                {block.kind === "group" ? (
+                                  <>
+                                    <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${block.clipPlacements.length}, minmax(0, 1fr))` }}>
+                                      {block.clipPlacements.map((clipPlacement) => (
+                                        <div
+                                          key={`${block.id}-${clipPlacement.clip.id}-label`}
+                                          className="truncate rounded-[0.65rem] border border-white/8 bg-white/[0.035] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-white/50"
+                                        >
+                                          {clipPlacement.clip.label}
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <div className="relative h-5 overflow-hidden rounded-[0.6rem] bg-black/25">
+                                      {block.clipPlacements.map((clipPlacement, clipIndex) => {
+                                        const leftPct =
+                                          ((clipPlacement.startSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
+                                        const widthPct =
+                                          (clipPlacement.durationSeconds / Math.max(block.durationSeconds, 0.001)) * 100;
+                                        return (
+                                          <div
+                                            key={`${block.id}-${clipPlacement.clip.id}-segment`}
+                                            className={cn(
+                                              "absolute inset-y-0 border-r border-white/10",
+                                              clipIndex % 2 === 0
+                                                ? "bg-[repeating-linear-gradient(90deg,rgba(251,191,36,0.32)_0,rgba(251,191,36,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
+                                                : "bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.32)_0,rgba(56,189,248,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
+                                            )}
+                                            style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                                          />
+                                        );
+                                      })}
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className="h-8 rounded-[0.7rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.02))]" />
+                                    <div className="h-5 rounded-[0.6rem] bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.34)_0,rgba(56,189,248,0.34)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]" />
+                                  </>
+                                )}
                               </div>
                             </div>
                           </button>
@@ -3146,11 +3749,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         </div>
       </div>
       <ExportProgressOverlay
-        open={isExporting}
-        projectName={project.name}
+        open={isRenderBusy}
+        mode={overlayMode}
+        projectName={overlayProjectName}
         resolution={exportResolution}
-        progressPct={exportProgress}
-        phase={exportPhase}
+        progressPct={overlayProgress}
+        phase={overlayPhase}
       />
       <Toaster theme="dark" position="bottom-center" />
     </main>

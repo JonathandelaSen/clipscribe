@@ -51,6 +51,13 @@ export interface TimelineVideoClip {
   actions: TimelineVideoClipActions;
 }
 
+export interface TimelineClipGroup {
+  id: string;
+  kind: "joined";
+  clipIds: string[];
+  label: string;
+}
+
 export interface TimelineAudioItem {
   id: string;
   assetId: string;
@@ -61,7 +68,7 @@ export interface TimelineAudioItem {
   muted: boolean;
 }
 
-export type TimelineSelectionKind = "video" | "audio";
+export type TimelineSelectionKind = "video" | "video-group" | "audio";
 
 export interface TimelineSelection {
   kind: TimelineSelectionKind;
@@ -82,6 +89,7 @@ export interface EditorProjectTimelineState {
   zoomLevel: number;
   selectedItem?: TimelineSelection;
   videoClips: TimelineVideoClip[];
+  videoClipGroups: TimelineClipGroup[];
   audioItems: TimelineAudioItem[];
 }
 

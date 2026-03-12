@@ -2,8 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  canJoinTimelineClips,
   clampAudioItemToAsset,
   clampVideoClipToAsset,
+  createJoinedTimelineClipGroup,
+  duplicateTimelineClipGroup,
   ensureProjectSelection,
   findClipAtProjectTime,
   getContiguousAudioStartOffset,
@@ -11,16 +14,22 @@ import {
   getVideoClipMediaTime,
   getSelectionForLaneIndex,
   getTimelineClipPlacements,
+  getTimelineVideoBlockPlacements,
   insertTimelineAudioItemAfter,
   insertTimelineClipAfter,
+  normalizeTimelineClipGroups,
+  removeTimelineClipGroup,
   replaceTimelineClipsWithMergedClip,
+  replaceTimelineClipGroupWithClip,
   reorderTimelineClip,
+  reorderTimelineVideoBlock,
   resetTimelineAudioItemTrack,
   resetTimelineAudioItemTrim,
   resetTimelineVideoClipAudio,
   resetTimelineVideoClipFrame,
   resetTimelineVideoClipTrim,
   splitTimelineClip,
+  unjoinTimelineClipGroup,
 } from "../../../src/lib/editor/core/timeline";
 import {
   DEFAULT_EDITOR_MEDIA_VOLUME,
@@ -89,6 +98,161 @@ test("reorderTimelineClip moves a clip to the requested index", () => {
   const reordered = reorderTimelineClip(clips, clips[2].id, 0);
 
   assert.deepEqual(reordered.map((clip) => clip.assetId), ["c", "a", "b"]);
+});
+
+test("normalizeTimelineClipGroups keeps only adjacent non-overlapping pairs", () => {
+  const clips = [
+    createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "d", label: "D", durationSeconds: 2 }),
+  ];
+
+  const normalized = normalizeTimelineClipGroups(
+    [
+      { id: "group_valid", kind: "joined", clipIds: [clips[1].id, clips[0].id], label: "" },
+      { id: "group_overlap", kind: "joined", clipIds: [clips[1].id, clips[2].id], label: "B + C" },
+      { id: "group_gap", kind: "joined", clipIds: [clips[2].id, clips[3].id], label: "C + D" },
+    ],
+    clips
+  );
+
+  assert.deepEqual(
+    normalized.map((group) => ({ id: group.id, clipIds: group.clipIds, label: group.label })),
+    [
+      {
+        id: "group_valid",
+        clipIds: [clips[0].id, clips[1].id],
+        label: "A + B",
+      },
+      {
+        id: "group_gap",
+        clipIds: [clips[2].id, clips[3].id],
+        label: "C + D",
+      },
+    ]
+  );
+});
+
+test("createJoinedTimelineClipGroup only allows adjacent ungrouped clips", () => {
+  const clips = [
+    createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 }),
+  ];
+  const existingGroup = {
+    id: "group_1",
+    kind: "joined" as const,
+    clipIds: [clips[0].id, clips[1].id],
+    label: "A + B",
+  };
+
+  assert.equal(canJoinTimelineClips(clips, [], [clips[0].id, clips[1].id]), true);
+  assert.equal(canJoinTimelineClips(clips, [], [clips[0].id, clips[2].id]), false);
+  assert.equal(canJoinTimelineClips(clips, [existingGroup], [clips[0].id, clips[1].id]), false);
+
+  const created = createJoinedTimelineClipGroup({
+    clips,
+    groups: [],
+    clipIds: [clips[1].id, clips[0].id],
+  });
+  assert.deepEqual(created?.clipIds, [clips[0].id, clips[1].id]);
+  assert.equal(created?.label, "A + B");
+});
+
+test("getTimelineVideoBlockPlacements renders joined clips as one visual block", () => {
+  const clips = [
+    createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 3 }),
+    createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 4 }),
+  ];
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [clips[0].id, clips[1].id],
+      label: "A + B",
+    },
+  ];
+
+  const blocks = getTimelineVideoBlockPlacements(clips, groups);
+
+  assert.equal(blocks.length, 2);
+  assert.equal(blocks[0]?.kind, "group");
+  assert.equal(blocks[0]?.durationSeconds, 5);
+  assert.deepEqual(blocks[0]?.clipIds, [clips[0].id, clips[1].id]);
+  assert.equal(blocks[1]?.kind, "clip");
+  assert.equal(blocks[1]?.id, clips[2].id);
+});
+
+test("reorderTimelineVideoBlock moves a joined pair as one unit", () => {
+  const clips = [
+    createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "d", label: "D", durationSeconds: 2 }),
+  ];
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [clips[0].id, clips[1].id],
+      label: "A + B",
+    },
+  ];
+
+  const nextTimeline = reorderTimelineVideoBlock(clips, groups, { id: "group_1", kind: "group" }, 2);
+
+  assert.deepEqual(nextTimeline.videoClips.map((clip) => clip.assetId), ["c", "d", "a", "b"]);
+  assert.deepEqual(nextTimeline.videoClipGroups[0]?.clipIds, [clips[0].id, clips[1].id]);
+});
+
+test("duplicate and remove helpers preserve joined group structure", () => {
+  const clips = [
+    createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 }),
+    createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 }),
+  ];
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [clips[0].id, clips[1].id],
+      label: "A + B",
+    },
+  ];
+
+  const duplicated = duplicateTimelineClipGroup(clips, groups, "group_1");
+  assert.ok(duplicated);
+  assert.equal(duplicated?.videoClips.length, 5);
+  assert.equal(duplicated?.videoClipGroups.length, 2);
+  assert.deepEqual(duplicated?.duplicatedGroup.clipIds.length, 2);
+
+  const removed = removeTimelineClipGroup(clips, groups, "group_1");
+  assert.deepEqual(removed.videoClips.map((clip) => clip.assetId), ["c"]);
+  assert.deepEqual(removed.videoClipGroups, []);
+});
+
+test("unjoinTimelineClipGroup and replaceTimelineClipGroupWithClip cleanly collapse joined state", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 });
+  const third = createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 });
+  const baked = createDefaultVideoClip({ assetId: "baked", label: "Baked", durationSeconds: 4 });
+  const clips = [first, second, third];
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [first.id, second.id],
+      label: "A + B",
+    },
+  ];
+
+  assert.deepEqual(unjoinTimelineClipGroup(groups, "group_1"), []);
+
+  const nextTimeline = replaceTimelineClipGroupWithClip(clips, groups, "group_1", baked);
+  assert.deepEqual(nextTimeline.videoClips.map((clip) => clip.assetId), ["baked", "c"]);
+  assert.deepEqual(nextTimeline.videoClipGroups, []);
 });
 
 test("clamp trim helpers enforce asset boundaries and minimum durations", () => {

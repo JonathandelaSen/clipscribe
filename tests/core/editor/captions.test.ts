@@ -19,7 +19,7 @@ test("resolveCaptionSourceChunks reads embedded SRT chunks directly", () => {
   assert.equal(chunks[0].text, "Hello");
 });
 
-test("buildProjectCaptionTimeline offsets trimmed clip subtitles into project time", () => {
+test("buildProjectCaptionTimeline offsets trimmed clip subtitles into project time and ignores joined groups", () => {
   const now = Date.now();
   const historyItem: HistoryItem = {
     id: "history_1",
@@ -89,6 +89,14 @@ test("buildProjectCaptionTimeline offsets trimmed clip subtitles into project ti
   const secondClip = createDefaultVideoClip({ assetId: asset.id, label: "B", durationSeconds: 10 });
   project.assetIds = [asset.id];
   project.timeline.videoClips = [firstClip, secondClip];
+  project.timeline.videoClipGroups = [
+    {
+      id: "group_1",
+      kind: "joined",
+      clipIds: [firstClip.id, secondClip.id],
+      label: "A + B",
+    },
+  ];
 
   const chunks = buildProjectCaptionTimeline({
     project,

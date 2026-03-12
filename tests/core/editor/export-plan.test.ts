@@ -160,6 +160,60 @@ test("buildEditorExportPlan applies reverse filters to reversed clips before con
   );
 });
 
+test("buildEditorExportPlan ignores joined groups and still exports the flat clip sequence", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const videoA = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "a.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 5,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const videoB = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "b.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 4,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const first = createDefaultVideoClip({ assetId: videoA.id, label: "A", durationSeconds: 5 });
+  const second = createDefaultVideoClip({ assetId: videoB.id, label: "B", durationSeconds: 4 });
+  project.assetIds = [videoA.id, videoB.id];
+  project.timeline.videoClips = [first, second];
+  project.timeline.videoClipGroups = [
+    {
+      id: "group_1",
+      kind: "joined",
+      clipIds: [first.id, second.id],
+      label: "A + B",
+    },
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: videoA.id, path: "a.mp4", asset: videoA },
+      { inputIndex: 1, assetId: videoB.id, path: "b.mp4", asset: videoB },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.ok(plan.filterComplex.includes("[vseg0][aseg0][vseg1][aseg1]concat=n=2:v=1:a=1[video_track][clip_audio_track]"));
+  assert.equal(plan.durationSeconds, 9);
+});
+
 test("buildEditorExportPlan warns when an audio item source is missing", () => {
   const project = createEmptyEditorProject({ aspectRatio: "16:9" });
   const video = createEditorAssetRecord({

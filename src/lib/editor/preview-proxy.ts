@@ -3,9 +3,8 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL } from "@ffmpeg/util";
 
+import { FFMPEG_CORE_BASE_URL } from "@/lib/ffmpeg-config";
 import type { TimelineVideoClip } from "./types";
-
-const FFMPEG_CORE_BASE_URL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
 
 let previewFfmpeg: FFmpeg | null = null;
 let previewLoadPromise: Promise<FFmpeg> | null = null;
@@ -39,6 +38,22 @@ async function getPreviewFFmpeg(): Promise<FFmpeg> {
 
 function sanitizeFilename(value: string): string {
   return value.replace(/[^\w.-]+/g, "_");
+}
+
+export function buildReversedClipPreviewCacheKey(input: {
+  clip: TimelineVideoClip;
+  file: File;
+}): string {
+  const { clip, file } = input;
+  return [
+    clip.id,
+    clip.assetId,
+    clip.trimStartSeconds.toFixed(3),
+    clip.trimEndSeconds.toFixed(3),
+    file.name,
+    String(file.size),
+    String(file.lastModified),
+  ].join("|");
 }
 
 function buildReversePreviewFilter(clip: TimelineVideoClip, hasAudio: boolean): {
