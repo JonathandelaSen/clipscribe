@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   startTransition,
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
@@ -35,11 +36,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import {
-  COMMON_SUBTITLE_STYLE_PRESETS,
-  CREATOR_SUBTITLE_STYLE_LABELS,
-  resolveCreatorSubtitleStyle,
-} from "@/lib/creator/subtitle-style";
 import { secondsToClock } from "@/lib/creator/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLatestSubtitleForLanguage, getLatestTranscript, type HistoryItem } from "@/lib/history";
@@ -62,8 +58,7 @@ import {
   createClonedTimelineAudioItem,
   createClonedTimelineClip,
   ensureProjectSelection,
-  findAudioItemAtProjectTime,
-  findClipAtProjectTime,
+  getVideoClipMediaTime,
   getProjectDuration,
   getSelectionForLaneIndex,
   getTimelineAudioPlacements,
@@ -72,6 +67,7 @@ import {
   insertTimelineClipAfter,
   removeTimelineAudioItem,
   removeTimelineClip,
+  replaceTimelineClipsWithMergedClip,
   reorderTimelineClip,
   replaceTimelineAudioItem,
   replaceTimelineClip,
@@ -86,6 +82,7 @@ import { localEditorExportService } from "@/lib/editor/export-service";
 import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
+  createEmptyEditorProject,
   createDefaultAudioTrack,
   createDefaultVideoClip,
   createEditorAssetRecord,
@@ -139,6 +136,8 @@ const EDITOR_TOOLBAR_BUTTON_CLASS =
   "h-8 rounded-[0.85rem] border border-white/8 bg-white/[0.035] px-3 text-xs text-white/72 hover:bg-white/[0.08] hover:text-white";
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
 
+type InspectorVideoTab = "edit" | "transform" | "combine";
+
 type PreviewMode =
   | {
       kind: "timeline";
@@ -166,15 +165,6 @@ type TimelineClipboardItem =
 
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
-}
-
-function formatDateTime(timestamp: number): string {
-  return new Intl.DateTimeFormat("en", {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  }).format(timestamp);
 }
 
 function isShortcutTargetEditable(target: EventTarget | null): boolean {
@@ -257,7 +247,7 @@ function ProjectAssetThumbnail({
       className={cn(
         "group relative overflow-hidden rounded-xl border text-left transition-all duration-200",
         isActive
-          ? "border-cyan-400/50 shadow-[0_0_12px_rgba(34,211,238,0.12),inset_0_1px_0_rgba(103,232,249,0.18)]"
+          ? "border-white/80 shadow-[0_0_0_1px_rgba(255,255,255,0.2),0_0_18px_rgba(255,255,255,0.12),inset_0_1px_0_rgba(255,255,255,0.22)]"
           : "border-white/[0.06] hover:border-white/20 hover:shadow-[0_0_16px_rgba(255,255,255,0.03)]",
         isDragging
           ? "scale-[0.97] opacity-50 ring-1 ring-cyan-300/28"
@@ -373,7 +363,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const {
     project: loadedProject,
     assets: loadedAssets,
-    exports,
     isLoading,
     error,
     saveProject,
@@ -395,6 +384,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [exportProgress, setExportProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>({ kind: "timeline" });
+  const [inspectorVideoTab, setInspectorVideoTab] = useState<InspectorVideoTab>("edit");
+  const [selectedVideoClipIds, setSelectedVideoClipIds] = useState<string[]>([]);
+  const [isMergingClips, setIsMergingClips] = useState(false);
+  const isReversePreviewLoading = false;
   const [draggingClipId, setDraggingClipId] = useState<string | null>(null);
   const [draggingAssetId, setDraggingAssetId] = useState<string | null>(null);
   const [draggingAssetKind, setDraggingAssetKind] = useState<EditorAssetRecord["kind"] | null>(null);
@@ -529,12 +522,22 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   );
   const activePlacement = useMemo(() => {
     if (!project) return undefined;
-    return findClipAtProjectTime(project.timeline.videoClips, project.timeline.playheadSeconds) ?? clipPlacements[0];
+    return (
+      clipPlacements.find(
+        (placement) =>
+          project.timeline.playheadSeconds >= placement.startSeconds &&
+          project.timeline.playheadSeconds < placement.endSeconds
+      ) ?? clipPlacements[0]
+    );
   }, [clipPlacements, project]);
   const activeAudioPlacement = useMemo(() => {
     if (!project) return undefined;
-    return findAudioItemAtProjectTime(project.timeline.audioItems, project.timeline.playheadSeconds);
-  }, [project]);
+    return audioPlacements.find(
+      (placement) =>
+        project.timeline.playheadSeconds >= placement.startSeconds &&
+        project.timeline.playheadSeconds < placement.endSeconds
+    );
+  }, [audioPlacements, project]);
   const activeResolvedAsset = activePlacement ? resolvedAssetsMap.get(activePlacement.clip.assetId) : undefined;
   const activeResolvedAudioAsset = activeAudioPlacement ? resolvedAssetsMap.get(activeAudioPlacement.item.assetId) : undefined;
   const captionTimeline = useMemo(() => {
@@ -570,6 +573,18 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     : undefined;
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const selectedVideoClipSet = useMemo(() => new Set(selectedVideoClipIds), [selectedVideoClipIds]);
+  const selectedVideoPlacements = useMemo(
+    () =>
+      clipPlacements
+        .filter((placement) => selectedVideoClipSet.has(placement.clip.id))
+        .sort((left, right) => left.index - right.index),
+    [clipPlacements, selectedVideoClipSet]
+  );
+  const canMergeSelectedVideoClips =
+    selectedVideoPlacements.length === 2 &&
+    selectedVideoPlacements[1].index === selectedVideoPlacements[0].index + 1;
+  const effectiveTimelineVideoUrl = previewVideoUrl;
   const timelineZoomLevel = Math.max(1, project?.timeline.zoomLevel ?? 1);
   const maxVisibleDuration = Math.max(projectDuration, 1);
   const minVisibleDuration = Math.min(maxVisibleDuration, Math.max(3, maxVisibleDuration * 0.15));
@@ -700,19 +715,47 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       video.pause();
       return;
     }
-    const nextTime = activePlacement.clip.trimStartSeconds + (project.timeline.playheadSeconds - activePlacement.startSeconds);
+    if (!effectiveTimelineVideoUrl) {
+      video.pause();
+      return;
+    }
+    const clipMaxTime = Math.max(
+      activePlacement.clip.trimStartSeconds,
+      activePlacement.clip.trimEndSeconds - 0.001
+    );
+    const nextTime = clampNumber(
+      getVideoClipMediaTime(
+        activePlacement.clip,
+        activePlacement.startSeconds,
+        project.timeline.playheadSeconds
+      ),
+      activePlacement.clip.trimStartSeconds,
+      clipMaxTime
+    );
     if (!Number.isFinite(nextTime)) return;
-    if (Math.abs(video.currentTime - nextTime) > (isPlaying ? 0.35 : 0.05)) {
+    const seekThreshold = activePlacement.clip.actions.reverse ? 0.015 : isPlaying ? 0.35 : 0.05;
+    if (Math.abs(video.currentTime - nextTime) > seekThreshold) {
       try {
         video.currentTime = nextTime;
       } catch {}
+    }
+    if (activePlacement.clip.actions.reverse) {
+      video.pause();
+      return;
     }
     if (isPlaying) {
       void video.play().catch(() => {});
     } else {
       video.pause();
     }
-  }, [activePlacement, isPlaying, isTimelinePreview, previewVideoUrl, project]);
+  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, project]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isTimelinePreview || !activePlacement) return;
+    video.muted = activePlacement.clip.actions.reverse || activePlacement.clip.muted;
+    video.volume = activePlacement.clip.actions.reverse ? 0 : clampNumber(activePlacement.clip.volume, 0, 1);
+  }, [activePlacement, effectiveTimelineVideoUrl, isTimelinePreview]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -811,6 +854,30 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (assets.some((asset) => asset.id === previewMode.assetId)) return;
     setPreviewMode({ kind: "timeline" });
   }, [assets, previewMode]);
+
+  useEffect(() => {
+    const validVideoClipIds = new Set(project?.timeline.videoClips.map((clip) => clip.id) ?? []);
+    setSelectedVideoClipIds((current) => {
+      const filtered = current.filter((clipId) => validVideoClipIds.has(clipId));
+      if (selectedItem?.kind !== "video") {
+        return [];
+      }
+      if (filtered.length === 0) {
+        return [selectedItem.id];
+      }
+      if (!filtered.includes(selectedItem.id)) {
+        return [selectedItem.id];
+      }
+      return filtered.slice(-2);
+    });
+    if (selectedItem?.kind !== "video") {
+      setInspectorVideoTab("edit");
+    }
+  }, [project?.timeline.videoClips, selectedItem]);
+
+  const invalidateReversePreviewCache = useCallback((clipId?: string) => {
+    void clipId;
+  }, []);
 
   const updateProject = (updater: (current: EditorProjectRecord) => EditorProjectRecord) => {
     setProject((current) => {
@@ -913,14 +980,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const updateSelectedClip = (updater: (clip: TimelineVideoClip) => TimelineVideoClip) => {
     if (!selectedClip || !selectedClipAsset) return;
+    const nextClip = clampVideoClipToAsset(updater(selectedClip), selectedClipAsset.durationSeconds);
+    const needsReversePreviewRefresh =
+      selectedClip.trimStartSeconds !== nextClip.trimStartSeconds ||
+      selectedClip.trimEndSeconds !== nextClip.trimEndSeconds ||
+      selectedClip.actions.reverse !== nextClip.actions.reverse;
+    if (needsReversePreviewRefresh) {
+      invalidateReversePreviewCache(selectedClip.id);
+    }
     updateProject((current) => ({
       ...current,
       timeline: {
         ...current.timeline,
-        videoClips: replaceTimelineClip(
-          current.timeline.videoClips,
-          clampVideoClipToAsset(updater(selectedClip), selectedClipAsset.durationSeconds)
-        ),
+        videoClips: replaceTimelineClip(current.timeline.videoClips, nextClip),
       },
     }));
   };
@@ -952,6 +1024,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     updateSelectedClip(resetTimelineVideoClipAudio);
   };
 
+  const resetSelectedClipTransform = () => {
+    updateSelectedClip((clip) => ({
+      ...clip,
+      actions: {
+        ...clip.actions,
+        reverse: false,
+      },
+    }));
+  };
+
   const resetSelectedAudioTrim = () => {
     if (!selectedAudioAsset) return;
     updateSelectedAudioItem((item) => resetTimelineAudioItemTrim(item, selectedAudioAsset.durationSeconds));
@@ -968,8 +1050,25 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
-  const focusTimelineSelection = (selection: TimelineSelection, playheadSeconds?: number) => {
+  const focusTimelineSelection = (
+    selection: TimelineSelection,
+    playheadSeconds?: number,
+    options?: { extendVideoSelection?: boolean }
+  ) => {
     setPreviewMode({ kind: "timeline" });
+    if (selection.kind === "video") {
+      setSelectedVideoClipIds((current) => {
+        if (!options?.extendVideoSelection) return [selection.id];
+        if (current.includes(selection.id)) {
+          const next = current.filter((clipId) => clipId !== selection.id);
+          return next.length === 0 ? [selection.id] : next.slice(-2);
+        }
+        const next = [...current, selection.id];
+        return next.slice(-2);
+      });
+    } else {
+      setSelectedVideoClipIds([]);
+    }
     updateProject((current) => ({
       ...current,
       timeline: {
@@ -1003,6 +1102,103 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       };
     });
     setPreviewMode({ kind: "timeline" });
+  };
+
+  const mergeSelectedTimelineClips = async () => {
+    if (!project || !canMergeSelectedVideoClips) return;
+
+    const mergePlacements = [...selectedVideoPlacements].sort((left, right) => left.index - right.index);
+    const mergeClipIds = mergePlacements.map((placement) => placement.clip.id);
+    const requiredAssetIds = new Set(mergePlacements.map((placement) => placement.clip.assetId));
+    const missingAsset = mergePlacements.find((placement) => resolvedAssetsMap.get(placement.clip.assetId)?.missing);
+    if (missingAsset) {
+      toast.error(`Missing source media for "${missingAsset.clip.label}". Replace it before merging.`);
+      return;
+    }
+
+    const mergeProject = createEmptyEditorProject({
+      name: `${mergePlacements.map((placement) => placement.clip.label).join(" + ")} merged`,
+      aspectRatio: project.aspectRatio,
+    });
+    mergeProject.assetIds = [...requiredAssetIds];
+    mergeProject.timeline.videoClips = mergePlacements.map((placement) => ({
+      ...placement.clip,
+      canvas: { ...placement.clip.canvas },
+      actions: { ...placement.clip.actions },
+    }));
+    mergeProject.timeline.audioItems = [];
+    mergeProject.timeline.selectedItem = { kind: "video", id: mergePlacements[0].clip.id };
+    mergeProject.subtitles = {
+      ...project.subtitles,
+      enabled: false,
+    };
+
+    const mergeResolvedAssets = resolvedAssets.filter((resolved) => requiredAssetIds.has(resolved.asset.id));
+    setIsMergingClips(true);
+    setIsPlaying(false);
+
+    try {
+      const result = await localEditorExportService.exportProject({
+        project: mergeProject,
+        resolvedAssets: mergeResolvedAssets,
+        historyMap,
+        resolution: exportResolution,
+      });
+      const metadata = await readMediaMetadata(result.file);
+      const mergedLabel = mergePlacements.map((placement) => placement.clip.label).join(" + ");
+      const mergedAsset = createEditorAssetRecord({
+        projectId: project.id,
+        kind: "video",
+        filename: result.file.name,
+        mimeType: result.file.type || "video/mp4",
+        sizeBytes: result.file.size,
+        durationSeconds: metadata.durationSeconds || getProjectDuration(mergeProject),
+        width: metadata.width ?? result.width,
+        height: metadata.height ?? result.height,
+        hasAudio: metadata.hasAudio,
+        sourceType: "upload",
+        captionSource: { kind: "none" },
+        fileBlob: result.file,
+      });
+      const mergedClip = createDefaultVideoClip({
+        assetId: mergedAsset.id,
+        label: mergedLabel,
+        durationSeconds: mergedAsset.durationSeconds,
+      });
+
+      await saveAssets([mergedAsset]);
+      setAssets((current) => [...current, mergedAsset]);
+      mergeClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => {
+        const nextClips = replaceTimelineClipsWithMergedClip(
+          current.timeline.videoClips,
+          mergedClip,
+          mergeClipIds
+        );
+        const mergedPlacement = getTimelineClipPlacements(nextClips).find((placement) => placement.clip.id === mergedClip.id);
+        return {
+          ...current,
+          assetIds: current.assetIds.includes(mergedAsset.id)
+            ? current.assetIds
+            : [...current.assetIds, mergedAsset.id],
+          timeline: {
+            ...current.timeline,
+            videoClips: nextClips,
+            selectedItem: { kind: "video", id: mergedClip.id },
+            playheadSeconds: mergedPlacement?.startSeconds ?? current.timeline.playheadSeconds,
+          },
+        };
+      });
+      setSelectedVideoClipIds([mergedClip.id]);
+      setInspectorVideoTab("combine");
+      toast.success(`Merged ${mergePlacements.length} clips into one video`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to merge the selected clips.";
+      toast.error(message);
+    } finally {
+      setIsMergingClips(false);
+    }
   };
 
   const appendAudioAssetToTimeline = (asset: EditorAssetRecord) => {
@@ -1140,6 +1336,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (project.timeline.selectedItem.kind === "video") {
       const removedIndex = project.timeline.videoClips.findIndex((clip) => clip.id === project.timeline.selectedItem?.id);
       if (removedIndex < 0) return false;
+      invalidateReversePreviewCache(project.timeline.selectedItem.id);
       setPreviewMode({ kind: "timeline" });
       updateProject((current) => {
         const nextClips = removeTimelineClip(current.timeline.videoClips, current.timeline.selectedItem?.id ?? "");
@@ -1174,6 +1371,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const splitSelectedTimelineClip = () => {
     if (!selectedClip) return false;
+    invalidateReversePreviewCache(selectedClip.id);
     setPreviewMode({ kind: "timeline" });
     updateProject((current) => ({
       ...current,
@@ -1294,6 +1492,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const handleDeleteAsset = async (asset: EditorAssetRecord) => {
     if (!project) return;
+    const removedClipIds = project.timeline.videoClips
+      .filter((clip) => clip.assetId === asset.id)
+      .map((clip) => clip.id);
+    removedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
     setAssets((current) => current.filter((item) => item.id !== asset.id));
     await deleteAsset(asset.id);
     updateProject((current) => ({
@@ -1856,13 +2058,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             }}
                           >
                             {previewMode.kind === "timeline" ? (
-                              previewVideoUrl ? (
+                              effectiveTimelineVideoUrl ? (
                                 <>
                                   <video
                                     ref={videoRef}
-                                    key={`timeline:${previewVideoUrl}`}
-                                    src={previewVideoUrl}
-                                    muted={false}
+                                    key={`timeline:${effectiveTimelineVideoUrl}`}
+                                    src={effectiveTimelineVideoUrl}
+                                    preload="auto"
                                     playsInline
                                     className="absolute inset-0 h-full w-full object-cover"
                                     style={{
@@ -1893,12 +2095,32 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       </div>
                                     </div>
                                   ) : null}
+                                  {isReversePreviewLoading ? (
+                                    <div className="absolute inset-0 grid place-items-center bg-black/55 backdrop-blur-[2px]">
+                                      <div className="rounded-[1rem] border border-cyan-300/20 bg-slate-950/90 px-4 py-3 text-center shadow-[0_16px_44px_rgba(0,0,0,0.45)]">
+                                        <Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin text-cyan-200" />
+                                        <div className="text-sm font-medium text-white">Preparing reversed preview</div>
+                                        <div className="mt-1 text-xs uppercase tracking-[0.22em] text-white/45">
+                                          Cached local proxy
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ) : null}
                                 </>
                               ) : (
                                 <div className="absolute inset-0 grid place-items-center text-center text-white/45">
                                   <div>
-                                    <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
-                                    No video source resolved for the current playhead.
+                                    {isReversePreviewLoading ? (
+                                      <>
+                                        <Loader2 className="mx-auto mb-4 h-12 w-12 animate-spin text-cyan-200/70" />
+                                        Rebuilding the reversed clip preview…
+                                      </>
+                                    ) : (
+                                      <>
+                                        <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                        No video source resolved for the current playhead.
+                                      </>
+                                    )}
                                   </div>
                                 </div>
                               )
@@ -1907,6 +2129,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 <video
                                   key={`asset:${previewVideoUrl}`}
                                   src={previewVideoUrl}
+                                  preload="auto"
                                   controls
                                   playsInline
                                   className="absolute inset-0 h-full w-full object-contain"
@@ -2051,169 +2274,284 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         </Button>
                     </div>
 
-                    <Tabs defaultValue="selection" className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 pt-1.5 sm:px-2 sm:pb-2">
-                      <TabsList className="grid w-full shrink-0 grid-cols-3 rounded-[0.75rem] border border-white/8 bg-black/25 p-1">
-                        <TabsTrigger value="selection" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
-                          Selection
-                        </TabsTrigger>
-                        <TabsTrigger value="subtitles" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
-                          Subtitles
-                        </TabsTrigger>
-                        <TabsTrigger value="exports" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
-                          Exports
-                        </TabsTrigger>
-                      </TabsList>
-
-                      <TabsContent value="selection" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
+                    <div className="flex min-h-0 flex-1 flex-col px-1.5 pb-1.5 pt-1.5 sm:px-2 sm:pb-2">
+                      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                         {selectedClip && selectedClipAsset ? (
-                          <>
+                          <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
-                              <div className={EDITOR_LABEL_CLASS}>Selected Clip</div>
-                              <div className="mt-2 text-lg font-semibold text-white">{selectedClip.label}</div>
-                              <div className="mt-1 text-sm text-white/50">{selectedClipAsset.filename}</div>
-                            </div>
-
-                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <div className="flex items-center justify-between gap-3">
-                                <div className={EDITOR_LABEL_CLASS}>Trim</div>
-                                <SectionResetButton onClick={resetSelectedClipTrim} />
-                              </div>
-                              <label className="text-xs uppercase tracking-[0.24em] text-white/45">
-                                Trim Start · {secondsToClock(selectedClip.trimStartSeconds)}
-                              </label>
-                              <input
-                                type="range"
-                                min={0}
-                                max={Math.max(selectedClipAsset.durationSeconds - 0.5, 0.5)}
-                                step={0.01}
-                                value={selectedClip.trimStartSeconds}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    trimStartSeconds: Number(event.target.value),
-                                  }))
-                                }
-                                className="w-full"
-                              />
-                              <label className="text-xs uppercase tracking-[0.24em] text-white/45">
-                                Trim End · {secondsToClock(selectedClip.trimEndSeconds)}
-                              </label>
-                              <input
-                                type="range"
-                                min={Math.min(selectedClip.trimStartSeconds + 0.5, selectedClipAsset.durationSeconds)}
-                                max={selectedClipAsset.durationSeconds}
-                                step={0.01}
-                                value={selectedClip.trimEndSeconds}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    trimEndSeconds: Number(event.target.value),
-                                  }))
-                                }
-                                className="w-full"
-                              />
-                            </div>
-
-                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <div className="flex items-center justify-between gap-3">
-                                <div className={EDITOR_LABEL_CLASS}>Frame</div>
-                                <SectionResetButton onClick={resetSelectedClipFrame} />
-                              </div>
-                              <label className="text-xs text-white/55">Zoom · {selectedClip.canvas.zoom.toFixed(2)}x</label>
-                              <input
-                                type="range"
-                                min={0.6}
-                                max={2.4}
-                                step={0.01}
-                                value={selectedClip.canvas.zoom}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    canvas: {
-                                      ...clip.canvas,
-                                      zoom: Number(event.target.value),
-                                    },
-                                  }))
-                                }
-                                className="w-full"
-                              />
-                              <label className="text-xs text-white/55">Pan X · {Math.round(selectedClip.canvas.panX)}px</label>
-                              <input
-                                type="range"
-                                min={-240}
-                                max={240}
-                                step={1}
-                                value={selectedClip.canvas.panX}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    canvas: {
-                                      ...clip.canvas,
-                                      panX: Number(event.target.value),
-                                    },
-                                  }))
-                                }
-                                className="w-full"
-                              />
-                              <label className="text-xs text-white/55">Pan Y · {Math.round(selectedClip.canvas.panY)}px</label>
-                              <input
-                                type="range"
-                                min={-240}
-                                max={240}
-                                step={1}
-                                value={selectedClip.canvas.panY}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    canvas: {
-                                      ...clip.canvas,
-                                      panY: Number(event.target.value),
-                                    },
-                                  }))
-                                }
-                                className="w-full"
-                              />
-                            </div>
-
-                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                              <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <div className={EDITOR_LABEL_CLASS}>Clip Audio</div>
-                                  <SectionResetButton onClick={resetSelectedClipAudio} />
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className={EDITOR_LABEL_CLASS}>Selected Clip</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">{selectedClip.label}</div>
+                                  <div className="mt-1 text-sm text-white/50">{selectedClipAsset.filename}</div>
                                 </div>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  className="h-8 rounded-lg px-2 text-white/60 hover:bg-white/[0.06] hover:text-white"
-                                  onClick={() =>
-                                    updateSelectedClip((clip) => ({
-                                      ...clip,
-                                      muted: !clip.muted,
-                                    }))
-                                  }
+                                <div
+                                  className={cn(
+                                    "rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]",
+                                    selectedClip.actions.reverse
+                                      ? "border border-cyan-300/24 bg-cyan-300/12 text-cyan-100"
+                                      : "border border-white/8 bg-white/[0.04] text-white/45"
+                                  )}
                                 >
-                                  {selectedClip.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-                                </Button>
+                                  {selectedClip.actions.reverse ? "Reverse On" : "Normal"}
+                                </div>
                               </div>
-                              <label className="text-xs text-white/55">Volume · {Math.round(selectedClip.volume * 100)}%</label>
-                              <input
-                                type="range"
-                                min={0}
-                                max={1}
-                                step={0.01}
-                                value={selectedClip.volume}
-                                onChange={(event) =>
-                                  updateSelectedClip((clip) => ({
-                                    ...clip,
-                                    volume: Number(event.target.value),
-                                  }))
-                                }
-                                className="w-full"
-                              />
                             </div>
-                          </>
+
+                            <Tabs
+                              value={inspectorVideoTab}
+                              onValueChange={(value) => setInspectorVideoTab(value as InspectorVideoTab)}
+                              className="flex min-h-0 flex-col"
+                            >
+                              <TabsList className="grid w-full shrink-0 grid-cols-3 rounded-[0.75rem] border border-white/8 bg-black/25 p-1">
+                                <TabsTrigger value="edit" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
+                                  Edit
+                                </TabsTrigger>
+                                <TabsTrigger value="transform" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
+                                  Transform
+                                </TabsTrigger>
+                                <TabsTrigger value="combine" className="rounded-[0.72rem] text-[11px] data-[state=active]:bg-white/[0.08] data-[state=active]:text-white">
+                                  Combine
+                                </TabsTrigger>
+                              </TabsList>
+
+                              <TabsContent value="edit" className="mt-2 space-y-2.5">
+                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className={EDITOR_LABEL_CLASS}>Trim</div>
+                                    <SectionResetButton onClick={resetSelectedClipTrim} />
+                                  </div>
+                                  <label className="text-xs uppercase tracking-[0.24em] text-white/45">
+                                    Trim Start · {secondsToClock(selectedClip.trimStartSeconds)}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={Math.max(selectedClipAsset.durationSeconds - 0.5, 0.5)}
+                                    step={0.01}
+                                    value={selectedClip.trimStartSeconds}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        trimStartSeconds: Number(event.target.value),
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                  <label className="text-xs uppercase tracking-[0.24em] text-white/45">
+                                    Trim End · {secondsToClock(selectedClip.trimEndSeconds)}
+                                  </label>
+                                  <input
+                                    type="range"
+                                    min={Math.min(selectedClip.trimStartSeconds + 0.5, selectedClipAsset.durationSeconds)}
+                                    max={selectedClipAsset.durationSeconds}
+                                    step={0.01}
+                                    value={selectedClip.trimEndSeconds}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        trimEndSeconds: Number(event.target.value),
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className={EDITOR_LABEL_CLASS}>Frame</div>
+                                    <SectionResetButton onClick={resetSelectedClipFrame} />
+                                  </div>
+                                  <label className="text-xs text-white/55">Zoom · {selectedClip.canvas.zoom.toFixed(2)}x</label>
+                                  <input
+                                    type="range"
+                                    min={0.6}
+                                    max={2.4}
+                                    step={0.01}
+                                    value={selectedClip.canvas.zoom}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        canvas: {
+                                          ...clip.canvas,
+                                          zoom: Number(event.target.value),
+                                        },
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                  <label className="text-xs text-white/55">Pan X · {Math.round(selectedClip.canvas.panX)}px</label>
+                                  <input
+                                    type="range"
+                                    min={-240}
+                                    max={240}
+                                    step={1}
+                                    value={selectedClip.canvas.panX}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        canvas: {
+                                          ...clip.canvas,
+                                          panX: Number(event.target.value),
+                                        },
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                  <label className="text-xs text-white/55">Pan Y · {Math.round(selectedClip.canvas.panY)}px</label>
+                                  <input
+                                    type="range"
+                                    min={-240}
+                                    max={240}
+                                    step={1}
+                                    value={selectedClip.canvas.panY}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        canvas: {
+                                          ...clip.canvas,
+                                          panY: Number(event.target.value),
+                                        },
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                </div>
+
+                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <div className={EDITOR_LABEL_CLASS}>Clip Audio</div>
+                                      <SectionResetButton onClick={resetSelectedClipAudio} />
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-8 rounded-lg px-2 text-white/60 hover:bg-white/[0.06] hover:text-white"
+                                      onClick={() =>
+                                        updateSelectedClip((clip) => ({
+                                          ...clip,
+                                          muted: !clip.muted,
+                                        }))
+                                      }
+                                    >
+                                      {selectedClip.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                                    </Button>
+                                  </div>
+                                  <label className="text-xs text-white/55">Volume · {Math.round(selectedClip.volume * 100)}%</label>
+                                  <input
+                                    type="range"
+                                    min={0}
+                                    max={1}
+                                    step={0.01}
+                                    value={selectedClip.volume}
+                                    onChange={(event) =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        volume: Number(event.target.value),
+                                      }))
+                                    }
+                                    className="w-full"
+                                  />
+                                </div>
+                              </TabsContent>
+
+                              <TabsContent value="transform" className="mt-2 space-y-2.5">
+                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <div className={EDITOR_LABEL_CLASS}>Reverse Clip</div>
+                                      <div className="mt-1 text-sm text-white/55">
+                                        Reverse playback in the editor preview and in exported output.
+                                      </div>
+                                    </div>
+                                    <SectionResetButton onClick={resetSelectedClipTransform} />
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    className={cn(
+                                      EDITOR_TOOLBAR_BUTTON_CLASS,
+                                      "h-10 w-full justify-center rounded-[0.95rem] border-white/10 text-sm",
+                                      selectedClip.actions.reverse
+                                        ? "border-cyan-300/24 bg-cyan-300/12 text-cyan-100 hover:bg-cyan-300/18"
+                                        : ""
+                                    )}
+                                    onClick={() =>
+                                      updateSelectedClip((clip) => ({
+                                        ...clip,
+                                        actions: {
+                                          ...clip.actions,
+                                          reverse: !clip.actions.reverse,
+                                        },
+                                      }))
+                                    }
+                                  >
+                                    {selectedClip.actions.reverse ? <Check className="mr-2 h-4 w-4" /> : null}
+                                    {selectedClip.actions.reverse ? "Reversed" : "Enable Reverse"}
+                                  </Button>
+                                  <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                    {selectedClip.actions.reverse
+                                      ? "This clip now plays backward as a regular transformed clip."
+                                      : "Clip playback remains forward until reverse is enabled."}
+                                  </div>
+                                </div>
+                              </TabsContent>
+
+                              <TabsContent value="combine" className="mt-2 space-y-2.5">
+                                <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                      <div className={EDITOR_LABEL_CLASS}>Merge Selected Clips</div>
+                                      <div className="mt-1 text-sm text-white/55">
+                                        Select exactly two adjacent video clips in the timeline, then merge them into one video clip.
+                                      </div>
+                                    </div>
+                                    <div className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
+                                      {selectedVideoPlacements.length} selected
+                                    </div>
+                                  </div>
+                                  <div className="space-y-2">
+                                    {selectedVideoPlacements.length > 0 ? (
+                                      selectedVideoPlacements.map((placement) => (
+                                        <div
+                                          key={placement.clip.id}
+                                          className="flex items-center justify-between rounded-[0.85rem] border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-white/72"
+                                        >
+                                          <span className="truncate pr-3">{placement.clip.label}</span>
+                                          <span className="font-mono text-[11px] text-white/36">
+                                            {secondsToClock(placement.durationSeconds)}
+                                          </span>
+                                        </div>
+                                      ))
+                                    ) : (
+                                      <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-4 text-sm text-white/45">
+                                        Select one clip, open `Combine`, then click the second adjacent clip in the timeline.
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                    {selectedVideoPlacements.length !== 2
+                                      ? "Merge activates when exactly two video clips are selected."
+                                      : canMergeSelectedVideoClips
+                                        ? "The selected clips are adjacent and ready to become one video."
+                                        : "Select two adjacent clips. Non-adjacent clips cannot be merged."}
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    disabled={!canMergeSelectedVideoClips || isMergingClips}
+                                    className="h-10 w-full rounded-[0.95rem] border border-cyan-300/18 bg-cyan-300/90 text-sm font-semibold text-slate-950 hover:bg-cyan-200 disabled:cursor-not-allowed disabled:opacity-50"
+                                    onClick={() => void mergeSelectedTimelineClips()}
+                                  >
+                                    {isMergingClips ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                                    Merge Selected Clips
+                                  </Button>
+                                </div>
+                              </TabsContent>
+                            </Tabs>
+                          </div>
                         ) : selectedAudioItem && selectedAudioAsset ? (
-                          <>
+                          <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
                               <div className={EDITOR_LABEL_CLASS}>Selected Audio Item</div>
                               <div className="mt-2 text-lg font-semibold text-white">{selectedAudioAsset.filename}</div>
@@ -2318,220 +2656,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 className="w-full"
                               />
                             </div>
-                          </>
+                          </div>
                         ) : (
                           <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/45">
-                            Select a clip or audio item in the timeline to edit its trim, framing, and level settings.
+                            Select a timeline video clip to use actions. Audio selections still show trim and track controls here.
                           </div>
                         )}
-                      </TabsContent>
-
-                      <TabsContent value="subtitles" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
-                        <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
-                          <div className="flex items-center justify-between">
-                            <div>
-                              <div className={EDITOR_LABEL_CLASS}>Subtitle Track</div>
-                              <div className="mt-1 text-sm text-white/55">
-                                Derived from history subtitles or attached SRT files.
-                              </div>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className={EDITOR_TOOLBAR_BUTTON_CLASS}
-                              onClick={() =>
-                                updateProject((current) => ({
-                                  ...current,
-                                  subtitles: {
-                                    ...current.subtitles,
-                                    enabled: !current.subtitles.enabled,
-                                  },
-                                }))
-                              }
-                            >
-                              {project.subtitles.enabled ? <Check className="mr-2 h-4 w-4" /> : null}
-                              {project.subtitles.enabled ? "Enabled" : "Disabled"}
-                            </Button>
-                          </div>
-                        </div>
-
-                        <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                          <label className={EDITOR_LABEL_CLASS}>Preset</label>
-                          <Select
-                            value={project.subtitles.preset}
-                            onValueChange={(value) =>
-                              updateProject((current) => ({
-                                ...current,
-                                subtitles: {
-                                  ...current.subtitles,
-                                  preset: value as EditorProjectRecord["subtitles"]["preset"],
-                                  style: resolveCreatorSubtitleStyle(
-                                    value as EditorProjectRecord["subtitles"]["preset"],
-                                    current.subtitles.style
-                                  ),
-                                },
-                              }))
-                            }
-                          >
-                            <SelectTrigger className="h-9 rounded-lg border-white/8 bg-white/[0.04] text-white">
-                              <SelectValue placeholder="Subtitle preset" />
-                            </SelectTrigger>
-                            <SelectContent className="border-white/10 bg-slate-950 text-white">
-                              {Object.entries(CREATOR_SUBTITLE_STYLE_LABELS).map(([value, label]) => (
-                                <SelectItem key={value} value={value}>
-                                  {label}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <div className="grid gap-2 text-xs text-white/55">
-                            {COMMON_SUBTITLE_STYLE_PRESETS.map((preset) => (
-                              <button
-                                key={preset.id}
-                                type="button"
-                                className="rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2 text-left transition-colors hover:border-white/18 hover:bg-white/[0.05]"
-                                onClick={() =>
-                                  updateProject((current) => ({
-                                    ...current,
-                                    subtitles: {
-                                      ...current.subtitles,
-                                      preset: preset.style.preset,
-                                      style: preset.style,
-                                    },
-                                  }))
-                                }
-                              >
-                                <div className="font-medium text-white">{preset.name}</div>
-                                <div className="text-white/45">{preset.description}</div>
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-
-                        <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
-                          <label className="text-xs text-white/55">Scale · {project.subtitles.scale.toFixed(2)}x</label>
-                          <input
-                            type="range"
-                            min={0.7}
-                            max={1.8}
-                            step={0.01}
-                            value={project.subtitles.scale}
-                            onChange={(event) =>
-                              updateProject((current) => ({
-                                ...current,
-                                subtitles: {
-                                  ...current.subtitles,
-                                  scale: Number(event.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full"
-                          />
-                          <label className="text-xs text-white/55">
-                            X Position · {project.subtitles.positionXPercent.toFixed(0)}%
-                          </label>
-                          <input
-                            type="range"
-                            min={10}
-                            max={90}
-                            step={1}
-                            value={project.subtitles.positionXPercent}
-                            onChange={(event) =>
-                              updateProject((current) => ({
-                                ...current,
-                                subtitles: {
-                                  ...current.subtitles,
-                                  positionXPercent: Number(event.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full"
-                          />
-                          <label className="text-xs text-white/55">
-                            Y Position · {project.subtitles.positionYPercent.toFixed(0)}%
-                          </label>
-                          <input
-                            type="range"
-                            min={55}
-                            max={92}
-                            step={1}
-                            value={project.subtitles.positionYPercent}
-                            onChange={(event) =>
-                              updateProject((current) => ({
-                                ...current,
-                                subtitles: {
-                                  ...current.subtitles,
-                                  positionYPercent: Number(event.target.value),
-                                },
-                              }))
-                            }
-                            className="w-full"
-                          />
-                        </div>
-                      </TabsContent>
-
-                      <TabsContent value="exports" className="mt-2 min-h-0 flex-1 space-y-2.5 overflow-y-auto pr-1">
-                        <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
-                          <div className={EDITOR_LABEL_CLASS}>Export Status</div>
-                          {isExporting ? (
-                            <div className="mt-3 space-y-2">
-                              <div className="flex items-center gap-2 text-sm text-white">
-                                <Loader2 className="h-4 w-4 animate-spin" />
-                                Rendering {exportResolution}
-                              </div>
-                              <div className="h-2 overflow-hidden rounded-full bg-white/10">
-                                <div
-                                  className="h-full bg-[linear-gradient(90deg,rgba(34,211,238,0.8),rgba(251,191,36,0.75))]"
-                                  style={{ width: `${exportProgress}%` }}
-                                />
-                              </div>
-                              <div className="text-xs text-white/45">{exportProgress}%</div>
-                            </div>
-                          ) : (
-                            <div className="mt-3 text-sm text-white/55">
-                              {project.latestExport
-                                ? `Last export ${project.latestExport.resolution} · ${project.latestExport.aspectRatio} · ${formatDateTime(project.latestExport.createdAt)}`
-                                : "No export run yet for this project."}
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="space-y-3">
-                          {exports.length === 0 ? (
-                            <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/45">
-                              Export history is metadata only. Render an export to create the first audit record.
-                            </div>
-                          ) : (
-                            exports.map((record) => (
-                              <div key={record.id} className={cn(EDITOR_SECTION_CLASS, "p-3")}>
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <div className="text-sm font-medium text-white">{record.filename}</div>
-                                    <div className="mt-1 text-xs text-white/45">
-                                      {record.resolution} · {record.aspectRatio} · {formatDateTime(record.createdAt)}
-                                    </div>
-                                  </div>
-                                  <span
-                                    className={cn(
-                                      "rounded-full px-3 py-1 text-[11px] uppercase tracking-[0.24em]",
-                                      record.status === "completed"
-                                        ? "border border-emerald-400/20 bg-emerald-500/10 text-emerald-100"
-                                        : "border border-red-400/20 bg-red-500/10 text-red-100"
-                                    )}
-                                  >
-                                    {record.status}
-                                  </span>
-                                </div>
-                                {record.error ? <div className="mt-3 text-sm text-red-100">{record.error}</div> : null}
-                                {record.warnings?.length ? (
-                                  <div className="mt-3 text-xs text-amber-100/80">{record.warnings.join(" ")}</div>
-                                ) : null}
-                              </div>
-                            ))
-                          )}
-                        </div>
-                      </TabsContent>
-                    </Tabs>
+                      </div>
+                    </div>
                   </CardContent>
                 </Card>
               </div>
@@ -2793,7 +2925,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       ) : null}
 
                       {visibleClipPlacements.map((placement, index) => {
-                        const isSelected = selectedItem?.kind === "video" && selectedItem.id === placement.clip.id;
+                        const isSelected = selectedVideoClipSet.has(placement.clip.id);
+                        const isPrimarySelected = selectedItem?.kind === "video" && selectedItem.id === placement.clip.id;
                         const isDragging = draggingClipId === placement.clip.id;
                         const isDropTarget = dropTargetIndex === index && draggingClipId !== placement.clip.id;
                         return (
@@ -2850,12 +2983,28 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             }}
                             onClick={(event) => {
                               event.stopPropagation();
-                              focusTimelineSelection({ kind: "video", id: placement.clip.id }, placement.startSeconds);
+                              const isMergeSelectionClick =
+                                inspectorVideoTab === "combine" &&
+                                selectedItem?.kind === "video" &&
+                                selectedItem.id !== placement.clip.id;
+                              focusTimelineSelection(
+                                { kind: "video", id: placement.clip.id },
+                                placement.startSeconds,
+                                {
+                                  extendVideoSelection:
+                                    event.metaKey ||
+                                    event.ctrlKey ||
+                                    event.shiftKey ||
+                                    isMergeSelectionClick,
+                                }
+                              );
                             }}
                             className={cn(
                               "absolute top-1/2 h-[82%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
-                              isSelected
-                                ? "border-cyan-300/40 bg-[linear-gradient(180deg,rgba(17,56,73,0.9),rgba(7,26,35,0.94))] shadow-[inset_0_1px_0_rgba(103,232,249,0.16),0_0_0_1px_rgba(103,232,249,0.08)]"
+                              isPrimarySelected
+                                ? "border-white/80 bg-[linear-gradient(180deg,rgba(52,58,68,0.92),rgba(18,22,29,0.98))] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(255,255,255,0.24),0_0_24px_rgba(255,255,255,0.1)]"
+                                : isSelected
+                                  ? "border-white/55 bg-[linear-gradient(180deg,rgba(40,45,54,0.9),rgba(16,20,27,0.96))] shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_0_18px_rgba(255,255,255,0.06)]"
                                 : "border-white/10 bg-[linear-gradient(180deg,rgba(28,33,42,0.9),rgba(14,17,23,0.96))] hover:border-white/18 hover:bg-[linear-gradient(180deg,rgba(34,40,50,0.92),rgba(17,20,28,0.96))]",
                               isDragging ? "scale-[0.985] opacity-60" : "",
                               isDropTarget ? "shadow-[0_0_0_1px_rgba(103,232,249,0.18)]" : "",
@@ -2870,7 +3019,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             <div className="pointer-events-none absolute inset-y-2 right-1.5 w-[4px] rounded-full bg-white/10" />
                             <div className="pointer-events-none flex h-full flex-col justify-between pl-2">
                               <div>
-                                <div className="truncate text-sm font-medium text-white">{placement.clip.label}</div>
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="truncate text-sm font-medium text-white">{placement.clip.label}</div>
+                                  {placement.clip.actions.reverse ? (
+                                    <span className="rounded-full border border-cyan-300/22 bg-cyan-300/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-cyan-100">
+                                      Rev
+                                    </span>
+                                  ) : null}
+                                </div>
                                 <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/44">
                                   <span className="truncate">{placement.clip.muted ? "Muted clip audio" : "Clip audio on"}</span>
                                   <span className="font-mono">{secondsToClock(placement.durationSeconds)}</span>
@@ -2940,7 +3096,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               className={cn(
                                 "absolute top-1/2 h-[68%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
                                 isSelected
-                                  ? "border-amber-200/45 bg-[linear-gradient(180deg,rgba(113,73,13,0.88),rgba(67,42,10,0.92))] shadow-[inset_0_1px_0_rgba(253,224,71,0.16),0_0_0_1px_rgba(253,224,71,0.08)]"
+                                  ? "border-white/80 bg-[linear-gradient(180deg,rgba(84,67,32,0.88),rgba(42,31,12,0.94))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.22),0_0_20px_rgba(255,255,255,0.08)]"
                                   : "border-amber-300/28 bg-[linear-gradient(180deg,rgba(90,61,12,0.78),rgba(47,31,8,0.9))] shadow-[inset_0_1px_0_rgba(253,224,71,0.12)] hover:border-amber-200/40 hover:bg-[linear-gradient(180deg,rgba(104,69,15,0.8),rgba(58,37,10,0.92))]"
                               )}
                               style={{

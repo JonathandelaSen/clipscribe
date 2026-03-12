@@ -2,14 +2,14 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Clapperboard, Film, FolderOpen, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Film, FolderOpen, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useEditorLibrary } from "@/hooks/useEditorLibrary";
 import { createEmptyEditorProject } from "@/lib/editor/storage";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Toaster } from "@/components/ui/sonner";
 
 function formatRelativeDate(timestamp: number): string {
@@ -61,9 +61,7 @@ export function EditorProjectLibrary() {
                   <h1 className="font-[var(--font-geist-sans)] text-4xl font-semibold tracking-tight text-white sm:text-5xl">
                     Projects and export history
                   </h1>
-                  <p className="mt-3 max-w-2xl text-sm leading-6 text-white/65 sm:text-base">
-                    Browser-local timeline projects with clip sequencing, caption track support, and export audits.
-                  </p>
+
                 </div>
               </div>
             </div>
@@ -78,14 +76,12 @@ export function EditorProjectLibrary() {
           </div>
         </header>
 
-        <section className="grid gap-5 lg:grid-cols-[1.4fr_0.9fr]">
+        <section className="flex flex-col gap-5">
           <Card className="border-white/10 bg-white/[0.03] text-white shadow-[0_18px_70px_rgba(0,0,0,0.38)]">
             <CardHeader className="flex flex-row items-center justify-between gap-4">
               <div>
                 <CardTitle className="text-xl">Project Library</CardTitle>
-                <CardDescription className="text-white/55">
-                  Open any saved timeline and continue editing from where you left off.
-                </CardDescription>
+
               </div>
               <div className="rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs uppercase tracking-[0.24em] text-white/55">
                 {projects.length} saved
@@ -173,31 +169,7 @@ export function EditorProjectLibrary() {
             </CardContent>
           </Card>
 
-          <Card className="border-white/10 bg-white/[0.03] text-white shadow-[0_18px_70px_rgba(0,0,0,0.38)]">
-            <CardHeader>
-              <CardTitle className="text-xl">V1 Capabilities</CardTitle>
-              <CardDescription className="text-white/55">
-                The new editor is intentionally focused: fast, browser-local, and project based.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 text-sm leading-6 text-white/70">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="mb-2 flex items-center gap-2 font-medium text-white">
-                  <Clapperboard className="h-4 w-4 text-cyan-200" />
-                  Timeline editing
-                </div>
-                Sequence multiple clips, trim or split them, build a ripple audio track, and keep a live caption track.
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="mb-2 font-medium text-white">Exports</div>
-                Export `16:9`, `9:16`, `1:1`, or `4:5` at `720p`, `1080p`, or experimental `4K`.
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <div className="mb-2 font-medium text-white">Persistence</div>
-                Projects and export records are saved in this browser only. Old export entries are stored as metadata, not archived video files.
-              </div>
-            </CardContent>
-          </Card>
+
         </section>
       </div>
       <Toaster theme="dark" position="bottom-center" />

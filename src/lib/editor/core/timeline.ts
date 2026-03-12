@@ -27,6 +27,21 @@ export function getVideoClipDuration(clip: TimelineVideoClip): number {
   return roundMs(Math.max(0.5, clip.trimEndSeconds - clip.trimStartSeconds));
 }
 
+export function getVideoClipMediaTime(
+  clip: TimelineVideoClip,
+  clipStartSeconds: number,
+  playheadSeconds: number
+): number {
+  const clipOffsetSeconds = Math.max(0, playheadSeconds - clipStartSeconds);
+  if (!clip.actions.reverse) {
+    return roundMs(clip.trimStartSeconds + clipOffsetSeconds);
+  }
+
+  // Avoid landing on the exact trim end because browsers often snap that to media end.
+  const reverseTrimEnd = Math.max(clip.trimStartSeconds, clip.trimEndSeconds - 0.001);
+  return roundMs(reverseTrimEnd - clipOffsetSeconds);
+}
+
 export function getAudioItemDuration(item: TimelineAudioItem): number {
   return roundMs(Math.max(0.5, item.trimEndSeconds - item.trimStartSeconds));
 }
@@ -291,6 +306,21 @@ export function insertTimelineClipAfter(
   const result = [...clips];
   result.splice(index + 1, 0, nextClip);
   return result;
+}
+
+export function replaceTimelineClipsWithMergedClip(
+  clips: TimelineVideoClip[],
+  mergedClip: TimelineVideoClip,
+  mergedClipIds: string[]
+): TimelineVideoClip[] {
+  if (mergedClipIds.length === 0) return clips;
+  const selectedIds = new Set(mergedClipIds);
+  const firstIndex = clips.findIndex((clip) => selectedIds.has(clip.id));
+  if (firstIndex < 0) return clips;
+
+  const nextClips = clips.filter((clip) => !selectedIds.has(clip.id));
+  nextClips.splice(firstIndex, 0, mergedClip);
+  return nextClips;
 }
 
 export function appendTimelineAudioItem(

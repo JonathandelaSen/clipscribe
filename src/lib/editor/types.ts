@@ -35,6 +35,10 @@ export interface EditorCanvasState {
   panY: number;
 }
 
+export interface TimelineVideoClipActions {
+  reverse: boolean;
+}
+
 export interface TimelineVideoClip {
   id: string;
   assetId: string;
@@ -44,6 +48,7 @@ export interface TimelineVideoClip {
   canvas: EditorCanvasState;
   volume: number;
   muted: boolean;
+  actions: TimelineVideoClipActions;
 }
 
 export interface TimelineAudioItem {

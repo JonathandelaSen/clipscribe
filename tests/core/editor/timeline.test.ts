@@ -8,9 +8,12 @@ import {
   findClipAtProjectTime,
   getContiguousAudioStartOffset,
   getProjectDuration,
+  getVideoClipMediaTime,
   getSelectionForLaneIndex,
   getTimelineClipPlacements,
   insertTimelineAudioItemAfter,
+  insertTimelineClipAfter,
+  replaceTimelineClipsWithMergedClip,
   reorderTimelineClip,
   resetTimelineAudioItemTrack,
   resetTimelineAudioItemTrim,
@@ -50,6 +53,31 @@ test("splitTimelineClip splits the selected clip around the playhead", () => {
   assert.equal(split[0].trimEndSeconds, 4);
   assert.equal(split[1].trimStartSeconds, 4);
   assert.equal(split[1].trimEndSeconds, 10);
+});
+
+test("createDefaultVideoClip starts with reverse disabled", () => {
+  const clip = createDefaultVideoClip({ assetId: "video-1", label: "Clip", durationSeconds: 5 });
+
+  assert.equal(clip.actions.reverse, false);
+});
+
+test("getVideoClipMediaTime maps forward and reversed clips to the correct source time", () => {
+  const forwardClip = {
+    ...createDefaultVideoClip({ assetId: "video-1", label: "Forward", durationSeconds: 12 }),
+    trimStartSeconds: 2,
+    trimEndSeconds: 8,
+  };
+  const reversedClip = {
+    ...forwardClip,
+    actions: {
+      ...forwardClip.actions,
+      reverse: true,
+    },
+  };
+
+  assert.equal(getVideoClipMediaTime(forwardClip, 10, 12.5), 4.5);
+  assert.equal(getVideoClipMediaTime(reversedClip, 10, 10), 7.999);
+  assert.equal(getVideoClipMediaTime(reversedClip, 10, 12.5), 5.499);
 });
 
 test("reorderTimelineClip moves a clip to the requested index", () => {
@@ -132,6 +160,34 @@ test("normalizeLegacyEditorProjectRecord upgrades selected clip and audio track 
   assert.deepEqual(normalized.timeline.selectedItem, { kind: "video", id: clip.id });
   assert.equal(normalized.timeline.audioItems.length, 1);
   assert.equal(normalized.timeline.audioItems[0].id, audio.id);
+  assert.equal(normalized.timeline.videoClips[0]?.actions.reverse, false);
+});
+
+test("insertTimelineClipAfter supports merge-style insertion after the selected clip", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 });
+  const merged = createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 });
+
+  const nextClips = insertTimelineClipAfter([first, second], merged, first.id);
+
+  assert.deepEqual(
+    nextClips.map((clip) => clip.assetId),
+    ["a", "c", "b"]
+  );
+});
+
+test("replaceTimelineClipsWithMergedClip collapses selected clips into one clip", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 });
+  const third = createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 2 });
+  const merged = createDefaultVideoClip({ assetId: "merged", label: "Merged", durationSeconds: 4 });
+
+  const nextClips = replaceTimelineClipsWithMergedClip([first, second, third], merged, [first.id, second.id]);
+
+  assert.deepEqual(
+    nextClips.map((clip) => clip.assetId),
+    ["merged", "c"]
+  );
 });
 
 test("insertTimelineAudioItemAfter ripples later audio items to the right", () => {

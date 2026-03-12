@@ -13,12 +13,16 @@ import type {
   EditorSubtitlePreset,
   TimelineSelection,
   TimelineAudioItem,
+  TimelineVideoClipActions,
   TimelineVideoClip,
 } from "./types";
 
 const DEFAULT_SUBTITLE_PRESET: EditorSubtitlePreset = "clean_caption";
 export const DEFAULT_EDITOR_MEDIA_VOLUME = 1;
 export const DEFAULT_EDITOR_MEDIA_MUTED = false;
+export const DEFAULT_TIMELINE_VIDEO_CLIP_ACTIONS: TimelineVideoClipActions = {
+  reverse: false,
+};
 
 type LegacyEditorProjectTimelineState = Partial<EditorProjectRecord["timeline"]> & {
   selectedClipId?: string;
@@ -39,6 +43,24 @@ export function getDefaultEditorCanvasState(): EditorCanvasState {
   };
 }
 
+export function getDefaultTimelineVideoClipActions(): TimelineVideoClipActions {
+  return {
+    ...DEFAULT_TIMELINE_VIDEO_CLIP_ACTIONS,
+  };
+}
+
+export function normalizeTimelineVideoClip(
+  clip: TimelineVideoClip | (Omit<TimelineVideoClip, "actions"> & { actions?: Partial<TimelineVideoClipActions> | null })
+): TimelineVideoClip {
+  return {
+    ...clip,
+    actions: {
+      ...DEFAULT_TIMELINE_VIDEO_CLIP_ACTIONS,
+      ...(clip.actions ?? {}),
+    },
+  };
+}
+
 export function createDefaultVideoClip(input: {
   assetId: string;
   label: string;
@@ -53,6 +75,7 @@ export function createDefaultVideoClip(input: {
     canvas: getDefaultEditorCanvasState(),
     volume: DEFAULT_EDITOR_MEDIA_VOLUME,
     muted: DEFAULT_EDITOR_MEDIA_MUTED,
+    actions: getDefaultTimelineVideoClipActions(),
   };
 }
 
@@ -125,7 +148,9 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
       playheadSeconds: timeline.playheadSeconds ?? 0,
       zoomLevel: timeline.zoomLevel ?? 1,
       selectedItem,
-      videoClips: Array.isArray(timeline.videoClips) ? timeline.videoClips : [],
+      videoClips: Array.isArray(timeline.videoClips)
+        ? timeline.videoClips.map((clip) => normalizeTimelineVideoClip(clip))
+        : [],
       audioItems,
     },
   };

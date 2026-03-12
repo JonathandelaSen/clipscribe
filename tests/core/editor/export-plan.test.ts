@@ -107,6 +107,59 @@ test("buildEditorExportPlan assembles concat + multi-item audio mix graph", () =
   assert.deepEqual(plan.ffmpegArgs, ["-i", "a.mp4", "-i", "b.mp4", "-i", "bed-a.mp3", "-i", "bed-b.mp3"]);
 });
 
+test("buildEditorExportPlan applies reverse filters to reversed clips before concat", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const videoA = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "a.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 8,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const videoB = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "b.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 6,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const reversedClip = createDefaultVideoClip({ assetId: videoA.id, label: "A", durationSeconds: 8 });
+  reversedClip.actions.reverse = true;
+
+  project.assetIds = [videoA.id, videoB.id];
+  project.timeline.videoClips = [
+    reversedClip,
+    createDefaultVideoClip({ assetId: videoB.id, label: "B", durationSeconds: 6 }),
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: videoA.id, path: "a.mp4", asset: videoA },
+      { inputIndex: 1, assetId: videoB.id, path: "b.mp4", asset: videoB },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.match(plan.filterComplex, /\[0:v\]trim=start=0:end=8,setpts=PTS-STARTPTS,reverse,/);
+  assert.match(plan.filterComplex, /\[0:a\]atrim=start=0:end=8,asetpts=PTS-STARTPTS,areverse,volume=1\.000\[aseg0\]/);
+  assert.ok(
+    plan.filterComplex.includes("[vseg0][aseg0][vseg1][aseg1]concat=n=2:v=1:a=1[video_track][clip_audio_track]")
+  );
+});
+
 test("buildEditorExportPlan warns when an audio item source is missing", () => {
   const project = createEmptyEditorProject({ aspectRatio: "16:9" });
   const video = createEditorAssetRecord({

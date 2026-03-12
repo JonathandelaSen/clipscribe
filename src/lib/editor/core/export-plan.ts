@@ -75,16 +75,26 @@ export function buildEditorExportPlan(input: {
       outputHeight: height,
     });
     const videoLabel = `vseg${placement.index}`;
+    const videoFilters = [
+      `trim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds}`,
+      "setpts=PTS-STARTPTS",
+      placement.clip.actions.reverse ? "reverse" : null,
+      geometry.filter,
+    ].filter(Boolean);
     filterParts.push(
-      `[${inputRef.inputIndex}:v]trim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds},setpts=PTS-STARTPTS,${geometry.filter}[${videoLabel}]`
+      `[${inputRef.inputIndex}:v]${videoFilters.join(",")}[${videoLabel}]`
     );
 
     const audioLabel = `aseg${placement.index}`;
     if (inputRef.asset.hasAudio && !placement.clip.muted && placement.clip.volume > 0) {
+      const audioFilters = [
+        `atrim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds}`,
+        "asetpts=PTS-STARTPTS",
+        placement.clip.actions.reverse ? "areverse" : null,
+        `volume=${placement.clip.volume.toFixed(3)}`,
+      ].filter(Boolean);
       filterParts.push(
-        `[${inputRef.inputIndex}:a]atrim=start=${placement.clip.trimStartSeconds}:end=${placement.clip.trimEndSeconds},asetpts=PTS-STARTPTS,volume=${placement.clip.volume.toFixed(
-          3
-        )}[${audioLabel}]`
+        `[${inputRef.inputIndex}:a]${audioFilters.join(",")}[${audioLabel}]`
       );
     } else {
       filterParts.push(`anullsrc=r=48000:cl=stereo,atrim=duration=${placement.durationSeconds.toFixed(3)}[${audioLabel}]`);
