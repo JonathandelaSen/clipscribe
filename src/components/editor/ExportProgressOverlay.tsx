@@ -1,9 +1,11 @@
 "use client";
 
-import { Film, Loader2 } from "lucide-react";
+import { Film, Loader2, X } from "lucide-react";
 
+import { isBrowserRenderCancelableStage, type BrowserRenderStage } from "@/lib/browser-render";
 import type { EditorResolution } from "@/lib/editor/types";
 
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
   Dialog,
@@ -13,12 +15,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-export type EditorExportPhase = "preparing" | "rendering" | "finalizing" | "complete";
 export type EditorProgressMode = "export" | "bake";
 
 const PHASE_COPY: Record<
   EditorProgressMode,
-  Record<EditorExportPhase, { badge: string; title: string; description: string; helper: string; label: string }>
+  Record<BrowserRenderStage, { badge: string; title: string; description: string; helper: string; label: string }>
 > = {
   export: {
     preparing: {
@@ -35,7 +36,7 @@ const PHASE_COPY: Record<
       helper: "Editing is locked until the MP4 render finishes.",
       label: "Timeline Export",
     },
-    finalizing: {
+    handoff: {
       badge: "Finalizing",
       title: "Finalizing the MP4",
       description: "The video is being packaged for download and the export audit trail is being wrapped up.",
@@ -65,7 +66,7 @@ const PHASE_COPY: Record<
       helper: "Timeline interactions are paused until the baked clip is ready.",
       label: "Bake Clip",
     },
-    finalizing: {
+    handoff: {
       badge: "Finalizing",
       title: "Packaging the baked video",
       description: "The baked MP4 is being validated and prepared for insertion back into the timeline.",
@@ -92,17 +93,22 @@ export function ExportProgressOverlay({
   projectName,
   resolution,
   progressPct,
-  phase,
+  stage,
+  canCancel,
+  onCancel,
 }: {
   open: boolean;
   mode: EditorProgressMode;
   projectName: string;
   resolution: EditorResolution;
   progressPct: number;
-  phase: EditorExportPhase;
+  stage: BrowserRenderStage;
+  canCancel?: boolean;
+  onCancel?: () => void;
 }) {
   const safeProgress = clampProgress(progressPct);
-  const copy = PHASE_COPY[mode][phase];
+  const copy = PHASE_COPY[mode][stage];
+  const showCancel = Boolean(canCancel && onCancel && isBrowserRenderCancelableStage(stage));
 
   return (
     <Dialog open={open}>
@@ -148,7 +154,7 @@ export function ExportProgressOverlay({
             />
             <div className="flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.24em] text-white/46">
               <span>{copy.badge}</span>
-              <span>{safeProgress === 100 ? "Locked until handoff finishes" : "Interaction temporarily blocked"}</span>
+              <span>{stage === "complete" ? "Locked until handoff finishes" : "Interaction temporarily blocked"}</span>
             </div>
           </div>
 
@@ -171,6 +177,22 @@ export function ExportProgressOverlay({
 
           <div className="rounded-[1rem] border border-white/10 bg-white/[0.04] px-4 py-3 text-sm leading-6 text-white/66">
             {copy.helper}
+          </div>
+
+          <div className="flex items-center justify-end">
+            {showCancel ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                onClick={onCancel}
+              >
+                <X className="mr-2 h-4 w-4" />
+                Cancel
+              </Button>
+            ) : (
+              <div className="text-xs uppercase tracking-[0.24em] text-white/38">Locked during handoff</div>
+            )}
           </div>
         </div>
       </DialogContent>

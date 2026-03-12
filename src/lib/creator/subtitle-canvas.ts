@@ -12,6 +12,7 @@
  * exported video will be pixel-identical to what the user sees.
  */
 
+import { throwIfBrowserRenderCanceled } from "@/lib/browser-render";
 import {
   cssRgbaFromHex,
   getSubtitleMaxCharsPerLine,
@@ -47,14 +48,17 @@ const FONT_URL =
 
 let cachedFontFace: FontFace | null = null;
 
-async function ensureCanvasFont(): Promise<boolean> {
+async function ensureCanvasFont(signal?: AbortSignal): Promise<boolean> {
   if (cachedFontFace) return true;
   try {
-    const res = await fetch(FONT_URL);
+    throwIfBrowserRenderCanceled(signal);
+    const res = await fetch(FONT_URL, signal ? { signal } : undefined);
     if (!res.ok) return false;
     const fontData = await res.arrayBuffer();
+    throwIfBrowserRenderCanceled(signal);
     const face = new FontFace("InterSubtitle", fontData, { weight: "700" });
     await face.load();
+    throwIfBrowserRenderCanceled(signal);
     // Register so OffscreenCanvas ctx.font can use it
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (self as any).fonts?.add(face);
@@ -185,13 +189,14 @@ export async function renderSubtitlesToPngs(
   clip: CreatorViralClip,
   plan: CreatorShortPlan,
   editor: CreatorShortEditorState,
-  timeOffsetSeconds: number
+  timeOffsetSeconds: number,
+  signal?: AbortSignal
 ): Promise<SubtitlePngFrame[]> {
   if ((editor.showSubtitles ?? true) === false || subtitleChunks.length === 0) {
     return [];
   }
 
-  const fontLoaded = await ensureCanvasFont();
+  const fontLoaded = await ensureCanvasFont(signal);
   if (!fontLoaded) {
     console.warn("subtitle-canvas: Inter font failed to load — PNGs will use fallback font");
   }
@@ -210,6 +215,7 @@ export async function renderSubtitlesToPngs(
   const frames: SubtitlePngFrame[] = [];
 
   for (const chunk of subtitleChunks) {
+    throwIfBrowserRenderCanceled(signal);
     const startAbs = chunk.timestamp?.[0];
     const endAbs   = chunk.timestamp?.[1];
     if (startAbs == null) continue;
@@ -229,7 +235,9 @@ export async function renderSubtitlesToPngs(
     if (!lines.length) continue;
 
     const canvas = renderChunk(style, lines, anchorX, anchorY, fontSize);
+    throwIfBrowserRenderCanceled(signal);
     const blob = await canvas.convertToBlob({ type: "image/png" });
+    throwIfBrowserRenderCanceled(signal);
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
 
     const idx = frames.length;

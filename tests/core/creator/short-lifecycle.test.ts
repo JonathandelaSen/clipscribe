@@ -9,6 +9,7 @@ import {
   deriveDefaultShortProjectName,
   markShortProjectExported,
   markShortProjectFailed,
+  restoreShortProjectAfterCanceledExport,
 } from "../../../src/lib/creator/core/short-lifecycle";
 
 const sampleClip: CreatorViralClip = {
@@ -157,6 +158,43 @@ test("markShortProjectExported and markShortProjectFailed update status metadata
   assert.equal(failed.status, "error");
   assert.equal(failed.lastError, "boom");
   assert.equal(failed.updatedAt, 300);
+});
+
+test("restoreShortProjectAfterCanceledExport keeps current config and restores prior non-exporting metadata", () => {
+  const exporting = buildShortProjectRecord({
+    status: "exporting",
+    now: 100,
+    newId: "sp_1",
+    sourceProjectId: "proj",
+    sourceMediaId: "media",
+    sourceFilename: "f.mp4",
+    transcriptId: "tx",
+    subtitleId: "sub",
+    clip: {
+      ...sampleClip,
+      startSeconds: 14,
+      endSeconds: 30,
+      durationSeconds: 16,
+    },
+    plan: samplePlan,
+    editor: sampleEditor,
+    savedRecords: [],
+    secondsToClock: (s) => `${s}`,
+  });
+
+  const restored = restoreShortProjectAfterCanceledExport(exporting, {
+    now: 250,
+    previousProject: {
+      status: "exported",
+      lastExportId: "exp_prev",
+      lastError: undefined,
+    },
+  });
+
+  assert.equal(restored.clip.startSeconds, 14);
+  assert.equal(restored.status, "exported");
+  assert.equal(restored.lastExportId, "exp_prev");
+  assert.equal(restored.updatedAt, 250);
 });
 
 test("buildCompletedShortExportRecord and render response produce stable local-browser payloads", () => {

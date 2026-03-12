@@ -241,6 +241,22 @@ export function markEditorProjectSaved(project: EditorProjectRecord, now = Date.
   };
 }
 
+export function restoreEditorProjectAfterCanceledExport(
+  project: EditorProjectRecord,
+  previousProject: Pick<EditorProjectRecord, "status" | "latestExport" | "lastError"> | null,
+  now = Date.now()
+): EditorProjectRecord {
+  const previousStatus = previousProject?.status;
+  return {
+    ...project,
+    status: previousStatus && previousStatus !== "exporting" ? previousStatus : "draft",
+    updatedAt: now,
+    lastOpenedAt: now,
+    latestExport: previousProject?.latestExport ?? project.latestExport,
+    lastError: previousProject?.lastError,
+  };
+}
+
 function sanitizePersistedPlayheadSeconds(playheadSeconds: number): number {
   return Number.isFinite(playheadSeconds) ? Math.max(0, playheadSeconds) : 0;
 }

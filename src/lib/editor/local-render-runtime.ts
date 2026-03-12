@@ -1,7 +1,12 @@
+import {
+  createBrowserRenderCanceledError,
+  isBrowserRenderCanceledError,
+  type BrowserRenderLifecycle,
+} from "../browser-render";
 import type { EditorResolution } from "./types";
 
 type EditorFfmpegRunner = {
-  exec(args: string[], timeout?: number): Promise<number>;
+  exec(args: string[], timeout?: number, options?: { signal?: AbortSignal }): Promise<number>;
 };
 
 export interface EditorFfmpegExecInput {
@@ -13,6 +18,7 @@ export interface EditorFfmpegExecInput {
   durationSeconds: number;
   logTail: string[];
   resetFfmpeg?: () => void | Promise<void>;
+  lifecycle?: BrowserRenderLifecycle;
 }
 
 export function buildEditorFfmpegExecErrorMessage(input: {
@@ -66,7 +72,9 @@ async function throwEditorFfmpegExecError(
 
 export async function runEditorFfmpegExec(input: EditorFfmpegExecInput): Promise<void> {
   try {
-    const exitCode = await input.ff.exec(input.args, input.timeoutMs);
+    const exitCode = await input.ff.exec(input.args, input.timeoutMs, {
+      signal: input.lifecycle?.signal,
+    });
     if (exitCode === 0) return;
 
     const rawMessage = exitCode === 1 ? "FFmpeg timed out while rendering." : `FFmpeg exited with code ${exitCode}.`;
@@ -78,6 +86,10 @@ export async function runEditorFfmpegExec(input: EditorFfmpegExecInput): Promise
   } catch (error) {
     if (error instanceof EditorFfmpegExecError) {
       throw error;
+    }
+
+    if (isBrowserRenderCanceledError(error) || input.lifecycle?.signal?.aborted) {
+      throw createBrowserRenderCanceledError();
     }
 
     const rawMessage = error instanceof Error ? error.message : String(error);

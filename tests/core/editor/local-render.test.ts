@@ -94,3 +94,32 @@ test("runEditorFfmpegExec turns non-zero exit codes into detailed errors and res
     }
   );
 });
+
+test("runEditorFfmpegExec surfaces user cancellation without resetting FFmpeg again", async () => {
+  let resetCalls = 0;
+
+  await assert.rejects(
+    () =>
+      runEditorFfmpegExec({
+        ff: {
+          async exec() {
+            throw new Error("called FFmpeg.terminate()");
+          },
+        },
+        args: ["-i", "a.mp4", "out.mp4"],
+        timeoutMs: 180_000,
+        resolution: "1080p",
+        clipCount: 1,
+        durationSeconds: 8,
+        logTail: [],
+        resetFfmpeg: () => {
+          resetCalls += 1;
+        },
+      }),
+    (error) => {
+      assert.equal(resetCalls, 0);
+      assert.match(String(error), /Browser render canceled/);
+      return true;
+    }
+  );
+});

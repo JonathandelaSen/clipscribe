@@ -91,9 +91,17 @@ import {
 import { prepareTimelineClipBake } from "@/lib/editor/core/bake";
 import { localEditorExportService } from "@/lib/editor/export-service";
 import {
+  createActiveBrowserRenderSession,
+  isBrowserRenderCancelableStage,
+  isBrowserRenderCanceledError,
+  type ActiveBrowserRenderSession,
+  type BrowserRenderStage,
+} from "@/lib/browser-render";
+import {
   buildReversedClipPreviewCacheKey,
   renderReversedClipPreview,
 } from "@/lib/editor/preview-proxy";
+import { resetFFmpeg } from "@/lib/ffmpeg";
 import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
@@ -105,6 +113,7 @@ import {
   markEditorProjectFailed,
   markEditorProjectSaved,
   normalizeLegacyEditorProjectRecord,
+  restoreEditorProjectAfterCanceledExport,
   serializeEditorProjectForPersistence,
 } from "@/lib/editor/storage";
 import type {
@@ -133,10 +142,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
-import {
-  ExportProgressOverlay,
-  type EditorExportPhase,
-} from "@/components/editor/ExportProgressOverlay";
+import { ExportProgressOverlay } from "@/components/editor/ExportProgressOverlay";
 
 const ASPECT_OPTIONS: EditorAspectRatio[] = ["16:9", "9:16", "1:1", "4:5"];
 const RESOLUTION_OPTIONS: EditorResolution[] = ["720p", "1080p", "4K"];
@@ -222,13 +228,6 @@ function useObjectUrl(file: File | null | undefined) {
   }, [url]);
 
   return url;
-}
-
-function getEditorExportPhase(progressPct: number): EditorExportPhase {
-  if (progressPct >= 100) return "complete";
-  if (progressPct >= 95) return "finalizing";
-  if (progressPct >= 15) return "rendering";
-  return "preparing";
 }
 
 function SectionResetButton({
@@ -518,6 +517,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const reversePreviewInflightRef = useRef(new Map<string, Promise<void>>());
   const reversePreviewTokensRef = useRef(new Map<string, number>());
   const reversePreviewSessionRef = useRef(0);
+  const renderSessionCounterRef = useRef(0);
+  const exportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
+  const bakeSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
+  const exportRestoreSnapshotRef = useRef<Pick<EditorProjectRecord, "status" | "latestExport" | "lastError"> | null>(null);
+  const exportProjectRef = useRef<EditorProjectRecord | null>(null);
 
   const {
     project: loadedProject,
@@ -541,7 +545,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [exportResolution, setExportResolution] = useState<EditorResolution>("1080p");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
   const [isExporting, setIsExporting] = useState(false);
+  const [exportStage, setExportStage] = useState<BrowserRenderStage>("preparing");
   const [exportProgress, setExportProgress] = useState(0);
+  const [bakeStage, setBakeStage] = useState<BrowserRenderStage>("preparing");
   const [bakeProgress, setBakeProgress] = useState(0);
   const [bakeProjectName, setBakeProjectName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
@@ -568,6 +574,35 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     rightPct: 24,
   });
   const isRenderBusy = isExporting || isBakingClip;
+
+  const beginRenderSession = useCallback(() => {
+    return createActiveBrowserRenderSession(++renderSessionCounterRef.current);
+  }, []);
+
+  const syncExportStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
+    const session = exportSessionRef.current;
+    if (!session || session.id !== sessionId) return;
+    session.stage = stage;
+    setExportStage(stage);
+  }, []);
+
+  const syncBakeStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
+    const session = bakeSessionRef.current;
+    if (!session || session.id !== sessionId) return;
+    session.stage = stage;
+    setBakeStage(stage);
+  }, []);
+
+  const commitCanceledExportRestore = useCallback(
+    (projectToRestore: EditorProjectRecord | null) => {
+      if (!projectToRestore) return;
+      setProject(projectToRestore);
+      void saveProject(projectToRestore).catch((error) => {
+        console.error("Failed to persist canceled export state", error);
+      });
+    },
+    [saveProject]
+  );
 
   useEffect(() => {
     if (!loadedProject) return;
@@ -1547,6 +1582,48 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     toast.success("Clips unjoined");
   };
 
+  const handleCancelBake = useCallback(() => {
+    const session = bakeSessionRef.current;
+    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
+    session.controller.abort();
+    resetFFmpeg();
+    bakeSessionRef.current = null;
+    setIsBakingClip(false);
+    setBakeStage("preparing");
+    setBakeProgress(0);
+    setBakeProjectName("");
+    toast("Bake canceled");
+  }, []);
+
+  const handleCancelExport = useCallback(() => {
+    const session = exportSessionRef.current;
+    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
+
+    session.controller.abort();
+    resetFFmpeg();
+    exportSessionRef.current = null;
+    setIsExporting(false);
+    setExportStage("preparing");
+    setExportProgress(0);
+
+    const exportingProject = exportProjectRef.current;
+    const projectToRestore =
+      exportingProject != null
+        ? restoreEditorProjectAfterCanceledExport(
+            exportingProject,
+            exportRestoreSnapshotRef.current,
+            Date.now()
+          )
+        : null;
+
+    if (projectToRestore) {
+      exportProjectRef.current = projectToRestore;
+      commitCanceledExportRestore(projectToRestore);
+    }
+
+    toast("Export canceled");
+  }, [commitCanceledExportRestore]);
+
   const bakeSelectedTimelineGroup = async () => {
     if (!project || !selectedVideoGroup || selectedGroupClipPlacements.length !== selectedVideoGroup.clipIds.length) {
       return;
@@ -1566,8 +1643,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     });
     const requiredAssetIdSet = new Set(requiredAssetIds);
     const bakeResolvedAssets = resolvedAssets.filter((resolved) => requiredAssetIdSet.has(resolved.asset.id));
+    const session = beginRenderSession();
+    bakeSessionRef.current = session;
     setBakeProjectName(bakeProject.name);
     setBakeProgress(1);
+    setBakeStage(session.stage);
     setIsBakingClip(true);
     setIsPlaying(false);
 
@@ -1578,8 +1658,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         historyMap,
         resolution: exportResolution,
         onProgress: setBakeProgress,
+        renderLifecycle: {
+          signal: session.controller.signal,
+          onStageChange: (stage) => syncBakeStage(session.id, stage),
+        },
       });
+      if (bakeSessionRef.current?.id !== session.id) return;
       const metadata = await readMediaMetadata(result.file);
+      if (bakeSessionRef.current?.id !== session.id) return;
       const bakedAsset = createEditorAssetRecord({
         projectId: project.id,
         kind: "video",
@@ -1601,6 +1687,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       });
 
       await saveAssets([bakedAsset]);
+      if (bakeSessionRef.current?.id !== session.id) return;
       setAssets((current) => [...current, bakedAsset]);
       bakedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
       setPreviewMode({ kind: "timeline" });
@@ -1633,15 +1720,23 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       setFocusedJoinedClipId(null);
       setSelectedVideoClipIds([bakedClip.id]);
       setInspectorVideoTab("edit");
+      syncBakeStage(session.id, "complete");
       toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
     } catch (error) {
+      if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted) {
+        return;
+      }
       const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
       console.error("Failed to bake joined clip", error);
       toast.error(message.split("\n")[0] || "Failed to bake the joined clip.");
     } finally {
-      setIsBakingClip(false);
-      setBakeProgress(0);
-      setBakeProjectName("");
+      if (bakeSessionRef.current?.id === session.id) {
+        bakeSessionRef.current = null;
+        setIsBakingClip(false);
+        setBakeStage("preparing");
+        setBakeProgress(0);
+        setBakeProjectName("");
+      }
     }
   };
 
@@ -2134,12 +2229,22 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       serializeEditorProjectForPersistence(project, persistedPlayheadSecondsRef.current),
       Date.now()
     );
+    const session = beginRenderSession();
+    exportSessionRef.current = session;
+    exportRestoreSnapshotRef.current = {
+      status: project.status,
+      latestExport: project.latestExport,
+      lastError: project.lastError,
+    };
+    exportProjectRef.current = exportingProject;
     setProject(exportingProject);
     setIsExporting(true);
+    setExportStage(session.stage);
     setExportProgress(1);
 
     try {
       await saveProject(exportingProject);
+      if (exportSessionRef.current?.id !== session.id) return;
 
       const result = await localEditorExportService.exportProject({
         project: exportingProject,
@@ -2147,7 +2252,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         historyMap,
         resolution: exportResolution,
         onProgress: setExportProgress,
+        renderLifecycle: {
+          signal: session.controller.signal,
+          onStageChange: (stage) => syncExportStage(session.id, stage),
+        },
       });
+      if (exportSessionRef.current?.id !== session.id) return;
 
       downloadBlob(result.file);
       const exportRecord = buildEditorExportRecord({
@@ -2165,6 +2275,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         debugNotes: result.notes,
       });
       await saveExport(exportRecord);
+      if (exportSessionRef.current?.id !== session.id) return;
 
       const nextProject = markEditorProjectSaved(
         {
@@ -2182,9 +2293,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         Date.now()
       );
       await saveProject(nextProject);
+      if (exportSessionRef.current?.id !== session.id) return;
+      syncExportStage(session.id, "complete");
       setProject(nextProject);
       toast.success(`Exported ${result.file.name}`);
     } catch (err) {
+      if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted) {
+        return;
+      }
+
       const message = err instanceof Error ? err.message : "Export failed";
       try {
         const failedRecord = buildEditorExportRecord({
@@ -2203,17 +2320,38 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         await saveExport(failedRecord);
         const nextProject = markEditorProjectFailed(exportingProject, message, Date.now());
         await saveProject(nextProject);
-        setProject(nextProject);
+        if (exportSessionRef.current?.id === session.id) {
+          setProject(nextProject);
+        }
       } catch (persistError) {
         console.error("Failed to persist export failure state", persistError);
-        setProject(markEditorProjectFailed(exportingProject, message, Date.now()));
+        if (exportSessionRef.current?.id === session.id) {
+          setProject(markEditorProjectFailed(exportingProject, message, Date.now()));
+        }
       }
       toast.error(message);
     } finally {
-      setIsExporting(false);
-      setExportProgress(0);
+      if (exportSessionRef.current?.id === session.id) {
+        exportSessionRef.current = null;
+        exportProjectRef.current = null;
+        exportRestoreSnapshotRef.current = null;
+        setIsExporting(false);
+        setExportStage("preparing");
+        setExportProgress(0);
+      }
     }
-  }, [exportResolution, historyMap, project, projectDuration, resolvedAssets, resolvedAssetsMap, saveExport, saveProject]);
+  }, [
+    beginRenderSession,
+    exportResolution,
+    historyMap,
+    project,
+    projectDuration,
+    resolvedAssets,
+    resolvedAssetsMap,
+    saveExport,
+    saveProject,
+    syncExportStage,
+  ]);
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (isRenderBusy) return;
@@ -2342,7 +2480,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const overlayMode = isBakingClip ? "bake" : "export";
   const overlayProgress = isBakingClip ? bakeProgress : exportProgress;
   const overlayProjectName = isBakingClip ? bakeProjectName || project.name : project.name;
-  const overlayPhase = getEditorExportPhase(overlayProgress);
+  const overlayStage = isBakingClip ? bakeStage : exportStage;
+  const overlayCanCancel = isBakingClip
+    ? isBrowserRenderCancelableStage(bakeStage)
+    : isBrowserRenderCancelableStage(exportStage);
+  const handleOverlayCancel = isBakingClip ? handleCancelBake : handleCancelExport;
   const dropIndicatorPct = (() => {
     if (!draggingVideoBlockId && draggingAssetKind !== "video") return null;
     if (dropTargetIndex != null && visibleVideoBlocks[dropTargetIndex]) {
@@ -3833,7 +3975,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         projectName={overlayProjectName}
         resolution={exportResolution}
         progressPct={overlayProgress}
-        phase={overlayPhase}
+        stage={overlayStage}
+        canCancel={overlayCanCancel}
+        onCancel={handleOverlayCancel}
       />
       <Toaster theme="dark" position="bottom-center" />
     </main>

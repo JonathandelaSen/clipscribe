@@ -1,3 +1,4 @@
+import { throwIfBrowserRenderCanceled } from "@/lib/browser-render";
 import {
   cssRgbaFromHex,
   getSubtitleMaxCharsPerLine,
@@ -19,14 +20,17 @@ const FONT_URL =
 
 let cachedFontFace: FontFace | null = null;
 
-async function ensureCanvasFont(): Promise<boolean> {
+async function ensureCanvasFont(signal?: AbortSignal): Promise<boolean> {
   if (cachedFontFace) return true;
   try {
-    const res = await fetch(FONT_URL);
+    throwIfBrowserRenderCanceled(signal);
+    const res = await fetch(FONT_URL, signal ? { signal } : undefined);
     if (!res.ok) return false;
     const fontData = await res.arrayBuffer();
+    throwIfBrowserRenderCanceled(signal);
     const face = new FontFace("InterSubtitle", fontData, { weight: "700" });
     await face.load();
+    throwIfBrowserRenderCanceled(signal);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (self as any).fonts?.add(face);
     cachedFontFace = face;
@@ -154,13 +158,15 @@ export async function renderTimelineSubtitlesToPngs(input: {
   project: EditorProjectRecord;
   width: number;
   height: number;
+  signal?: AbortSignal;
 }): Promise<EditorSubtitlePngFrame[]> {
   if (!input.project.subtitles.enabled || input.chunks.length === 0) return [];
 
-  await ensureCanvasFont();
+  await ensureCanvasFont(input.signal);
   const frames: EditorSubtitlePngFrame[] = [];
 
   for (const chunk of input.chunks) {
+    throwIfBrowserRenderCanceled(input.signal);
     const start = chunk.timestamp?.[0];
     const end = chunk.timestamp?.[1];
     const text = String(chunk.text ?? "").trim();
@@ -174,7 +180,9 @@ export async function renderTimelineSubtitlesToPngs(input: {
       text,
       project: input.project,
     });
+    throwIfBrowserRenderCanceled(input.signal);
     const blob = await canvas.convertToBlob({ type: "image/png" });
+    throwIfBrowserRenderCanceled(input.signal);
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
     frames.push({
       pngBytes,

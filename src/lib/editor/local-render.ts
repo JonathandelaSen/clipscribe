@@ -1,5 +1,11 @@
 import { getFFmpeg, resetFFmpeg } from "../ffmpeg";
 import { getFfmpegExecTimeoutMs } from "../ffmpeg-config";
+import {
+  isBrowserRenderCanceledError,
+  setBrowserRenderStage,
+  throwIfBrowserRenderCanceled,
+  type BrowserRenderLifecycle,
+} from "../browser-render";
 import { buildProjectCaptionTimeline } from "./core/captions";
 import { getEditorOutputDimensions } from "./core/aspect-ratio";
 import { buildEditorExportPlan } from "./core/export-plan";
@@ -49,6 +55,7 @@ export interface LocalEditorExportInput {
   historyMap: Map<string, HistoryItem>;
   resolution: EditorResolution;
   onProgress?: (progressPct: number) => void;
+  renderLifecycle?: BrowserRenderLifecycle;
 }
 
 export interface LocalEditorExportResult {
@@ -61,7 +68,9 @@ export interface LocalEditorExportResult {
 }
 
 export async function exportEditorProjectLocally(input: LocalEditorExportInput): Promise<LocalEditorExportResult> {
+  setBrowserRenderStage(input.renderLifecycle, "preparing");
   const ff = await getFFmpeg();
+  throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   const mountRoot = `/timeline_${Date.now()}`;
   const outputPath = `/timeline_out_${Date.now()}.mp4`;
   const availableAssets = input.resolvedAssets.filter((asset) => !asset.missing && asset.file);
@@ -186,6 +195,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.init);
     await ff.createDir(mountRoot);
     for (const [index, resolved] of availableAssets.entries()) {
+      throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
       const assetDir = `${mountRoot}/${resolved.asset.id}`;
       await ff.createDir(assetDir);
       await ff.mount("WORKERFS" as never, { files: [resolved.file!] }, assetDir);
@@ -227,9 +237,11 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       project: input.project,
       width: exportPlan.width,
       height: exportPlan.height,
+      signal: input.renderLifecycle?.signal,
     });
 
     for (const frame of subtitleFrames) {
+      throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
       await ff.writeFile(frame.vfsPath, frame.pngBytes);
     }
     emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender);
@@ -275,10 +287,13 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       outputPath,
     ];
 
+    setBrowserRenderStage(input.renderLifecycle, "rendering");
     await runFfmpegExecWithFallbackProgress(args);
+    setBrowserRenderStage(input.renderLifecycle, "handoff");
     emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.readOutput);
 
     const output = await ff.readFile(outputPath);
+    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
     if (typeof output === "string") {
       throw new Error("FFmpeg returned text output instead of binary media.");
     }
@@ -287,6 +302,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       throw new Error("Rendered output is empty.");
     }
 
+    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
     const filename = sanitizeFilename(
@@ -315,6 +331,10 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       ],
     };
   } catch (error) {
+    if (isBrowserRenderCanceledError(error) || input.renderLifecycle?.signal?.aborted) {
+      throw error;
+    }
+
     const rawMessage = error instanceof Error ? error.message : String(error);
     if (isEditorFfmpegExecDiagnosticMessage(rawMessage)) {
       throw error instanceof Error ? error : new Error(rawMessage);

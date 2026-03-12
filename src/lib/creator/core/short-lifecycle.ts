@@ -115,6 +115,23 @@ export function markShortProjectFailed(
   };
 }
 
+export function restoreShortProjectAfterCanceledExport(
+  project: CreatorShortProjectRecord,
+  options: {
+    now: number;
+    previousProject?: Pick<CreatorShortProjectRecord, "status" | "lastExportId" | "lastError"> | null;
+  }
+): CreatorShortProjectRecord {
+  const previousStatus = options.previousProject?.status;
+  return {
+    ...project,
+    status: previousStatus && previousStatus !== "exporting" ? previousStatus : "draft",
+    updatedAt: options.now,
+    lastExportId: options.previousProject?.lastExportId,
+    lastError: options.previousProject?.lastError,
+  };
+}
+
 export function buildCompletedShortExportRecord(input: {
   id: string;
   shortProjectId: string;
@@ -180,4 +197,3 @@ export function buildLocalBrowserRenderResponse(input: {
     },
   };
 }
-

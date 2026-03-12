@@ -31,6 +31,13 @@ import { toast } from "sonner";
 
 import { db } from "@/lib/db";
 import {
+  createActiveBrowserRenderSession,
+  isBrowserRenderCancelableStage,
+  isBrowserRenderCanceledError,
+  type ActiveBrowserRenderSession,
+  type BrowserRenderStage,
+} from "@/lib/browser-render";
+import {
   getLatestSubtitleForLanguage,
   getLatestTranscript,
   getSubtitleById,
@@ -66,8 +73,10 @@ import {
   buildShortProjectRecord,
   markShortProjectExported,
   markShortProjectFailed,
+  restoreShortProjectAfterCanceledExport,
 } from "@/lib/creator/core/short-lifecycle";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import { resetFFmpeg } from "@/lib/ffmpeg";
 import { exportShortVideoLocally } from "@/lib/creator/local-render";
 import {
   COMMON_SUBTITLE_STYLE_PRESETS,
@@ -367,6 +376,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
   const [isExportingShort, setIsExportingShort] = useState(false);
+  const [shortExportStage, setShortExportStage] = useState<BrowserRenderStage>("preparing");
   const [exportProgressPct, setExportProgressPct] = useState(0);
   const [localRenderError, setLocalRenderError] = useState<string | null>(null);
   const [localRenderDiagnostics, setLocalRenderDiagnostics] = useState<string | null>(null);
@@ -386,6 +396,9 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const [previewFrameWidth, setPreviewFrameWidth] = useState(0);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFrameElRef = useRef<HTMLDivElement | null>(null);
+  const shortExportSessionCounterRef = useRef(0);
+  const shortExportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
+  const shortExportRestoreSnapshotRef = useRef<Pick<CreatorShortProjectRecord, "status" | "lastExportId" | "lastError"> | null>(null);
   // useCallback ref: stores element in previewFrameElRef AND sets up ResizeObserver for previewFrameWidth.
   const previewFrameRef = useCallback((el: HTMLDivElement | null) => {
     previewFrameElRef.current = el;
@@ -419,6 +432,17 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     upsertExport,
     deleteProject,
   } = useCreatorShortsLibrary(selectedProject?.id);
+
+  const beginShortExportSession = useCallback(() => {
+    return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
+  }, []);
+
+  const syncShortExportStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
+    const session = shortExportSessionRef.current;
+    if (!session || session.id !== sessionId) return;
+    session.stage = stage;
+    setShortExportStage(stage);
+  }, []);
 
   const transcriptOptions = useMemo(() => {
     if (!selectedProject) return [];
@@ -744,6 +768,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
   const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
   const canExportVideo = canRender && !!mediaFile && isVideoMedia;
+  const canCancelShortExport = isExportingShort && isBrowserRenderCancelableStage(shortExportStage);
 
   const creatorRequestPayload = useMemo<CreatorAnalyzeRequest | null>(() => {
     if (!selectedProject || !selectedTranscript || !selectedSubtitle || !selectedTranscript.transcript) return null;
@@ -843,6 +868,41 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       selectedTranscript,
     ]
   );
+
+  const persistCanceledShortExportRestore = useCallback(() => {
+    const nextProject = buildCurrentShortProjectRecord("draft", {
+      id: activeSavedShortProjectId || undefined,
+      lastExportId: shortExportRestoreSnapshotRef.current?.lastExportId,
+      lastError: shortExportRestoreSnapshotRef.current?.lastError,
+    });
+    if (!nextProject) return;
+
+    const restoredProject = restoreShortProjectAfterCanceledExport(nextProject, {
+      now: Date.now(),
+      previousProject: shortExportRestoreSnapshotRef.current,
+    });
+
+    setActiveSavedShortProjectId(restoredProject.id);
+    setDetachedShortSelection({ clip: restoredProject.clip, plan: restoredProject.plan });
+    setShortProjectNameDraft(restoredProject.name);
+    void upsertProject(restoredProject).catch((error) => {
+      console.error("Failed to persist canceled short export state", error);
+    });
+  }, [activeSavedShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
+
+  const handleCancelShortExport = useCallback(() => {
+    const session = shortExportSessionRef.current;
+    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
+
+    session.controller.abort();
+    resetFFmpeg();
+    shortExportSessionRef.current = null;
+    setIsExportingShort(false);
+    setShortExportStage("preparing");
+    setExportProgressPct(0);
+    persistCanceledShortExportRestore();
+    toast("Export canceled");
+  }, [persistCanceledShortExportRestore]);
 
   const handleSaveShortProject = useCallback(async () => {
     const record = buildCurrentShortProjectRecord("draft", {
@@ -960,7 +1020,17 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       return;
     }
 
+    const session = beginShortExportSession();
+    shortExportSessionRef.current = session;
+    shortExportRestoreSnapshotRef.current = activeSavedShortProject
+      ? {
+          status: activeSavedShortProject.status,
+          lastExportId: activeSavedShortProject.lastExportId,
+          lastError: activeSavedShortProject.lastError,
+        }
+      : null;
     setIsExportingShort(true);
+    setShortExportStage(session.stage);
     setExportProgressPct(0);
     setLocalRenderError(null);
     setLocalRenderDiagnostics(null);
@@ -989,6 +1059,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
 
     try {
       sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
+      if (shortExportSessionRef.current?.id !== session.id) return;
       console.info("[ShortExport] metadata loaded", sourceVideoMeta);
       const prepared = prepareShortExport({
         requestedClip: editedClip,
@@ -1013,14 +1084,28 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       }
       console.info("[ShortExport] diagnostics pre-render\n" + buildDiagnosticsSnapshot());
     } catch (metadataError) {
+      if (isBrowserRenderCanceledError(metadataError) || session.controller.signal.aborted) {
+        if (shortExportSessionRef.current?.id === session.id) {
+          shortExportSessionRef.current = null;
+          shortExportRestoreSnapshotRef.current = null;
+          setIsExportingShort(false);
+          setShortExportStage("preparing");
+        }
+        return;
+      }
       console.error(metadataError);
-      setIsExportingShort(false);
       const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
       setLocalRenderError(message);
       setLocalRenderDiagnostics(buildDiagnosticsSnapshot(message));
       toast.error(message, {
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
+      if (shortExportSessionRef.current?.id === session.id) {
+        shortExportSessionRef.current = null;
+        shortExportRestoreSnapshotRef.current = null;
+        setIsExportingShort(false);
+        setShortExportStage("preparing");
+      }
       return;
     }
 
@@ -1029,12 +1114,16 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       clipOverride: exportClip,
     });
     if (!shortProjectRecord) {
+      shortExportSessionRef.current = null;
+      shortExportRestoreSnapshotRef.current = null;
       setIsExportingShort(false);
+      setShortExportStage("preparing");
       return;
     }
 
     try {
       await upsertProject(shortProjectRecord);
+      if (shortExportSessionRef.current?.id !== session.id) return;
       setActiveSavedShortProjectId(shortProjectRecord.id);
       setDetachedShortSelection({ clip: shortProjectRecord.clip, plan: shortProjectRecord.plan });
       setShortProjectNameDraft(shortProjectRecord.name);
@@ -1042,6 +1131,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       const sourceVideoSize = sourceVideoMeta
         ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
         : await readVideoMetadata(mediaFile, previewVideoRef.current);
+      if (shortExportSessionRef.current?.id !== session.id) return;
       const frameRect = previewFrameElRef.current?.getBoundingClientRect();
       const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
 
@@ -1063,7 +1153,12 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         previewViewport,
         previewVideoRect: null,
         onProgress: bumpExportProgress,
+        renderLifecycle: {
+          signal: session.controller.signal,
+          onStageChange: (stage) => syncShortExportStage(session.id, stage),
+        },
       });
+      if (shortExportSessionRef.current?.id !== session.id) return;
       bumpExportProgress(97);
 
       const exportRecord = buildCompletedShortExportRecord({
@@ -1084,6 +1179,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       });
 
       await upsertExport(exportRecord);
+      if (shortExportSessionRef.current?.id !== session.id) return;
       bumpExportProgress(98);
 
       shortProjectRecord = markShortProjectExported(shortProjectRecord, {
@@ -1091,6 +1187,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         exportId: exportRecord.id,
       });
       await upsertProject(shortProjectRecord);
+      if (shortExportSessionRef.current?.id !== session.id) return;
       bumpExportProgress(99);
 
       const renderResult = buildLocalBrowserRenderResponse({
@@ -1102,6 +1199,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         ffmpegCommandPreview: localExport.ffmpegCommandPreview,
         notes: localExport.notes,
       });
+      syncShortExportStage(session.id, "complete");
       setLastRender(renderResult);
 
       handleDownloadSavedExport(exportRecord);
@@ -1110,6 +1208,10 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
     } catch (error) {
+      if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted) {
+        return;
+      }
+
       console.error(error);
       const rawMessage = error instanceof Error ? error.message : "Short export failed";
       const toastMessage = rawMessage.split("\n")[0] || "Short export failed";
@@ -1134,7 +1236,12 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
     } finally {
-      setIsExportingShort(false);
+      if (shortExportSessionRef.current?.id === session.id) {
+        shortExportSessionRef.current = null;
+        shortExportRestoreSnapshotRef.current = null;
+        setIsExportingShort(false);
+        setShortExportStage("preparing");
+      }
     }
   };
 
@@ -2633,11 +2740,21 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                               >
                                 {isExportingShort ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
                                 {isExportingShort
-                                  ? exportProgressPct >= 97
+                                  ? shortExportStage === "handoff" || shortExportStage === "complete"
                                     ? `Finalizing ${exportProgressPct}%`
                                     : `Exporting ${exportProgressPct}%`
                                   : "Export Short (Local)"}
                               </Button>
+                              {canCancelShortExport && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="border-white/15 bg-white/5 text-white hover:bg-white/10"
+                                  onClick={handleCancelShortExport}
+                                >
+                                  Cancel
+                                </Button>
+                              )}
                               {activeSavedShortProject && (
                                 <Button
                                   type="button"
@@ -2677,10 +2794,34 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
                                     style={{ width: `${Math.max(4, exportProgressPct)}%` }}
                                   />
                                 </div>
-                                <div className="text-xs text-white/55">
-                                  {exportProgressPct >= 97
-                                    ? "Render complete. Saving export file to local library… keep this tab open."
-                                    : "Local ffmpeg.wasm render in progress… keep this tab open."}
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="text-xs text-white/55">
+                                    {shortExportStage === "handoff" || shortExportStage === "complete"
+                                      ? "Render complete. Saving export file to local library… keep this tab open."
+                                      : "Local ffmpeg.wasm render in progress… keep this tab open."}
+                                  </div>
+                                  {canCancelShortExport ? (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      className="h-7 bg-white/5 px-2 text-xs text-white/85 hover:bg-white/10"
+                                      onClick={handleCancelShortExport}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  ) : (
+                                    <div className="text-[11px] uppercase tracking-[0.24em] text-white/35">Locked</div>
+                                  )}
+                                </div>
+                                <div className="text-[11px] uppercase tracking-[0.24em] text-white/35">
+                                  {shortExportStage === "preparing"
+                                    ? "Preparing"
+                                    : shortExportStage === "rendering"
+                                      ? "Rendering"
+                                      : shortExportStage === "handoff"
+                                        ? "Finalizing"
+                                        : "Complete"}
                                 </div>
                               </div>
                             )}

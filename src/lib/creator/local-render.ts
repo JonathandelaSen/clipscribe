@@ -1,3 +1,10 @@
+import {
+  createBrowserRenderCanceledError,
+  isBrowserRenderCanceledError,
+  setBrowserRenderStage,
+  throwIfBrowserRenderCanceled,
+  type BrowserRenderLifecycle,
+} from "@/lib/browser-render";
 import { getFFmpeg } from "@/lib/ffmpeg";
 import { assertExportGeometryInvariants } from "@/lib/creator/core/export-contracts";
 import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
@@ -65,6 +72,7 @@ export interface LocalShortExportInput {
   previewViewport?: { width: number; height: number } | null;
   previewVideoRect?: { width: number; height: number } | null;
   onProgress?: (progressPct: number) => void;
+  renderLifecycle?: BrowserRenderLifecycle;
 }
 
 export interface LocalShortExportResult {
@@ -75,7 +83,9 @@ export interface LocalShortExportResult {
 }
 
 export async function exportShortVideoLocally(input: LocalShortExportInput): Promise<LocalShortExportResult> {
+  setBrowserRenderStage(input.renderLifecycle, "preparing");
   const ff = await getFFmpeg();
+  throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   const mountDir = `/render_${Date.now()}`;
   const outputFilename = sanitizeFilename(
     `${input.sourceFilename.replace(/\.[^/.]+$/, "")}__${input.plan.platform}__${Math.floor(input.clip.startSeconds)}-${Math.ceil(
@@ -169,7 +179,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     }, 250);
 
     try {
-      await ff.exec(args);
+      await ff.exec(args, -1, { signal: input.renderLifecycle?.signal });
     } finally {
       clearInterval(timer);
     }
@@ -255,9 +265,13 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   ): Promise<"hybrid" | "exact"> => {
     try {
       emitProgress(LOCAL_EXPORT_PROGRESS.preRender);
+      setBrowserRenderStage(input.renderLifecycle, "rendering");
       await runFfmpegExecWithFallbackProgress(buildFfmpegArgs(filter, "hybrid", extraInputPaths));
       return "hybrid";
     } catch (hybridError) {
+      if (isBrowserRenderCanceledError(hybridError) || input.renderLifecycle?.signal?.aborted) {
+        throw createBrowserRenderCanceledError();
+      }
       console.warn("Hybrid-seek render failed, retrying with exact-seek mode:", hybridError);
       try {
         await ff.deleteFile(outputPath);
@@ -283,13 +297,15 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       input.clip,
       input.plan,
       input.editor,
-      exactTrimAfterSeekSeconds
+      exactTrimAfterSeekSeconds,
+      input.renderLifecycle?.signal
     );
 
     if (subtitleFrames.length > 0) {
       emitProgress(6);
       // Write each PNG to the VFS
       for (const frame of subtitleFrames) {
+        throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
         await ff.writeFile(frame.vfsPath, frame.pngBytes);
       }
 
@@ -313,6 +329,9 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
         usedSeekMode = await renderWithSeekFallback(overlayFilter, pngPaths);
         usedSubtitleBurnIn = true;
       } catch (err) {
+        if (isBrowserRenderCanceledError(err) || input.renderLifecycle?.signal?.aborted) {
+          throw createBrowserRenderCanceledError();
+        }
         console.warn("PNG overlay subtitle burn-in failed, retrying export without subtitles:", err);
         try { await ff.deleteFile(outputPath); } catch {}
         // Clean up PNGs and fall back to plain render
@@ -325,8 +344,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       usedSeekMode = await renderWithSeekFallback(baseFilter);
     }
 
+    setBrowserRenderStage(input.renderLifecycle, "handoff");
     emitProgress(LOCAL_EXPORT_PROGRESS.readOutput);
     const output = await ff.readFile(outputPath);
+    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
     if (typeof output === "string") {
       throw new Error("FFmpeg returned text output instead of binary video data");
     }
@@ -335,6 +356,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       throw new Error("Rendered output is empty. Clip timing may be outside the source video range.");
     }
     emitProgress(LOCAL_EXPORT_PROGRESS.validateOutput);
+    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const file = new File([arrayBuffer], outputFilename, { type: "video/mp4" });
     emitProgress(LOCAL_EXPORT_PROGRESS.packaged);
@@ -426,6 +448,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       subtitleBurnedIn: usedSubtitleBurnIn,
     };
   } catch (error) {
+    if (isBrowserRenderCanceledError(error) || input.renderLifecycle?.signal?.aborted) {
+      throw createBrowserRenderCanceledError();
+    }
+
     const rawMessage = error instanceof Error ? error.message : String(error);
     const diagnostics = [
       `clip=${input.clip.startSeconds.toFixed(3)}-${input.clip.endSeconds.toFixed(3)} (${clipDuration.toFixed(3)}s)`,
