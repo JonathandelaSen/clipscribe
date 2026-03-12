@@ -7,6 +7,7 @@ export interface EditorRepository {
   listProjectAssets(projectId: string): Promise<EditorAssetRecord[]>;
   listProjectExports(projectId: string): Promise<EditorExportRecord[]>;
   putProject(record: EditorProjectRecord): Promise<void>;
+  putProjectWithAssets(record: EditorProjectRecord, assets: EditorAssetRecord[]): Promise<void>;
   bulkPutAssets(records: EditorAssetRecord[]): Promise<void>;
   deleteAsset(assetId: string): Promise<void>;
   putExport(record: EditorExportRecord): Promise<void>;
@@ -54,6 +55,15 @@ export function createDexieEditorRepository(database: AudioTranscriberDB = db): 
 
     async putProject(record) {
       await database.editorProjects.put(record);
+    },
+
+    async putProjectWithAssets(record, assets) {
+      await database.transaction("rw", database.editorProjects, database.editorAssets, async () => {
+        if (assets.length > 0) {
+          await database.editorAssets.bulkPut(assets);
+        }
+        await database.editorProjects.put(record);
+      });
     },
 
     async bulkPutAssets(records) {

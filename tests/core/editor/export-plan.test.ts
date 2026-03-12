@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import {
+  materializeEditorProjectBundle,
+  normalizeEditorProjectBundleManifest,
+} from "../../../src/lib/editor/bundle";
 import { getEditorOutputDimensions } from "../../../src/lib/editor/core/aspect-ratio";
 import { buildEditorExportPlan } from "../../../src/lib/editor/core/export-plan";
 import {
@@ -153,6 +157,90 @@ test("buildEditorExportPlan applies reverse filters to reversed clips before con
     resolution: "1080p",
   });
 
+  assert.match(plan.filterComplex, /\[0:v\]trim=start=0:end=8,setpts=PTS-STARTPTS,reverse,/);
+  assert.match(plan.filterComplex, /\[0:a\]atrim=start=0:end=8,asetpts=PTS-STARTPTS,areverse,volume=1\.000\[aseg0\]/);
+  assert.ok(
+    plan.filterComplex.includes("[vseg0][aseg0][vseg1][aseg1]concat=n=2:v=1:a=1[video_track][clip_audio_track]")
+  );
+});
+
+test("buildEditorExportPlan preserves reverse filters for imported bundle clips", async () => {
+  const manifest = normalizeEditorProjectBundleManifest({
+    schemaVersion: 1,
+    createdAt: 100,
+    name: "Imported Reverse",
+    aspectRatio: "16:9",
+    videoClips: [
+      { path: "media/a.mp4", reverse: true },
+      { path: "media/b.mp4" },
+    ],
+  });
+
+  const fileA = new File(["a"], "a.mp4", { type: "video/mp4" });
+  const fileB = new File(["b"], "b.mp4", { type: "video/mp4" });
+  const { project, assets } = await materializeEditorProjectBundle({
+    manifest,
+    filesByPath: new Map([
+      ["media/a.mp4", fileA],
+      ["media/b.mp4", fileB],
+    ]),
+    readMetadata: async (file) => ({
+      kind: "video",
+      durationSeconds: file.name === "a.mp4" ? 8 : 6,
+      width: 1920,
+      height: 1080,
+      hasAudio: true,
+    }),
+  });
+
+  const [videoA, videoB] = assets;
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: videoA.id, path: "a.mp4", asset: videoA },
+      { inputIndex: 1, assetId: videoB.id, path: "b.mp4", asset: videoB },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.match(plan.filterComplex, /\[0:v\]trim=start=0:end=8,setpts=PTS-STARTPTS,reverse,/);
+  assert.match(plan.filterComplex, /\[0:a\]atrim=start=0:end=8,asetpts=PTS-STARTPTS,areverse,volume=1\.000\[aseg0\]/);
+});
+
+test("buildEditorExportPlan reuses one input when imported clips share the same asset", async () => {
+  const manifest = normalizeEditorProjectBundleManifest({
+    schemaVersion: 1,
+    createdAt: 101,
+    name: "Imported Repeat",
+    aspectRatio: "16:9",
+    videoClips: [
+      { path: "media/shared.mp4", reverse: true },
+      { path: "media/shared.mp4", trimStartSeconds: 1, trimEndSeconds: 4 },
+    ],
+  });
+
+  const sharedFile = new File(["shared"], "shared.mp4", { type: "video/mp4" });
+  const { project, assets } = await materializeEditorProjectBundle({
+    manifest,
+    filesByPath: new Map([["media/shared.mp4", sharedFile]]),
+    readMetadata: async () => ({
+      kind: "video",
+      durationSeconds: 8,
+      width: 1920,
+      height: 1080,
+      hasAudio: true,
+    }),
+  });
+
+  assert.equal(assets.length, 1);
+  const [sharedAsset] = assets;
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [{ inputIndex: 0, assetId: sharedAsset!.id, path: "shared.mp4", asset: sharedAsset! }],
+    resolution: "1080p",
+  });
+
+  assert.deepEqual(plan.ffmpegArgs, ["-i", "shared.mp4"]);
   assert.match(plan.filterComplex, /\[0:v\]trim=start=0:end=8,setpts=PTS-STARTPTS,reverse,/);
   assert.match(plan.filterComplex, /\[0:a\]atrim=start=0:end=8,asetpts=PTS-STARTPTS,areverse,volume=1\.000\[aseg0\]/);
   assert.ok(

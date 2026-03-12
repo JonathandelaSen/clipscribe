@@ -9,6 +9,7 @@ import {
 import { buildProjectCaptionTimeline } from "./core/captions";
 import { getEditorOutputDimensions } from "./core/aspect-ratio";
 import { buildEditorExportPlan } from "./core/export-plan";
+import { buildEditorExportFilename } from "./export-output";
 import { isEditorFfmpegExecDiagnosticMessage, runEditorFfmpegExec } from "./local-render-runtime";
 import { renderTimelineSubtitlesToPngs } from "./subtitle-canvas";
 import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "./types";
@@ -25,10 +26,6 @@ const LOCAL_EDITOR_EXPORT_PROGRESS = {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
-}
-
-function sanitizeFilename(value: string): string {
-  return value.replace(/[^\w.-]+/g, "_");
 }
 
 function parseFfmpegTimecodeToSeconds(timecode: string): number | null {
@@ -305,9 +302,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
     const arrayBuffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
     const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
-    const filename = sanitizeFilename(
-      `${input.project.name.replace(/\.[^/.]+$/, "")}__${input.project.aspectRatio.replace(":", "x")}__${input.resolution}.mp4`
-    );
+    const filename = buildEditorExportFilename(input.project.name, input.project.aspectRatio, input.resolution);
     const file = new File([arrayBuffer], filename, { type: "video/mp4" });
     emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.packaged);
 

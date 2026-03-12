@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  materializeEditorProjectBundle,
+  normalizeEditorProjectBundleManifest,
+} from "../../../src/lib/editor/bundle";
+import {
   createDefaultVideoClip,
   createEmptyEditorProject,
   getEditorProjectPersistenceFingerprint,
@@ -102,4 +106,47 @@ test("restoreEditorProjectAfterCanceledExport keeps current edit and restores pr
   assert.equal(restored.lastError, "Previous failure");
   assert.equal(restored.latestExport?.id, "exp_prev");
   assert.equal(restored.updatedAt, 1234);
+});
+
+test("imported projects stay stable under persistence serialization helpers", async () => {
+  const manifest = normalizeEditorProjectBundleManifest({
+    schemaVersion: 1,
+    createdAt: 10,
+    name: "Imported Timeline",
+    aspectRatio: "16:9",
+    videoClips: [{ path: "media/intro.mp4", reverse: true }],
+  });
+
+  const { project } = await materializeEditorProjectBundle({
+    manifest,
+    filesByPath: new Map([
+      ["media/intro.mp4", new File(["intro"], "intro.mp4", { type: "video/mp4" })],
+    ]),
+    readMetadata: async () => ({
+      kind: "video",
+      durationSeconds: 9,
+      width: 1920,
+      height: 1080,
+      hasAudio: true,
+    }),
+    now: 777,
+  });
+
+  const fingerprint = getEditorProjectPersistenceFingerprint(project, project.assetIds, 0);
+  const movedPlayheadProject = {
+    ...project,
+    timeline: {
+      ...project.timeline,
+      playheadSeconds: 6.4,
+    },
+  };
+
+  assert.equal(
+    getEditorProjectPersistenceFingerprint(movedPlayheadProject, movedPlayheadProject.assetIds, 0),
+    fingerprint
+  );
+  assert.equal(
+    serializeEditorProjectForPersistence(movedPlayheadProject, 0).timeline.playheadSeconds,
+    0
+  );
 });

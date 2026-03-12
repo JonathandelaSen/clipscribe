@@ -42,6 +42,16 @@ export function useEditorLibrary() {
     });
   }, []);
 
+  const importProject = useCallback(async (record: EditorProjectRecord, assets: EditorAssetRecord[]) => {
+    await editorRepository.putProjectWithAssets(record, assets);
+    const normalizedRecord = normalizeLegacyEditorProjectRecord(record);
+    setProjects((prev) => {
+      const next = prev.filter((project) => project.id !== normalizedRecord.id);
+      next.push(normalizedRecord);
+      return next.sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+    });
+  }, []);
+
   const upsertExport = useCallback(async (record: EditorExportRecord) => {
     await editorRepository.putExport(record);
     setExports((prev) => {
@@ -67,6 +77,7 @@ export function useEditorLibrary() {
     error,
     refresh,
     upsertProject,
+    importProject,
     upsertExport,
     deleteProject,
   };

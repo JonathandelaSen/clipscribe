@@ -1,16 +1,26 @@
 "use client";
 
+import { useRef, useState, type ChangeEvent, type InputHTMLAttributes } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Film, FolderOpen, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, Film, FolderOpen, Plus, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { useEditorLibrary } from "@/hooks/useEditorLibrary";
+import type { EditorProjectBundleBrowserFile, LoadedEditorProjectBundle } from "@/lib/editor/bundle";
+import { loadEditorProjectBundleFromFiles, materializeEditorProjectBundle } from "@/lib/editor/bundle";
+import { readMediaMetadata } from "@/lib/editor/media";
 import { createEmptyEditorProject } from "@/lib/editor/storage";
 
+import { EditorProjectBundleImportDialog } from "@/components/editor/EditorProjectBundleImportDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Toaster } from "@/components/ui/sonner";
+
+type DirectoryInputProps = InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory?: string;
+  directory?: string;
+};
 
 function formatRelativeDate(timestamp: number): string {
   return new Intl.DateTimeFormat("en", {
@@ -23,7 +33,11 @@ function formatRelativeDate(timestamp: number): string {
 
 export function EditorProjectLibrary() {
   const router = useRouter();
-  const { projects, exportsByProjectId, isLoading, error, upsertProject, deleteProject } = useEditorLibrary();
+  const { projects, exportsByProjectId, isLoading, error, upsertProject, importProject, deleteProject } = useEditorLibrary();
+  const bundleInputRef = useRef<HTMLInputElement | null>(null);
+  const [bundlePreview, setBundlePreview] = useState<LoadedEditorProjectBundle | null>(null);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isImportingBundle, setIsImportingBundle] = useState(false);
 
   const handleCreateProject = async () => {
     const project = createEmptyEditorProject();
@@ -38,8 +52,71 @@ export function EditorProjectLibrary() {
     toast.success("Project deleted");
   };
 
+  const handleOpenBundlePicker = () => {
+    bundleInputRef.current?.click();
+  };
+
+  const handleBundleDialogOpenChange = (open: boolean) => {
+    if (isImportingBundle) return;
+    setIsImportDialogOpen(open);
+    if (!open) {
+      setBundlePreview(null);
+    }
+  };
+
+  const handleBundleSelection = async (event: ChangeEvent<HTMLInputElement>) => {
+    const selectedFiles = Array.from(event.target.files ?? []) as EditorProjectBundleBrowserFile[];
+    event.target.value = "";
+    if (!selectedFiles.length) return;
+
+    try {
+      const loadedBundle = await loadEditorProjectBundleFromFiles(selectedFiles);
+      setBundlePreview(loadedBundle);
+      setIsImportDialogOpen(true);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load the selected bundle.";
+      toast.error(message);
+    }
+  };
+
+  const handleConfirmBundleImport = async () => {
+    if (!bundlePreview) return;
+
+    setIsImportingBundle(true);
+    try {
+      const { project, assets } = await materializeEditorProjectBundle({
+        manifest: bundlePreview.manifest,
+        filesByPath: bundlePreview.filesByPath,
+        readMetadata: readMediaMetadata,
+      });
+      await importProject(project, assets);
+      setIsImportDialogOpen(false);
+      setBundlePreview(null);
+      toast.success(`Imported "${project.name}"`);
+      router.push(`/creator/editor/${project.id}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to import the selected bundle.";
+      toast.error(message);
+    } finally {
+      setIsImportingBundle(false);
+    }
+  };
+
+  const directoryInputProps: DirectoryInputProps = {
+    webkitdirectory: "",
+    directory: "",
+  };
+
   return (
     <main className="min-h-[calc(100vh-[var(--header-height,0px)])] px-4 py-6 sm:px-8 lg:px-10">
+      <input
+        {...directoryInputProps}
+        ref={bundleInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleBundleSelection}
+      />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
         <header className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(38,211,194,0.22),transparent_36%),radial-gradient(circle_at_right,rgba(245,158,11,0.16),transparent_30%),linear-gradient(180deg,rgba(7,11,17,0.96),rgba(2,6,23,0.94))] p-6 shadow-[0_24px_90px_rgba(0,0,0,0.45)] sm:p-8">
           <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.06),transparent_42%)]" />
@@ -66,13 +143,23 @@ export function EditorProjectLibrary() {
               </div>
             </div>
 
-            <Button
-              onClick={handleCreateProject}
-              className="h-12 rounded-2xl border border-cyan-300/20 bg-cyan-300/90 px-6 text-sm font-semibold text-slate-950 hover:bg-cyan-200"
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              New Project
-            </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={handleOpenBundlePicker}
+                className="h-12 rounded-2xl border-white/15 bg-white/5 px-6 text-sm font-semibold text-white hover:bg-white/10"
+              >
+                <Upload className="mr-2 h-4 w-4" />
+                Import Bundle
+              </Button>
+              <Button
+                onClick={handleCreateProject}
+                className="h-12 rounded-2xl border border-cyan-300/20 bg-cyan-300/90 px-6 text-sm font-semibold text-slate-950 hover:bg-cyan-200"
+              >
+                <Plus className="mr-2 h-4 w-4" />
+                New Project
+              </Button>
+            </div>
           </div>
         </header>
 
@@ -103,6 +190,23 @@ export function EditorProjectLibrary() {
                   <p className="mt-2 text-sm text-white/50">
                     Create a timeline project to start arranging clips, audio, and subtitles.
                   </p>
+                  <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                    <Button
+                      variant="outline"
+                      className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                      onClick={handleOpenBundlePicker}
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      Import Bundle
+                    </Button>
+                    <Button
+                      className="rounded-xl border border-cyan-300/20 bg-cyan-300/90 text-slate-950 hover:bg-cyan-200"
+                      onClick={handleCreateProject}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      New Project
+                    </Button>
+                  </div>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -172,6 +276,14 @@ export function EditorProjectLibrary() {
 
         </section>
       </div>
+      <EditorProjectBundleImportDialog
+        open={isImportDialogOpen}
+        onOpenChange={handleBundleDialogOpenChange}
+        manifest={bundlePreview?.manifest ?? null}
+        rootDirectoryName={bundlePreview?.rootDirectoryName}
+        isImporting={isImportingBundle}
+        onConfirm={handleConfirmBundleImport}
+      />
       <Toaster theme="dark" position="bottom-center" />
     </main>
   );

@@ -79,6 +79,50 @@ pnpm dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the application.
 
+## CLI Timeline Bundles
+
+You can create an importable Timeline Studio bundle from the terminal and then import it from the editor project library.
+
+Interactive wizard:
+
+```bash
+npm run create:timeline-project -- --interactive
+```
+
+Direct command:
+
+```bash
+npm run create:timeline-project -- \
+  --name "Launch Cut" \
+  --aspect 9:16 \
+  --video /absolute/path/intro.mp4 \
+  --video /absolute/path/outro.mp4 \
+  --reverse 2 \
+  --video-trim 1:1.5:4.25 \
+  --audio /absolute/path/bed.mp3 \
+  --audio-start 2.5 \
+  --output ./bundles
+```
+
+This creates a folder such as `launch-cut.clipscribe-project/` with `manifest.json` and a `media/` directory. In Timeline Studio, use `Import Bundle` from the project library and select that folder to create a saved local project.
+
+For an agent-friendly terminal workflow, turn the bundle into an editable workspace file and then export it back to MP4:
+
+```bash
+npm run import:timeline-project -- \
+  --bundle ./bundles/launch-cut.clipscribe-project
+```
+
+This writes `project.json` into the bundle folder. An agent can inspect or edit that file and then export it:
+
+```bash
+npm run export:timeline-project -- \
+  --project ./bundles/launch-cut.clipscribe-project \
+  --resolution 1080p
+```
+
+The export command writes the final MP4 to `exports/<project-name>__<aspect>__<resolution>.mp4` inside the workspace by default. Use `--dry-run` to preview the render plan, `--output` to choose another destination, and `--json` for machine-readable CLI output.
+
 ## Vibe Coding
 
 This project was intentionally built using an AI-assisted development approach, where the architecture, design, and code were **vibe coded with Gemini Pro 3.1**.
