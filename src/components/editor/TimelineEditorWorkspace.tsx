@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  memo,
   useCallback,
   startTransition,
   type DragEvent as ReactDragEvent,
@@ -99,10 +100,12 @@ import {
   createDefaultAudioTrack,
   createDefaultVideoClip,
   createEditorAssetRecord,
+  getEditorProjectPersistenceFingerprint,
   markEditorProjectExporting,
   markEditorProjectFailed,
   markEditorProjectSaved,
   normalizeLegacyEditorProjectRecord,
+  serializeEditorProjectForPersistence,
 } from "@/lib/editor/storage";
 import type {
   EditorAssetRecord,
@@ -370,6 +373,125 @@ function ProjectAssetThumbnail({
   );
 }
 
+const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
+  projectName,
+  projectAspectRatio,
+  exportResolution,
+  saveState,
+  panelVisibility,
+  isRenderBusy,
+  onProjectNameChange,
+  onAspectRatioChange,
+  onExportResolutionChange,
+  onTogglePanel,
+  onExport,
+}: {
+  projectName: string;
+  projectAspectRatio: EditorAspectRatio;
+  exportResolution: EditorResolution;
+  saveState: "saved" | "saving" | "dirty";
+  panelVisibility: PanelVisibilityState;
+  isRenderBusy: boolean;
+  onProjectNameChange: (value: string) => void;
+  onAspectRatioChange: (value: EditorAspectRatio) => void;
+  onExportResolutionChange: (value: EditorResolution) => void;
+  onTogglePanel: (panel: keyof PanelVisibilityState) => void;
+  onExport: () => void | Promise<void>;
+}) {
+  return (
+    <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+      <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <Button asChild variant="ghost" className="h-8 rounded-lg px-2.5 text-white/68 hover:bg-white/[0.06] hover:text-white">
+            <Link href="/creator/editor">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              Projects
+            </Link>
+          </Button>
+          <div className="h-7 w-px bg-white/8" />
+          <div className="space-y-1">
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/16 bg-cyan-400/8 px-2.5 py-1 text-[10px] uppercase tracking-[0.28em] text-cyan-100/84">
+                <Film className="h-4 w-4" />
+                Timeline Studio
+              </div>
+              <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/44">
+                {saveState === "saving" ? "Saving…" : saveState === "dirty" ? "Unsaved changes" : "Saved"}
+              </span>
+            </div>
+            <Input
+              value={projectName}
+              onChange={(event) => onProjectNameChange(event.target.value)}
+              className="h-10 max-w-xl rounded-none border-none bg-transparent px-0 text-[1.25rem] font-semibold tracking-[-0.02em] placeholder:text-white/24 focus-visible:ring-0"
+              placeholder="Project name"
+            />
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={projectAspectRatio} onValueChange={(value) => onAspectRatioChange(value as EditorAspectRatio)}>
+            <SelectTrigger className="h-9 w-[146px] rounded-lg border-white/8 bg-white/[0.04] text-white">
+              <SelectValue placeholder="Aspect" />
+            </SelectTrigger>
+            <SelectContent className="border-white/10 bg-slate-950 text-white">
+              {ASPECT_OPTIONS.map((aspect) => (
+                <SelectItem key={aspect} value={aspect}>
+                  {aspect} · {EDITOR_ASPECT_RATIO_LABELS[aspect]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={exportResolution}
+            onValueChange={(value) => onExportResolutionChange(value as EditorResolution)}
+          >
+            <SelectTrigger className="h-9 w-[146px] rounded-lg border-white/8 bg-white/[0.04] text-white">
+              <SelectValue placeholder="Resolution" />
+            </SelectTrigger>
+            <SelectContent className="border-white/10 bg-slate-950 text-white">
+              {RESOLUTION_OPTIONS.map((resolution) => (
+                <SelectItem key={resolution} value={resolution}>
+                  {EDITOR_RESOLUTION_LABELS[resolution]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="mx-1 h-7 w-px bg-white/8" />
+          <div className="flex flex-wrap items-center gap-1 rounded-[0.9rem] border border-white/8 bg-black/25 p-1">
+            {([
+              ["left", "Assets"],
+              ["center", "Preview"],
+              ["right", "Inspector"],
+            ] as const).map(([panel, label]) => (
+              <Button
+                key={panel}
+                variant="ghost"
+                className={cn(
+                  "h-8 rounded-[0.7rem] px-2.5 text-[10px] uppercase tracking-[0.24em]",
+                  panelVisibility[panel]
+                    ? "bg-white/[0.08] text-white hover:bg-white/[0.12]"
+                    : "text-white/30 hover:bg-white/[0.05] hover:text-white/72"
+                )}
+                onClick={() => onTogglePanel(panel)}
+              >
+                {label}
+              </Button>
+            ))}
+          </div>
+          <Button
+            onClick={() => void onExport()}
+            disabled={isRenderBusy}
+            className="h-9 rounded-lg border border-amber-300/15 bg-amber-300/90 px-4 text-sm font-semibold text-slate-950 hover:bg-amber-200"
+          >
+            {isRenderBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+            Export
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+});
+
 export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const topPanelsRef = useRef<HTMLDivElement | null>(null);
   const timelineViewportRef = useRef<HTMLDivElement | null>(null);
@@ -383,6 +505,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const captionAttachAssetIdRef = useRef<string | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
   const lastAnimationFrameRef = useRef<number | null>(null);
+  const persistedPlayheadSecondsRef = useRef(0);
   const playheadRef = useRef(0);
   const isPlayingRef = useRef(false);
   const isTimelinePreviewRef = useRef(false);
@@ -414,6 +537,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [resolvedAssets, setResolvedAssets] = useState<ResolvedEditorAsset[]>([]);
   const [librarySearch, setLibrarySearch] = useState("");
   const deferredLibrarySearch = useDeferredValue(librarySearch);
+  const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [exportResolution, setExportResolution] = useState<EditorResolution>("1080p");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
   const [isExporting, setIsExporting] = useState(false);
@@ -453,20 +577,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         assetIds: loadedAssets.map((asset) => asset.id),
       })
     );
-    const hydratedSnapshot = JSON.stringify({
-      project: hydratedProject,
-      assetIds: loadedAssets.map((asset) => asset.id),
-    });
+    const hydratedDuration = getProjectDuration(hydratedProject);
+    const hydratedPlayheadSeconds = clampNumber(
+      hydratedProject.timeline.playheadSeconds,
+      0,
+      Math.max(hydratedDuration, 0)
+    );
+    const hydratedSnapshot = getEditorProjectPersistenceFingerprint(
+      hydratedProject,
+      loadedAssets.map((asset) => asset.id),
+      hydratedPlayheadSeconds
+    );
 
     if (autosaveHashRef.current === hydratedSnapshot) {
       return;
     }
 
+    const shouldResetPlayhead = project?.id !== hydratedProject.id;
     setProject(hydratedProject);
     setAssets(loadedAssets);
+    persistedPlayheadSecondsRef.current = hydratedPlayheadSeconds;
+    if (shouldResetPlayhead) {
+      projectDurationRef.current = hydratedDuration;
+      playheadRef.current = hydratedPlayheadSeconds;
+      setPlayheadSeconds(hydratedPlayheadSeconds);
+    }
     autosaveHashRef.current = hydratedSnapshot;
     setSaveState("saved");
-  }, [loadedAssets, loadedProject]);
+  }, [loadedAssets, loadedProject, project?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,26 +647,32 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (!project) return;
-    const snapshot = JSON.stringify({
+    const snapshot = getEditorProjectPersistenceFingerprint(
       project,
-      assetIds: assets.map((asset) => asset.id),
-    });
+      assets.map((asset) => asset.id),
+      persistedPlayheadSecondsRef.current
+    );
     if (snapshot === autosaveHashRef.current) return;
 
     setSaveState("dirty");
     const timer = window.setTimeout(async () => {
       setSaveState("saving");
       const savedRecord = markEditorProjectSaved(
-        {
-          ...project,
-          assetIds: assets.map((asset) => asset.id),
-        },
+        serializeEditorProjectForPersistence(
+          {
+            ...project,
+            assetIds: assets.map((asset) => asset.id),
+          },
+          persistedPlayheadSecondsRef.current
+        ),
         Date.now()
       );
-      autosaveHashRef.current = JSON.stringify({
-        project: savedRecord,
-        assetIds: assets.map((asset) => asset.id),
-      });
+      persistedPlayheadSecondsRef.current = savedRecord.timeline.playheadSeconds;
+      autosaveHashRef.current = getEditorProjectPersistenceFingerprint(
+        savedRecord,
+        assets.map((asset) => asset.id),
+        savedRecord.timeline.playheadSeconds
+      );
       await saveProject(savedRecord);
       setProject(savedRecord);
       setSaveState("saved");
@@ -605,23 +749,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     [assetMap, selectedAudioItem]
   );
   const activePlacement = useMemo(() => {
-    if (!project) return undefined;
     return (
       clipPlacements.find(
         (placement) =>
-          project.timeline.playheadSeconds >= placement.startSeconds &&
-          project.timeline.playheadSeconds < placement.endSeconds
+          playheadSeconds >= placement.startSeconds &&
+          playheadSeconds < placement.endSeconds
       ) ?? clipPlacements[0]
     );
-  }, [clipPlacements, project]);
+  }, [clipPlacements, playheadSeconds]);
   const activeAudioPlacement = useMemo(() => {
-    if (!project) return undefined;
     return audioPlacements.find(
       (placement) =>
-        project.timeline.playheadSeconds >= placement.startSeconds &&
-        project.timeline.playheadSeconds < placement.endSeconds
+        playheadSeconds >= placement.startSeconds &&
+        playheadSeconds < placement.endSeconds
     );
-  }, [audioPlacements, project]);
+  }, [audioPlacements, playheadSeconds]);
   const activeResolvedAsset = activePlacement ? resolvedAssetsMap.get(activePlacement.clip.assetId) : undefined;
   const activeResolvedAudioAsset = activeAudioPlacement ? resolvedAssetsMap.get(activeAudioPlacement.item.assetId) : undefined;
   const captionTimeline = useMemo(() => {
@@ -633,13 +775,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     });
   }, [assets, historyMap, project]);
   const currentCaption = useMemo(() => {
-    if (!project) return undefined;
     return captionTimeline.find((chunk) => {
       const start = chunk.timestamp?.[0] ?? 0;
       const end = chunk.timestamp?.[1] ?? start;
-      return project.timeline.playheadSeconds >= start && project.timeline.playheadSeconds <= end;
+      return playheadSeconds >= start && playheadSeconds <= end;
     });
-  }, [captionTimeline, project]);
+  }, [captionTimeline, playheadSeconds]);
   const filteredHistory = useMemo(() => {
     const query = deferredLibrarySearch.trim().toLowerCase();
     if (!query) return history;
@@ -709,7 +850,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const minVisibleDuration = Math.min(maxVisibleDuration, Math.max(3, maxVisibleDuration * 0.15));
   const visibleDuration = clampNumber(maxVisibleDuration / timelineZoomLevel, minVisibleDuration, maxVisibleDuration);
   const maxVisibleStart = Math.max(0, maxVisibleDuration - visibleDuration);
-  const visibleStart = project ? clampNumber(project.timeline.playheadSeconds - visibleDuration / 2, 0, maxVisibleStart) : 0;
+  const visibleStart = clampNumber(playheadSeconds - visibleDuration / 2, 0, maxVisibleStart);
   const visibleEnd = visibleStart + visibleDuration;
   const timelineTickStep = visibleDuration <= 12 ? 1 : visibleDuration <= 30 ? 2 : visibleDuration <= 60 ? 5 : visibleDuration <= 180 ? 10 : 30;
   const timelineTicks = useMemo(() => {
@@ -765,8 +906,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [audioPlacements, visibleDuration, visibleEnd, visibleStart]);
 
   useEffect(() => {
-    playheadRef.current = project?.timeline.playheadSeconds ?? 0;
-  }, [project?.timeline.playheadSeconds]);
+    playheadRef.current = playheadSeconds;
+  }, [playheadSeconds]);
 
   useEffect(() => {
     isPlayingRef.current = isPlaying;
@@ -778,6 +919,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     projectDurationRef.current = projectDuration;
+  }, [projectDuration]);
+
+  useEffect(() => {
+    setPlayheadSeconds((current) => {
+      const clamped = clampNumber(current, 0, projectDuration);
+      return Math.abs(current - clamped) < 0.001 ? current : clamped;
+    });
   }, [projectDuration]);
 
   useEffect(() => {
@@ -830,7 +978,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (!isTimelinePreview || !activePlacement || !project) {
+    if (!isTimelinePreview || !activePlacement) {
       video.pause();
       return;
     }
@@ -844,11 +992,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     );
     const nextTime = clampNumber(
       isUsingActiveReversePreview
-        ? project.timeline.playheadSeconds - activePlacement.startSeconds
+        ? playheadSeconds - activePlacement.startSeconds
         : getVideoClipMediaTime(
             activePlacement.clip,
             activePlacement.startSeconds,
-            project.timeline.playheadSeconds
+            playheadSeconds
           ),
       isUsingActiveReversePreview ? 0 : activePlacement.clip.trimStartSeconds,
       isUsingActiveReversePreview ? Math.max(0, activePlacement.durationSeconds - 0.001) : clipMaxTime
@@ -874,7 +1022,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     } else {
       video.pause();
     }
-  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview, project]);
+  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview, playheadSeconds]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -889,16 +1037,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-    if (!isTimelinePreview || !activeAudioPlacement || !project) {
+    if (!isTimelinePreview || !activeAudioPlacement) {
       audio.pause();
       return;
     }
     const item = activeAudioPlacement.item;
-    if (project.timeline.playheadSeconds < activeAudioPlacement.startSeconds || project.timeline.playheadSeconds > activeAudioPlacement.endSeconds || item.muted) {
+    if (playheadSeconds < activeAudioPlacement.startSeconds || playheadSeconds > activeAudioPlacement.endSeconds || item.muted) {
       audio.pause();
       return;
     }
-    const currentTime = item.trimStartSeconds + (project.timeline.playheadSeconds - activeAudioPlacement.startSeconds);
+    const currentTime = item.trimStartSeconds + (playheadSeconds - activeAudioPlacement.startSeconds);
     if (Math.abs(audio.currentTime - currentTime) > (isPlaying ? 0.35 : 0.05)) {
       try {
         audio.currentTime = currentTime;
@@ -910,7 +1058,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     } else {
       audio.pause();
     }
-  }, [activeAudioPlacement, isPlaying, isTimelinePreview, previewAudioUrl, project]);
+  }, [activeAudioPlacement, isPlaying, isTimelinePreview, playheadSeconds, previewAudioUrl]);
 
   useEffect(() => {
     if (!isTimelinePreview || !isPlaying) {
@@ -937,17 +1085,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       playheadRef.current = nextTime;
 
       startTransition(() => {
-        setProject((prev) => {
-          if (!prev || Math.abs(prev.timeline.playheadSeconds - nextTime) < 0.001) {
-            return prev;
+        setPlayheadSeconds((current) => {
+          if (Math.abs(current - nextTime) < 0.001) {
+            return current;
           }
-          return {
-            ...prev,
-            timeline: {
-              ...prev.timeline,
-              playheadSeconds: nextTime,
-            },
-          };
+          return nextTime;
         });
       });
 
@@ -1121,14 +1263,26 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     reversePreviewInflightRef.current.set(key, request);
   }, [activeReversePreviewRequest, reversePreviewCache, reversePreviewFailedKeys]);
 
-  const updateProject = (updater: (current: EditorProjectRecord) => EditorProjectRecord) => {
+  const setTimelinePlayhead = useCallback((nextPlayheadSeconds: number) => {
+    const clampedPlayheadSeconds = clampNumber(
+      nextPlayheadSeconds,
+      0,
+      Math.max(projectDurationRef.current, 0)
+    );
+    playheadRef.current = clampedPlayheadSeconds;
+    setPlayheadSeconds((current) =>
+      Math.abs(current - clampedPlayheadSeconds) < 0.001 ? current : clampedPlayheadSeconds
+    );
+  }, []);
+
+  const updateProject = useCallback((updater: (current: EditorProjectRecord) => EditorProjectRecord) => {
     setProject((current) => {
       if (!current) return current;
       return ensureProjectSelection(updater(current));
     });
-  };
+  }, []);
 
-  const clearTimelineDragState = () => {
+  const clearTimelineDragState = useCallback(() => {
     dragVideoBlockRef.current = null;
     dragAssetIdRef.current = null;
     dragAssetKindRef.current = null;
@@ -1136,14 +1290,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     setDraggingAssetId(null);
     setDraggingAssetKind(null);
     setDropTargetIndex(null);
-  };
+  }, []);
 
-  const togglePanel = (panel: keyof PanelVisibilityState) => {
+  const togglePanel = useCallback((panel: keyof PanelVisibilityState) => {
     setPanelVisibility((current) => ({
       ...current,
       [panel]: !current[panel],
     }));
-  };
+  }, []);
 
   const beginPanelResize = (target: "left" | "right") => (event: ReactPointerEvent<HTMLButtonElement>) => {
     if (!topPanelsRef.current) return;
@@ -1188,13 +1342,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const pct = clampNumber((clientX - rect.left) / rect.width, 0, 1);
     const nextTime = visibleStart + visibleDuration * pct;
     setPreviewMode({ kind: "timeline" });
-    updateProject((current) => ({
-      ...current,
-      timeline: {
-        ...current.timeline,
-        playheadSeconds: nextTime,
-      },
-    }));
+    setTimelinePlayhead(nextTime);
   };
 
   const seekVisibleTimeline = (event: ReactMouseEvent<HTMLDivElement>) => {
@@ -1294,7 +1442,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const focusTimelineSelection = (
     selection: TimelineSelection,
-    playheadSeconds?: number,
+    nextPlayheadSeconds?: number,
     options?: { extendVideoSelection?: boolean }
   ) => {
     setPreviewMode({ kind: "timeline" });
@@ -1316,33 +1464,35 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       timeline: {
         ...current.timeline,
         selectedItem: selection,
-        playheadSeconds: playheadSeconds ?? current.timeline.playheadSeconds,
       },
     }));
+    if (nextPlayheadSeconds != null) {
+      setTimelinePlayhead(nextPlayheadSeconds);
+    }
   };
 
   const insertVideoAssetAtTimelineIndex = (asset: EditorAssetRecord, index: number) => {
+    if (!project) return;
     const clip = createDefaultVideoClip({
       assetId: asset.id,
       label: asset.filename.replace(/\.[^/.]+$/, ""),
       durationSeconds: asset.durationSeconds,
     });
-    updateProject((current) => {
-      const nextClips = [...current.timeline.videoClips];
-      const safeIndex = clampNumber(index, 0, nextClips.length);
-      nextClips.splice(safeIndex, 0, clip);
-      const placements = getTimelineClipPlacements(nextClips);
-      const insertedPlacement = placements.find((placement) => placement.clip.id === clip.id);
-      return {
-        ...current,
-        timeline: {
-          ...current.timeline,
-          selectedItem: { kind: "video", id: clip.id },
-          playheadSeconds: insertedPlacement?.startSeconds ?? current.timeline.playheadSeconds,
-          videoClips: nextClips,
-        },
-      };
-    });
+    const nextClips = [...project.timeline.videoClips];
+    const safeIndex = clampNumber(index, 0, nextClips.length);
+    nextClips.splice(safeIndex, 0, clip);
+    const insertedPlacement = getTimelineClipPlacements(nextClips).find(
+      (placement) => placement.clip.id === clip.id
+    );
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        selectedItem: { kind: "video", id: clip.id },
+        videoClips: nextClips,
+      },
+    }));
+    setTimelinePlayhead(insertedPlacement?.startSeconds ?? playheadRef.current);
     setPreviewMode({ kind: "timeline" });
   };
 
@@ -1367,9 +1517,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         ...current.timeline,
         videoClipGroups: [...current.timeline.videoClipGroups, joinedGroup],
         selectedItem: { kind: "video-group", id: joinedGroup.id },
-        playheadSeconds: firstPlacement?.startSeconds ?? current.timeline.playheadSeconds,
       },
     }));
+    if (firstPlacement) {
+      setTimelinePlayhead(firstPlacement.startSeconds);
+    }
     toast.success(`Joined ${selectedVideoPlacements.length} clips into one timeline block`);
   };
 
@@ -1387,9 +1539,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         ...current.timeline,
         videoClipGroups: unjoinTimelineClipGroup(current.timeline.videoClipGroups, selectedVideoGroup.id),
         selectedItem: firstClipId ? { kind: "video", id: firstClipId } : current.timeline.selectedItem,
-        playheadSeconds: firstPlacement?.startSeconds ?? current.timeline.playheadSeconds,
       },
     }));
+    if (firstPlacement) {
+      setTimelinePlayhead(firstPlacement.startSeconds);
+    }
     toast.success("Clips unjoined");
   };
 
@@ -1450,16 +1604,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       setAssets((current) => [...current, bakedAsset]);
       bakedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
       setPreviewMode({ kind: "timeline" });
+      const nextTimeline = replaceTimelineClipGroupWithClip(
+        project.timeline.videoClips,
+        project.timeline.videoClipGroups,
+        selectedVideoGroup.id,
+        bakedClip
+      );
+      const bakedPlacement = getTimelineClipPlacements(nextTimeline.videoClips).find(
+        (placement) => placement.clip.id === bakedClip.id
+      );
       updateProject((current) => {
-        const nextTimeline = replaceTimelineClipGroupWithClip(
-          current.timeline.videoClips,
-          current.timeline.videoClipGroups,
-          selectedVideoGroup.id,
-          bakedClip
-        );
-        const bakedPlacement = getTimelineClipPlacements(nextTimeline.videoClips).find(
-          (placement) => placement.clip.id === bakedClip.id
-        );
         return {
           ...current,
           assetIds: current.assetIds.includes(bakedAsset.id)
@@ -1470,10 +1624,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             videoClips: nextTimeline.videoClips,
             videoClipGroups: nextTimeline.videoClipGroups,
             selectedItem: { kind: "video", id: bakedClip.id },
-            playheadSeconds: bakedPlacement?.startSeconds ?? current.timeline.playheadSeconds,
           },
         };
       });
+      if (bakedPlacement) {
+        setTimelinePlayhead(bakedPlacement.startSeconds);
+      }
       setFocusedJoinedClipId(null);
       setSelectedVideoClipIds([bakedClip.id]);
       setInspectorVideoTab("edit");
@@ -1490,6 +1646,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const appendAudioAssetToTimeline = (asset: EditorAssetRecord) => {
+    if (!project) return;
     const audioItem = clampAudioItemToAsset(
       createDefaultAudioTrack({
         assetId: asset.id,
@@ -1497,19 +1654,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }),
       asset.durationSeconds
     );
-    updateProject((current) => {
-      const nextAudioItems = appendTimelineAudioItem(current.timeline.audioItems, audioItem);
-      const insertedItem = nextAudioItems.find((item) => item.id === audioItem.id);
-      return {
-        ...current,
-        timeline: {
-          ...current.timeline,
-          audioItems: nextAudioItems,
-          selectedItem: { kind: "audio", id: audioItem.id },
-          playheadSeconds: insertedItem?.startOffsetSeconds ?? current.timeline.playheadSeconds,
-        },
-      };
-    });
+    const nextAudioItems = appendTimelineAudioItem(project.timeline.audioItems, audioItem);
+    const insertedItem = nextAudioItems.find((item) => item.id === audioItem.id);
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        audioItems: nextAudioItems,
+        selectedItem: { kind: "audio", id: audioItem.id },
+      },
+    }));
+    if (insertedItem) {
+      setTimelinePlayhead(insertedItem.startOffsetSeconds);
+    }
     setPreviewMode({ kind: "timeline" });
   };
 
@@ -1563,35 +1720,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const pasteTimelineClipboardItem = () => {
     const clipboardItem = clipboardRef.current;
-    if (!clipboardItem) return false;
+    if (!clipboardItem || !project) return false;
 
     setPreviewMode({ kind: "timeline" });
     if (clipboardItem.kind === "video") {
       const nextClip = createClonedTimelineClip(clipboardItem.item);
-      updateProject((current) => {
-        const afterClipId =
-          current.timeline.selectedItem?.kind === "video"
-            ? current.timeline.selectedItem.id
-            : current.timeline.selectedItem?.kind === "video-group"
-              ? findTimelineClipGroup(current.timeline.videoClipGroups, current.timeline.selectedItem.id)?.clipIds.at(-1)
-              : undefined;
-        const nextClips = insertTimelineClipAfter(current.timeline.videoClips, nextClip, afterClipId);
-        const placement = getTimelineClipPlacements(nextClips).find((item) => item.clip.id === nextClip.id);
-        return {
-          ...current,
-          timeline: {
-            ...current.timeline,
-            videoClips: nextClips,
-            selectedItem: { kind: "video", id: nextClip.id },
-            playheadSeconds: placement?.startSeconds ?? current.timeline.playheadSeconds,
-          },
-        };
-      });
+      const afterClipId =
+        project.timeline.selectedItem?.kind === "video"
+          ? project.timeline.selectedItem.id
+          : project.timeline.selectedItem?.kind === "video-group"
+            ? findTimelineClipGroup(project.timeline.videoClipGroups, project.timeline.selectedItem.id)?.clipIds.at(-1)
+            : undefined;
+      const nextClips = insertTimelineClipAfter(project.timeline.videoClips, nextClip, afterClipId);
+      const placement = getTimelineClipPlacements(nextClips).find((item) => item.clip.id === nextClip.id);
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: nextClips,
+          selectedItem: { kind: "video", id: nextClip.id },
+        },
+      }));
+      if (placement) {
+        setTimelinePlayhead(placement.startSeconds);
+      }
       return true;
     }
 
     if (clipboardItem.kind === "video-group") {
-      if (!project) return false;
       const clonedClips = clipboardItem.clips.map((clip) => createClonedTimelineClip(clip));
       const firstInsertedClipId = clonedClips[0]?.id;
       const afterClipId =
@@ -1626,35 +1782,38 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               : firstInsertedClipId
                 ? { kind: "video", id: firstInsertedClipId }
                 : current.timeline.selectedItem,
-            playheadSeconds: placement?.startSeconds ?? current.timeline.playheadSeconds,
           },
         };
       });
+      if (placement) {
+        setTimelinePlayhead(placement.startSeconds);
+      }
       setFocusedJoinedClipId(insertedGroup?.clipIds[0] ?? null);
       return true;
     }
 
     const nextItem = createClonedTimelineAudioItem(clipboardItem.item);
-    updateProject((current) => {
-      const afterItemId = current.timeline.selectedItem?.kind === "audio" ? current.timeline.selectedItem.id : undefined;
-      const nextAudioItems = insertTimelineAudioItemAfter(current.timeline.audioItems, nextItem, afterItemId);
-      const insertedItem = nextAudioItems.find((item) => item.id === nextItem.id);
-      return {
-        ...current,
-        timeline: {
-          ...current.timeline,
-          audioItems: nextAudioItems,
-          selectedItem: { kind: "audio", id: nextItem.id },
-          playheadSeconds: insertedItem?.startOffsetSeconds ?? current.timeline.playheadSeconds,
-        },
-      };
-    });
+    const afterItemId = project.timeline.selectedItem?.kind === "audio" ? project.timeline.selectedItem.id : undefined;
+    const nextAudioItems = insertTimelineAudioItemAfter(project.timeline.audioItems, nextItem, afterItemId);
+    const insertedItem = nextAudioItems.find((item) => item.id === nextItem.id);
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        audioItems: nextAudioItems,
+        selectedItem: { kind: "audio", id: nextItem.id },
+      },
+    }));
+    if (insertedItem) {
+      setTimelinePlayhead(insertedItem.startOffsetSeconds);
+    }
     return true;
   };
 
   const duplicateSelectedTimelineItem = () => {
+    if (!project) return false;
+
     if (selectedVideoGroup) {
-      if (!project) return false;
       const result = duplicateTimelineClipGroup(
         project.timeline.videoClips,
         project.timeline.videoClipGroups,
@@ -1673,10 +1832,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             videoClips: result.videoClips,
             videoClipGroups: result.videoClipGroups,
             selectedItem: { kind: "video-group", id: result.duplicatedGroup.id },
-            playheadSeconds: duplicatedStartSeconds ?? current.timeline.playheadSeconds,
           },
         };
       });
+      if (duplicatedStartSeconds != null) {
+        setTimelinePlayhead(duplicatedStartSeconds);
+      }
       setFocusedJoinedClipId(result.duplicatedGroup.clipIds[0] ?? null);
       return true;
     }
@@ -1684,38 +1845,38 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (selectedClip) {
       const nextClip = createClonedTimelineClip(selectedClip);
       setPreviewMode({ kind: "timeline" });
-      updateProject((current) => {
-        const nextClips = insertTimelineClipAfter(current.timeline.videoClips, nextClip, selectedClip.id);
-        const placement = getTimelineClipPlacements(nextClips).find((item) => item.clip.id === nextClip.id);
-        return {
-          ...current,
-          timeline: {
-            ...current.timeline,
-            videoClips: nextClips,
-            selectedItem: { kind: "video", id: nextClip.id },
-            playheadSeconds: placement?.startSeconds ?? current.timeline.playheadSeconds,
-          },
-        };
-      });
+      const nextClips = insertTimelineClipAfter(project.timeline.videoClips, nextClip, selectedClip.id);
+      const placement = getTimelineClipPlacements(nextClips).find((item) => item.clip.id === nextClip.id);
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: nextClips,
+          selectedItem: { kind: "video", id: nextClip.id },
+        },
+      }));
+      if (placement) {
+        setTimelinePlayhead(placement.startSeconds);
+      }
       return true;
     }
 
     if (selectedAudioItem) {
       const nextItem = createClonedTimelineAudioItem(selectedAudioItem);
       setPreviewMode({ kind: "timeline" });
-      updateProject((current) => {
-        const nextAudioItems = insertTimelineAudioItemAfter(current.timeline.audioItems, nextItem, selectedAudioItem.id);
-        const insertedItem = nextAudioItems.find((item) => item.id === nextItem.id);
-        return {
-          ...current,
-          timeline: {
-            ...current.timeline,
-            audioItems: nextAudioItems,
-            selectedItem: { kind: "audio", id: nextItem.id },
-            playheadSeconds: insertedItem?.startOffsetSeconds ?? current.timeline.playheadSeconds,
-          },
-        };
-      });
+      const nextAudioItems = insertTimelineAudioItemAfter(project.timeline.audioItems, nextItem, selectedAudioItem.id);
+      const insertedItem = nextAudioItems.find((item) => item.id === nextItem.id);
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          audioItems: nextAudioItems,
+          selectedItem: { kind: "audio", id: nextItem.id },
+        },
+      }));
+      if (insertedItem) {
+        setTimelinePlayhead(insertedItem.startOffsetSeconds);
+      }
       return true;
     }
 
@@ -1823,7 +1984,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         videoClips: splitTimelineClip(
           current.timeline.videoClips,
           current.timeline.selectedItem?.kind === "video" ? current.timeline.selectedItem.id : "",
-          current.timeline.playheadSeconds
+          playheadRef.current
         ),
       },
     }));
@@ -1952,7 +2113,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
-  const handleExport = async () => {
+  const handleExport = useCallback(async () => {
     if (!project) return;
     if (project.timeline.videoClips.length === 0) {
       toast.error("Add at least one video clip to export the project.");
@@ -1969,7 +2130,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return;
     }
 
-    const exportingProject = markEditorProjectExporting(project, Date.now());
+    const exportingProject = markEditorProjectExporting(
+      serializeEditorProjectForPersistence(project, persistedPlayheadSecondsRef.current),
+      Date.now()
+    );
     setProject(exportingProject);
     setIsExporting(true);
     setExportProgress(1);
@@ -2049,7 +2213,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       setIsExporting(false);
       setExportProgress(0);
     }
-  };
+  }, [exportResolution, historyMap, project, projectDuration, resolvedAssets, resolvedAssetsMap, saveExport, saveProject]);
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (isRenderBusy) return;
@@ -2103,6 +2267,24 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     };
   }, []);
 
+  const handleProjectNameChange = useCallback((nextName: string) => {
+    updateProject((current) => ({
+      ...current,
+      name: nextName,
+    }));
+  }, [updateProject]);
+
+  const handleAspectRatioChange = useCallback((nextAspectRatio: EditorAspectRatio) => {
+    updateProject((current) => ({
+      ...current,
+      aspectRatio: nextAspectRatio,
+    }));
+  }, [updateProject]);
+
+  const handleExportResolutionChange = useCallback((nextResolution: EditorResolution) => {
+    setExportResolution(nextResolution);
+  }, []);
+
   if (isLoading || !project) {
     return (
       <main className="min-h-screen px-4 py-10 sm:px-8">
@@ -2128,7 +2310,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     panelVisibility.left && (panelVisibility.center || (!panelVisibility.center && panelVisibility.right));
   const showRightResizeHandle = panelVisibility.center && panelVisibility.right;
   const playheadPct = clampNumber(
-    ((project.timeline.playheadSeconds - visibleStart) / Math.max(visibleDuration, 0.001)) * 100,
+    ((playheadSeconds - visibleStart) / Math.max(visibleDuration, 0.001)) * 100,
     0,
     100
   );
@@ -2141,7 +2323,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ? previewedAsset
         ? `${previewedAsset.kind} · ${secondsToClock(previewedAsset.durationSeconds)} · ${previewedAsset.sourceType}`
         : "This asset is no longer available."
-      : `${secondsToClock(project.timeline.playheadSeconds)} / ${secondsToClock(projectDuration)}`;
+      : `${secondsToClock(playheadSeconds)} / ${secondsToClock(projectDuration)}`;
   const previewBadge =
     previewMode.kind === "asset"
       ? previewedAsset?.kind === "audio"
@@ -2192,106 +2374,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       />
 
       <div className={cn("mx-auto flex h-full w-full flex-col gap-[6px]", isRenderBusy && "pointer-events-none select-none")}>
-        <header className="shrink-0 border-b border-white/8 bg-[linear-gradient(180deg,rgba(11,14,20,0.98),rgba(7,10,15,0.98))] px-2 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
-          <div className="flex flex-col gap-2.5 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex flex-wrap items-center gap-3">
-              <Button asChild variant="ghost" className="h-8 rounded-lg px-2.5 text-white/68 hover:bg-white/[0.06] hover:text-white">
-                <Link href="/creator/editor">
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Projects
-                </Link>
-              </Button>
-              <div className="h-7 w-px bg-white/8" />
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-3">
-                  <div className="inline-flex items-center gap-2 rounded-full border border-cyan-400/16 bg-cyan-400/8 px-2.5 py-1 text-[10px] uppercase tracking-[0.28em] text-cyan-100/84">
-                    <Film className="h-4 w-4" />
-                    Timeline Studio
-                  </div>
-                  <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/44">
-                    {saveState === "saving" ? "Saving…" : saveState === "dirty" ? "Unsaved changes" : "Saved"}
-                  </span>
-                </div>
-                <Input
-                  value={project.name}
-                  onChange={(event) =>
-                    updateProject((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
-                  }
-                  className="h-10 max-w-xl rounded-none border-none bg-transparent px-0 text-[1.25rem] font-semibold tracking-[-0.02em] placeholder:text-white/24 focus-visible:ring-0"
-                  placeholder="Project name"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={project.aspectRatio}
-                onValueChange={(value) =>
-                  updateProject((current) => ({
-                    ...current,
-                    aspectRatio: value as EditorAspectRatio,
-                  }))
-                }
-              >
-                <SelectTrigger className="h-9 w-[146px] rounded-lg border-white/8 bg-white/[0.04] text-white">
-                  <SelectValue placeholder="Aspect" />
-                </SelectTrigger>
-                <SelectContent className="border-white/10 bg-slate-950 text-white">
-                  {ASPECT_OPTIONS.map((aspect) => (
-                    <SelectItem key={aspect} value={aspect}>
-                      {aspect} · {EDITOR_ASPECT_RATIO_LABELS[aspect]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select value={exportResolution} onValueChange={(value) => setExportResolution(value as EditorResolution)}>
-                <SelectTrigger className="h-9 w-[146px] rounded-lg border-white/8 bg-white/[0.04] text-white">
-                  <SelectValue placeholder="Resolution" />
-                </SelectTrigger>
-                <SelectContent className="border-white/10 bg-slate-950 text-white">
-                  {RESOLUTION_OPTIONS.map((resolution) => (
-                    <SelectItem key={resolution} value={resolution}>
-                      {EDITOR_RESOLUTION_LABELS[resolution]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <div className="mx-1 h-7 w-px bg-white/8" />
-              <div className="flex flex-wrap items-center gap-1 rounded-[0.9rem] border border-white/8 bg-black/25 p-1">
-                {([
-                  ["left", "Assets"],
-                  ["center", "Preview"],
-                  ["right", "Inspector"],
-                ] as const).map(([panel, label]) => (
-                  <Button
-                    key={panel}
-                    variant="ghost"
-                    className={cn(
-                      "h-8 rounded-[0.7rem] px-2.5 text-[10px] uppercase tracking-[0.24em]",
-                      panelVisibility[panel]
-                        ? "bg-white/[0.08] text-white hover:bg-white/[0.12]"
-                        : "text-white/30 hover:bg-white/[0.05] hover:text-white/72"
-                    )}
-                    onClick={() => togglePanel(panel)}
-                  >
-                    {label}
-                  </Button>
-                ))}
-              </div>
-              <Button
-                onClick={handleExport}
-                disabled={isRenderBusy}
-                className="h-9 rounded-lg border border-amber-300/15 bg-amber-300/90 px-4 text-sm font-semibold text-slate-950 hover:bg-amber-200"
-              >
-                {isRenderBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-                Export
-              </Button>
-            </div>
-          </div>
-        </header>
+        <TimelineWorkspaceHeader
+          projectName={project.name}
+          projectAspectRatio={project.aspectRatio}
+          exportResolution={exportResolution}
+          saveState={saveState}
+          panelVisibility={panelVisibility}
+          isRenderBusy={isRenderBusy}
+          onProjectNameChange={handleProjectNameChange}
+          onAspectRatioChange={handleAspectRatioChange}
+          onExportResolutionChange={handleExportResolutionChange}
+          onTogglePanel={togglePanel}
+          onExport={handleExport}
+        />
 
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.95fr)_minmax(320px,0.82fr)] gap-[6px]">
           <section ref={topPanelsRef} className="flex min-h-0 gap-[6px]">
@@ -2623,7 +2718,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             <>
                               <div className="flex flex-wrap items-center justify-between gap-2 rounded-[0.9rem] border border-white/8 bg-black/25 px-3 py-2">
                                 <div className={EDITOR_TIMECODE_CLASS}>
-                                  {secondsToClock(project.timeline.playheadSeconds)} / {secondsToClock(projectDuration)}
+                                  {secondsToClock(playheadSeconds)} / {secondsToClock(projectDuration)}
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <Button
@@ -2637,15 +2732,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                   <Button
                                     variant="ghost"
                                     className="h-8 rounded-[0.85rem] px-3 text-xs text-white/52 hover:bg-white/[0.06] hover:text-white"
-                                    onClick={() =>
-                                      updateProject((current) => ({
-                                        ...current,
-                                        timeline: {
-                                          ...current.timeline,
-                                          playheadSeconds: 0,
-                                        },
-                                      }))
-                                    }
+                                    onClick={() => setTimelinePlayhead(0)}
                                   >
                                     Reset
                                   </Button>
@@ -2656,16 +2743,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 min={0}
                                 max={Math.max(projectDuration, 0.1)}
                                 step={0.01}
-                                value={project.timeline.playheadSeconds}
-                                onChange={(event) =>
-                                  updateProject((current) => ({
-                                    ...current,
-                                    timeline: {
-                                      ...current.timeline,
-                                      playheadSeconds: Number(event.target.value),
-                                    },
-                                  }))
-                                }
+                                value={playheadSeconds}
+                                onChange={(event) => setTimelinePlayhead(Number(event.target.value))}
                                 className="mt-2 w-full accent-cyan-400"
                               />
                             </>

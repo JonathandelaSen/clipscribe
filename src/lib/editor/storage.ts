@@ -241,6 +241,34 @@ export function markEditorProjectSaved(project: EditorProjectRecord, now = Date.
   };
 }
 
+function sanitizePersistedPlayheadSeconds(playheadSeconds: number): number {
+  return Number.isFinite(playheadSeconds) ? Math.max(0, playheadSeconds) : 0;
+}
+
+export function serializeEditorProjectForPersistence(
+  project: EditorProjectRecord,
+  persistedPlayheadSeconds = project.timeline.playheadSeconds
+): EditorProjectRecord {
+  return {
+    ...project,
+    timeline: {
+      ...project.timeline,
+      playheadSeconds: sanitizePersistedPlayheadSeconds(persistedPlayheadSeconds),
+    },
+  };
+}
+
+export function getEditorProjectPersistenceFingerprint(
+  project: EditorProjectRecord,
+  assetIds: readonly string[],
+  persistedPlayheadSeconds = project.timeline.playheadSeconds
+): string {
+  return JSON.stringify({
+    project: serializeEditorProjectForPersistence(project, persistedPlayheadSeconds),
+    assetIds,
+  });
+}
+
 export function buildEditorExportRecord(input: {
   id?: string;
   projectId: string;
