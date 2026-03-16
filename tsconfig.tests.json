@@ -17,6 +17,7 @@
     "src/lib/creator/core/**/*.ts",
     "src/lib/editor/**/*.ts",
     "src/lib/transcriber/core/**/*.ts",
+    "src/lib/youtube/**/*.ts",
     "tests/core/**/*.ts"
   ],
   "exclude": [

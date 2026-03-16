@@ -1,10 +1,65 @@
-import { getTimelineAudioPlacements, getTimelineClipPlacements } from "./core/timeline";
-import type { EditorProjectRecord, TimelineAudioItem, TimelineVideoClip } from "./types";
+import { getProjectDuration, getTimelineAudioPlacements, getTimelineClipPlacements } from "./core/timeline";
+import { isEditorFfmpegExecDiagnosticMessage } from "./local-render-runtime";
+import type { EditorProjectRecord, EditorResolution, TimelineAudioItem, TimelineVideoClip } from "./types";
 
-export const BROWSER_SEGMENT_RENDER_TRIGGER_CLIP_COUNT = 18;
-export const BROWSER_SEGMENT_RENDER_TRIGGER_DURATION_SECONDS = 300;
+export type BrowserRenderTierName = "low" | "medium" | "high" | "extreme";
+
+export interface BrowserRenderProfile {
+  name: BrowserRenderTierName;
+  maxClipCount: number;
+  maxDurationSeconds: number;
+  videoPreset: "superfast" | "veryfast";
+  crf: number;
+}
+
+export interface BrowserRenderPlan {
+  profile: BrowserRenderProfile;
+  durationSeconds: number;
+  shouldSegment: boolean;
+  includeAudioInSegments: boolean;
+  needsAudioRemixPass: boolean;
+  needsFinalMuxPass: boolean;
+}
+
 export const BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT = 1;
 export const BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS = 45;
+export const BROWSER_SEGMENT_RENDER_MEDIUM_MAX_CLIP_COUNT = 2;
+export const BROWSER_SEGMENT_RENDER_MEDIUM_MAX_DURATION_SECONDS = 75;
+export const BROWSER_SEGMENT_RENDER_LOW_MAX_CLIP_COUNT = 3;
+export const BROWSER_SEGMENT_RENDER_LOW_MAX_DURATION_SECONDS = 120;
+export const BROWSER_SEGMENT_RENDER_EXTREME_MAX_CLIP_COUNT = 1;
+export const BROWSER_SEGMENT_RENDER_EXTREME_MAX_DURATION_SECONDS = 30;
+
+const BROWSER_RENDER_PROFILES: Record<BrowserRenderTierName, BrowserRenderProfile> = {
+  low: {
+    name: "low",
+    maxClipCount: BROWSER_SEGMENT_RENDER_LOW_MAX_CLIP_COUNT,
+    maxDurationSeconds: BROWSER_SEGMENT_RENDER_LOW_MAX_DURATION_SECONDS,
+    videoPreset: "superfast",
+    crf: 24,
+  },
+  medium: {
+    name: "medium",
+    maxClipCount: BROWSER_SEGMENT_RENDER_MEDIUM_MAX_CLIP_COUNT,
+    maxDurationSeconds: BROWSER_SEGMENT_RENDER_MEDIUM_MAX_DURATION_SECONDS,
+    videoPreset: "veryfast",
+    crf: 23,
+  },
+  high: {
+    name: "high",
+    maxClipCount: BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT,
+    maxDurationSeconds: BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS,
+    videoPreset: "veryfast",
+    crf: 22,
+  },
+  extreme: {
+    name: "extreme",
+    maxClipCount: BROWSER_SEGMENT_RENDER_EXTREME_MAX_CLIP_COUNT,
+    maxDurationSeconds: BROWSER_SEGMENT_RENDER_EXTREME_MAX_DURATION_SECONDS,
+    videoPreset: "veryfast",
+    crf: 24,
+  },
+};
 
 export interface BrowserRenderSegment {
   index: number;
@@ -19,14 +74,117 @@ function roundMs(value: number): number {
   return Number(value.toFixed(3));
 }
 
+function getBrowserTimelineDurationSeconds(project: EditorProjectRecord): number {
+  return roundMs(getProjectDuration(project));
+}
+
+function hasReversedClip(project: EditorProjectRecord): boolean {
+  return project.timeline.videoClips.some((clip) => clip.actions.reverse);
+}
+
+export function getBrowserRenderProfile(name: BrowserRenderTierName): BrowserRenderProfile {
+  return BROWSER_RENDER_PROFILES[name];
+}
+
+export function selectBrowserRenderProfile(input: {
+  project: EditorProjectRecord;
+  resolution: EditorResolution;
+  durationSeconds?: number;
+}): BrowserRenderProfile {
+  const durationSeconds = input.durationSeconds ?? getBrowserTimelineDurationSeconds(input.project);
+  const audioItemCount = input.project.timeline.audioItems.length;
+  const clipCount = input.project.timeline.videoClips.length;
+  const subtitlesEnabled = input.project.subtitles.enabled;
+  const reversed = hasReversedClip(input.project);
+
+  if (input.resolution === "4K") {
+    return getBrowserRenderProfile("extreme");
+  }
+
+  if (subtitlesEnabled || reversed || audioItemCount > 1) {
+    return getBrowserRenderProfile("high");
+  }
+
+  if (
+    input.resolution === "1080p" ||
+    audioItemCount === 1 ||
+    clipCount >= 24 ||
+    durationSeconds >= 1_500
+  ) {
+    return getBrowserRenderProfile("medium");
+  }
+
+  return getBrowserRenderProfile("low");
+}
+
+export function getSaferBrowserRenderProfile(
+  profile: BrowserRenderProfile
+): BrowserRenderProfile | null {
+  switch (profile.name) {
+    case "low":
+      return getBrowserRenderProfile("medium");
+    case "medium":
+      return getBrowserRenderProfile("high");
+    case "high":
+      return getBrowserRenderProfile("extreme");
+    case "extreme":
+      return null;
+  }
+}
+
+export function getRetryBrowserRenderProfile(input: {
+  error: unknown;
+  currentProfile: BrowserRenderProfile;
+}): BrowserRenderProfile | null {
+  const rawMessage = input.error instanceof Error ? input.error.message : String(input.error);
+  if (!isEditorFfmpegExecDiagnosticMessage(rawMessage)) {
+    return null;
+  }
+
+  return getSaferBrowserRenderProfile(input.currentProfile);
+}
+
 export function shouldUseSegmentedBrowserRender(input: {
   clipCount: number;
   durationSeconds: number;
+  maxClipCount?: number;
+  maxDurationSeconds?: number;
 }): boolean {
-  return (
-    input.clipCount >= BROWSER_SEGMENT_RENDER_TRIGGER_CLIP_COUNT ||
-    input.durationSeconds >= BROWSER_SEGMENT_RENDER_TRIGGER_DURATION_SECONDS
-  );
+  const maxClipCount = Math.max(1, Math.floor(input.maxClipCount ?? BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT));
+  const maxDurationSeconds = Math.max(1, input.maxDurationSeconds ?? BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS);
+
+  return input.clipCount > maxClipCount || input.durationSeconds > maxDurationSeconds;
+}
+
+export function buildBrowserRenderPlan(input: {
+  project: EditorProjectRecord;
+  resolution: EditorResolution;
+  profileName?: BrowserRenderTierName;
+}): BrowserRenderPlan {
+  const durationSeconds = getBrowserTimelineDurationSeconds(input.project);
+  const profile = input.profileName
+    ? getBrowserRenderProfile(input.profileName)
+    : selectBrowserRenderProfile({
+        project: input.project,
+        resolution: input.resolution,
+        durationSeconds,
+      });
+  const shouldSegment = shouldUseSegmentedBrowserRender({
+    clipCount: input.project.timeline.videoClips.length,
+    durationSeconds,
+    maxClipCount: profile.maxClipCount,
+    maxDurationSeconds: profile.maxDurationSeconds,
+  }) && input.project.timeline.videoClips.length > 0;
+  const includeAudioInSegments = shouldSegment && input.project.timeline.audioItems.length === 0;
+
+  return {
+    profile,
+    durationSeconds,
+    shouldSegment,
+    includeAudioInSegments,
+    needsAudioRemixPass: shouldSegment && !includeAudioInSegments,
+    needsFinalMuxPass: shouldSegment && !includeAudioInSegments,
+  };
 }
 
 interface RenderSegmentClip {
@@ -119,8 +277,13 @@ function buildSegmentProject(input: {
   const startSeconds = firstPlacement.startSeconds;
   const endSeconds = lastPlacement.endSeconds;
   const videoClips = input.segmentClips.map((segmentClip) => segmentClip.clip);
+  const imageItems = input.project.timeline.imageItems.map((item) => ({
+    ...item,
+    canvas: { ...item.canvas },
+  }));
   const audioItems = sliceTimelineAudioItemsForSegment(input.project, startSeconds, endSeconds);
   const assetIdSet = new Set([
+    ...imageItems.map((item) => item.assetId),
     ...videoClips.map((clip) => clip.assetId),
     ...audioItems.map((item) => item.assetId),
   ]);
@@ -139,6 +302,7 @@ function buildSegmentProject(input: {
         playheadSeconds: 0,
         zoomLevel: input.project.timeline.zoomLevel,
         selectedItem: undefined,
+        imageItems,
         videoClips,
         videoClipGroups: [],
         audioItems,

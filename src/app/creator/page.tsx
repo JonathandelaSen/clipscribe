@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FileText, Clapperboard, ArrowRight, Sparkles, ArrowLeft, Film } from "lucide-react";
+import { FileText, Clapperboard, ArrowRight, Sparkles, ArrowLeft, Film, Upload } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -33,6 +33,16 @@ const TOOLS = [
     bgColor: "bg-cyan-300/10",
     borderColor: "border-cyan-300/20",
     glowColor: "group-hover:bg-cyan-400/10",
+  },
+  {
+    title: "YouTube Upload",
+    description: "Connect OAuth, drag in a finished video, and publish with manual metadata plus optional assets.",
+    href: "/creator/youtube",
+    icon: Upload,
+    color: "text-emerald-300",
+    bgColor: "bg-emerald-300/10",
+    borderColor: "border-emerald-300/20",
+    glowColor: "group-hover:bg-emerald-400/10",
   },
 ] as const;
 
@@ -75,7 +85,7 @@ export default function CreatorPage() {
         </header>
 
         {/* Tools Grid */}
-        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 pb-20">
+        <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 pb-20">
           {TOOLS.map((tool) => {
             const Icon = tool.icon;
             return (

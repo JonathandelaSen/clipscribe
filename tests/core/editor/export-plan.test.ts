@@ -12,6 +12,7 @@ import {
 } from "../../../src/lib/editor/core/export-plan";
 import {
   createDefaultAudioTrack,
+  createDefaultImageTrackItem,
   createDefaultVideoClip,
   createEmptyEditorProject,
   createEditorAssetRecord,
@@ -510,4 +511,161 @@ test("buildEditorAudioExportPlan builds one audio-only mix for clip audio plus t
   assert.ok(plan.filterComplex.includes("concat=n=1:v=0:a=1[clip_audio_track]"));
   assert.ok(plan.filterComplex.includes("adelay=1500|1500"));
   assert.ok(plan.filterComplex.includes("amix=inputs=2:duration=longest:dropout_transition=0[mixed_audio_0]"));
+});
+
+test("buildEditorExportPlan overlays a full-length image track on top of the base video track", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const video = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "video",
+    filename: "clip.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 10,
+    durationSeconds: 8,
+    width: 1920,
+    height: 1080,
+    hasAudio: true,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const image = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "image",
+    filename: "cover.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    durationSeconds: 0,
+    width: 1920,
+    height: 1080,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+
+  project.assetIds = [video.id, image.id];
+  project.timeline.videoClips = [
+    createDefaultVideoClip({ assetId: video.id, label: "Clip", durationSeconds: 8 }),
+  ];
+  project.timeline.imageItems = [
+    createDefaultImageTrackItem({ assetId: image.id, label: "Cover" }),
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: video.id, path: "clip.mp4", asset: video },
+      { inputIndex: 1, assetId: image.id, path: "cover.png", asset: image },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.equal(plan.videoTrackLabel, "video_track");
+  assert.ok(plan.ffmpegArgs.includes("-loop"));
+  assert.ok(plan.filterComplex.includes("[video_track_base][img0]overlay=shortest=1:eof_action=pass[video_track]"));
+});
+
+test("buildEditorExportPlan keeps mismatched image ratios truthful until the frame is fit", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const image = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "image",
+    filename: "square.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    durationSeconds: 0,
+    width: 1200,
+    height: 1200,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+
+  const defaultItem = createDefaultImageTrackItem({ assetId: image.id, label: "Square" });
+  project.assetIds = [image.id];
+  project.timeline.imageItems = [defaultItem];
+
+  const defaultPlan = buildEditorExportPlan({
+    project,
+    inputs: [{ inputIndex: 0, assetId: image.id, path: "square.png", asset: image }],
+    resolution: "1080p",
+  });
+
+  assert.match(
+    defaultPlan.filterComplex,
+    /\[0:v\]scale=1080:1080,pad=1920:1080:420:0:black,crop=1920:1080:0:0,format=yuv420p\[img0\]/
+  );
+
+  project.timeline.imageItems = [
+    {
+      ...defaultItem,
+      canvas: {
+        ...defaultItem.canvas,
+        zoom: 1.7778,
+      },
+    },
+  ];
+
+  const fitPlan = buildEditorExportPlan({
+    project,
+    inputs: [{ inputIndex: 0, assetId: image.id, path: "square.png", asset: image }],
+    resolution: "1080p",
+  });
+
+  assert.match(
+    fitPlan.filterComplex,
+    /\[0:v\]scale=1920:1920,crop=1920:1080:0:420,format=yuv420p\[img0\]/
+  );
+});
+
+test("buildEditorExportPlan can render an image-only project and mix timeline audio over it", () => {
+  const project = createEmptyEditorProject({ aspectRatio: "16:9" });
+  const image = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "image",
+    filename: "cover.png",
+    mimeType: "image/png",
+    sizeBytes: 10,
+    durationSeconds: 0,
+    width: 1920,
+    height: 1080,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+  const audio = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "audio",
+    filename: "bed.mp3",
+    mimeType: "audio/mpeg",
+    sizeBytes: 10,
+    durationSeconds: 20,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+  });
+
+  project.assetIds = [image.id, audio.id];
+  project.timeline.imageItems = [
+    createDefaultImageTrackItem({ assetId: image.id, label: "Cover" }),
+  ];
+  project.timeline.audioItems = [
+    {
+      ...createDefaultAudioTrack({ assetId: audio.id, durationSeconds: 20 }),
+      startOffsetSeconds: 2,
+      trimEndSeconds: 12,
+    },
+  ];
+
+  const plan = buildEditorExportPlan({
+    project,
+    inputs: [
+      { inputIndex: 0, assetId: image.id, path: "cover.png", asset: image },
+      { inputIndex: 1, assetId: audio.id, path: "bed.mp3", asset: audio },
+    ],
+    resolution: "1080p",
+  });
+
+  assert.equal(plan.durationSeconds, 14);
+  assert.equal(plan.mixedAudioLabel, "mixed_audio_0");
+  assert.ok(plan.filterComplex.includes("color=c=black:s=1920x1080:d=14.000[video_track_base]"));
+  assert.ok(plan.filterComplex.includes("anullsrc=r=48000:cl=stereo,atrim=duration=14.000[clip_audio_track]"));
 });

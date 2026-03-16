@@ -18,6 +18,9 @@ export interface ParsedCreateTimelineProjectBundleCliInput {
   outputDirectory?: string;
   videoPaths: string[];
   audioPath?: string;
+  videoCloneToFillIndex?: number;
+  videoTrimFinalToAudio: boolean;
+  audioTrimFinalToVideo: boolean;
   reverseIndexes: number[];
   mutedVideoIndexes: number[];
   videoTrimSpecs: Array<{ index: number; startSeconds: number; endSeconds: number }>;
@@ -54,6 +57,9 @@ export interface CreateTimelineProjectBundleOptions {
   outputDirectory: string;
   videoClips: CreateTimelineProjectBundleVideoInput[];
   audioItem?: CreateTimelineProjectBundleAudioInput;
+  videoCloneToFillIndex?: number;
+  videoTrimFinalToAudio?: boolean;
+  audioTrimFinalToVideo?: boolean;
 }
 
 export interface EditorProjectBundleCopyPlanEntry {
@@ -215,10 +221,13 @@ export function getCreateTimelineProjectBundleHelpText(): string {
     "  --video-trim <i:start:end>   Override one clip trim window (repeatable)",
     "  --video-volume <i:volume>    Override one clip volume from 0 to 1 (repeatable)",
     "  --video-muted <index>        Mute the given 1-based video clip index (repeatable)",
+    "  --video-clone-to-fill <i>    Clone one clip until the video track reaches the audio length",
+    "  --video-trim-final-to-audio  Trim the last video clip so video matches audio length",
     "  --audio-trim <start:end>     Trim the optional audio item",
     "  --audio-start <seconds>      Audio start offset in project time",
     "  --audio-volume <0-1>         Audio item volume",
     "  --audio-muted                Mute the optional audio item",
+    "  --audio-trim-final-to-video  Trim audio so it matches the final video length",
     "  --output <directory>         Destination parent directory for the bundle",
     "  --help                       Show this help text",
   ].join("\n");
@@ -231,6 +240,8 @@ export function parseCreateTimelineProjectBundleArgs(
     help: false,
     interactive: false,
     videoPaths: [],
+    videoTrimFinalToAudio: false,
+    audioTrimFinalToVideo: false,
     reverseIndexes: [],
     mutedVideoIndexes: [],
     videoTrimSpecs: [],
@@ -273,6 +284,10 @@ export function parseCreateTimelineProjectBundleArgs(
         parsed.audioPath = readRequiredValue(args, index, token);
         index += 1;
         break;
+      case "--video-clone-to-fill":
+        parsed.videoCloneToFillIndex = readPositiveIndex(readRequiredValue(args, index, token), token);
+        index += 1;
+        break;
       case "--reverse":
         parsed.reverseIndexes.push(readPositiveIndex(readRequiredValue(args, index, token), token));
         index += 1;
@@ -304,6 +319,12 @@ export function parseCreateTimelineProjectBundleArgs(
       case "--audio-muted":
         parsed.audioMuted = true;
         break;
+      case "--video-trim-final-to-audio":
+        parsed.videoTrimFinalToAudio = true;
+        break;
+      case "--audio-trim-final-to-video":
+        parsed.audioTrimFinalToVideo = true;
+        break;
       default:
         throw new Error(`Unknown flag "${token}". Use --help to see supported options.`);
     }
@@ -318,6 +339,9 @@ export function normalizeCreateTimelineProjectBundleCliInput(
 ): CreateTimelineProjectBundleOptions {
   if (!parsed.interactive && parsed.videoPaths.length === 0) {
     throw new Error("At least one --video path is required unless you use --interactive.");
+  }
+  if (parsed.videoCloneToFillIndex != null && !parsed.audioPath) {
+    throw new Error("--video-clone-to-fill requires --audio so the target track length is known.");
   }
 
   const videoClips: CreateTimelineProjectBundleVideoInput[] = parsed.videoPaths.map((path) => {
@@ -354,6 +378,10 @@ export function normalizeCreateTimelineProjectBundleCliInput(
     videoClips[spec.index - 1].volume = spec.volume;
   }
 
+  if (parsed.videoCloneToFillIndex != null) {
+    assertVideoIndexInRange(parsed.videoCloneToFillIndex, videoClips.length, "--video-clone-to-fill");
+  }
+
   const audioItem = parsed.audioPath
     ? {
         sourcePath: normalizeCliPathInput(parsed.audioPath, "--audio"),
@@ -372,6 +400,9 @@ export function normalizeCreateTimelineProjectBundleCliInput(
     outputDirectory: parsed.outputDirectory ? normalizeCliPathInput(parsed.outputDirectory, "--output") : cwd,
     videoClips,
     audioItem,
+    videoCloneToFillIndex: parsed.videoCloneToFillIndex,
+    videoTrimFinalToAudio: parsed.videoTrimFinalToAudio,
+    audioTrimFinalToVideo: parsed.audioTrimFinalToVideo,
   };
 }
 

@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { access, copyFile, mkdir, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -10,10 +10,13 @@ import {
   type CreateTimelineProjectBundleVideoInput,
   type ParsedCreateTimelineProjectBundleCliInput,
 } from "./bundle-cli";
+import type { EditorProjectBundleResolvedMedia } from "./bundle";
+import { probeMediaFileWithFfprobe } from "./node-media";
 import type { EditorAspectRatio } from "./types";
 
 import {
   promptConfirmValue as defaultPromptConfirmValue,
+  promptForMediaFilePath as defaultPromptForMediaFilePath,
   promptNumberValue as defaultPromptNumberValue,
   promptSelectValue as defaultPromptSelectValue,
   promptTextValue as defaultPromptTextValue,
@@ -25,6 +28,11 @@ interface PromptTextInput {
   message: string;
   initial?: string;
   validate?: (value: string) => true | string;
+}
+
+interface PromptMediaPathInput {
+  startDirectory: string;
+  kind: "video" | "audio";
 }
 
 interface PromptConfirmInput {
@@ -57,6 +65,7 @@ export interface CreateTimelineProjectBundlePromptApi {
   promptConfirmValue: (input: PromptConfirmInput) => Promise<boolean>;
   promptNumberValue: (input: PromptNumberInput) => Promise<number>;
   promptSelectValue: <T>(input: PromptSelectInput<T>) => Promise<T>;
+  promptForMediaPath?: (input: PromptMediaPathInput) => Promise<string>;
 }
 
 export interface CreateTimelineProjectBundleWizardInput {
@@ -75,6 +84,7 @@ export interface CreateTimelineProjectBundleProgressUpdate {
 export interface CreateTimelineProjectBundleDependencies {
   now?: () => number;
   onProgress?: (update: CreateTimelineProjectBundleProgressUpdate) => void;
+  probeMedia?: (filePath: string) => Promise<EditorProjectBundleResolvedMedia>;
 }
 
 export interface CreatedTimelineProjectBundleResult {
@@ -90,7 +100,16 @@ const DEFAULT_PROMPT_API: CreateTimelineProjectBundlePromptApi = {
   promptConfirmValue: defaultPromptConfirmValue,
   promptNumberValue: defaultPromptNumberValue,
   promptSelectValue: defaultPromptSelectValue,
+  promptForMediaPath: ({ startDirectory, kind }) => defaultPromptForMediaFilePath(startDirectory, kind),
 };
+const MIN_TIMELINE_MEDIA_DURATION_SECONDS = 0.5;
+const TIMELINE_DURATION_EPSILON = 0.000_001;
+
+interface ResolvedMediaTrimWindow {
+  trimStartSeconds: number;
+  trimEndSeconds: number;
+  durationSeconds: number;
+}
 
 function emitProgress(
   callback: CreateTimelineProjectBundleDependencies["onProgress"] | undefined,
@@ -121,6 +140,188 @@ async function ensureDirectoryDoesNotExist(directoryPath: string) {
     }
     throw error;
   }
+}
+
+async function isDirectoryPath(filePath: string): Promise<boolean> {
+  try {
+    return (await stat(path.resolve(filePath))).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function promptMediaSourcePath(
+  promptApi: CreateTimelineProjectBundlePromptApi,
+  input: {
+    message: string;
+    label: string;
+    kind: "video" | "audio";
+    initial?: string;
+    allowBlank?: boolean;
+    blankValidationMessage?: string;
+  }
+): Promise<string> {
+  const pathValue = await promptApi.promptTextValue({
+    message: input.message,
+    initial: input.initial,
+    validate: (value) => {
+      if (value.trim() || input.allowBlank) {
+        return true;
+      }
+      return input.blankValidationMessage ?? `${input.label} is required.`;
+    },
+  });
+
+  if (!pathValue.trim()) {
+    return "";
+  }
+
+  const normalizedSourcePath = normalizeCliPathInput(pathValue, input.label);
+  if (!(await isDirectoryPath(normalizedSourcePath))) {
+    return normalizedSourcePath;
+  }
+
+  const promptForMediaPath = promptApi.promptForMediaPath ?? DEFAULT_PROMPT_API.promptForMediaPath;
+  if (!promptForMediaPath) {
+    return normalizedSourcePath;
+  }
+  return promptForMediaPath({
+    startDirectory: normalizedSourcePath,
+    kind: input.kind,
+  });
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function roundTimelineSeconds(value: number) {
+  return Number(value.toFixed(3));
+}
+
+function resolveConfiguredTrimWindow(
+  trimStartSeconds: number,
+  trimEndSeconds: number
+): ResolvedMediaTrimWindow {
+  const startSeconds = Math.max(0, trimStartSeconds);
+  const endSeconds = roundTimelineSeconds(
+    Math.max(startSeconds + MIN_TIMELINE_MEDIA_DURATION_SECONDS, trimEndSeconds)
+  );
+  return {
+    trimStartSeconds: startSeconds,
+    trimEndSeconds: endSeconds,
+    durationSeconds: roundTimelineSeconds(endSeconds - startSeconds),
+  };
+}
+
+function resolveAssetBackedTrimWindow(
+  trimStartSeconds: number,
+  trimEndSeconds: number | null,
+  assetDurationSeconds: number
+): ResolvedMediaTrimWindow {
+  const safeAssetDuration = Math.max(
+    MIN_TIMELINE_MEDIA_DURATION_SECONDS,
+    Number.isFinite(assetDurationSeconds) ? assetDurationSeconds : 0
+  );
+  const startSeconds = clampNumber(
+    trimStartSeconds,
+    0,
+    Math.max(0, safeAssetDuration - MIN_TIMELINE_MEDIA_DURATION_SECONDS)
+  );
+  const endSeconds = clampNumber(
+    trimEndSeconds ?? safeAssetDuration,
+    startSeconds + MIN_TIMELINE_MEDIA_DURATION_SECONDS,
+    safeAssetDuration
+  );
+  return {
+    trimStartSeconds: roundTimelineSeconds(startSeconds),
+    trimEndSeconds: roundTimelineSeconds(endSeconds),
+    durationSeconds: roundTimelineSeconds(endSeconds - startSeconds),
+  };
+}
+
+function hasTrackAdjustmentOptions(options: CreateTimelineProjectBundleOptions): boolean {
+  return Boolean(
+    options.videoCloneToFillIndex != null ||
+      options.videoTrimFinalToAudio ||
+      options.audioTrimFinalToVideo
+  );
+}
+
+function getVideoChoiceTitle(index: number, clip: CreateTimelineProjectBundleVideoInput): string {
+  return `Clip ${index + 1}: ${clip.label}`;
+}
+
+async function promptTrackAdjustmentOptions(
+  promptApi: CreateTimelineProjectBundlePromptApi,
+  input: {
+    videoClips: CreateTimelineProjectBundleVideoInput[];
+    audioItem?: CreateTimelineProjectBundleAudioInput;
+    initialVideoCloneToFillIndex?: number;
+    initialVideoTrimFinalToAudio: boolean;
+    initialAudioTrimFinalToVideo: boolean;
+    askVideoCloneToFill: boolean;
+    askVideoTrimFinalToAudio: boolean;
+    askAudioTrimFinalToVideo: boolean;
+  }
+): Promise<{
+  videoCloneToFillIndex?: number;
+  videoTrimFinalToAudio: boolean;
+  audioTrimFinalToVideo: boolean;
+}> {
+  if (!input.audioItem || input.videoClips.length === 0) {
+    return {
+      videoCloneToFillIndex: undefined,
+      videoTrimFinalToAudio: false,
+      audioTrimFinalToVideo: false,
+    };
+  }
+
+  const safeInitialVideoCloneToFillIndex =
+    input.initialVideoCloneToFillIndex != null &&
+    input.initialVideoCloneToFillIndex >= 1 &&
+    input.initialVideoCloneToFillIndex <= input.videoClips.length
+      ? input.initialVideoCloneToFillIndex
+      : undefined;
+
+  const videoCloneToFillIndex = input.askVideoCloneToFill
+    ? await promptApi.promptSelectValue<number | null>({
+        message: "Video fill behavior",
+        choices: [
+          {
+            title: "None",
+            value: null,
+            description: "Keep the current video sequence as-is.",
+          },
+          ...input.videoClips.map((clip, index) => ({
+            title: getVideoChoiceTitle(index, clip),
+            value: index + 1,
+            description: "Clone this clip until the video track reaches or exceeds the audio length.",
+          })),
+        ],
+        initial: safeInitialVideoCloneToFillIndex ?? null,
+      })
+    : safeInitialVideoCloneToFillIndex ?? null;
+
+  const videoTrimFinalToAudio = input.askVideoTrimFinalToAudio
+    ? await promptApi.promptConfirmValue({
+        message: "Trim the final video clip to audio length?",
+        initial: input.initialVideoTrimFinalToAudio,
+      })
+    : input.initialVideoTrimFinalToAudio;
+
+  const audioTrimFinalToVideo = input.askAudioTrimFinalToVideo
+    ? await promptApi.promptConfirmValue({
+        message: "Trim audio to the final video length?",
+        initial: input.initialAudioTrimFinalToVideo,
+      })
+    : input.initialAudioTrimFinalToVideo;
+
+  return {
+    videoCloneToFillIndex: videoCloneToFillIndex ?? undefined,
+    videoTrimFinalToAudio,
+    audioTrimFinalToVideo,
+  };
 }
 
 async function askAspectRatio(
@@ -201,7 +402,9 @@ async function promptVideoClips(
   const clips = [...baseVideoClips];
 
   if (clips.length === 0) {
-    console.log("Add one or more video files. Leave the path blank after the last clip.");
+    console.log(
+      "Add one or more video files. Paste a file path, or enter a folder path to browse its media files. Leave the path blank after the last clip."
+    );
   } else {
     console.log(`Starting with ${clips.length} video clip${clips.length === 1 ? "" : "s"} from the command line.`);
   }
@@ -213,18 +416,17 @@ async function promptVideoClips(
       initial: clips.length === 0,
     }))
   ) {
-    const pathValue = await promptApi.promptTextValue({
-      message: `Video clip ${clips.length + 1} path`,
-      validate: (value) => {
-        if (value.trim() || clips.length > 0) return true;
-        return "At least one video clip is required.";
-      },
+    const normalizedSourcePath = await promptMediaSourcePath(promptApi, {
+      message: `Video clip ${clips.length + 1} path or folder`,
+      label: `Video clip ${clips.length + 1} path`,
+      kind: "video",
+      allowBlank: clips.length > 0,
+      blankValidationMessage: "At least one video clip is required.",
     });
-    if (!pathValue.trim()) {
+    if (!normalizedSourcePath.trim()) {
       break;
     }
 
-    const normalizedSourcePath = normalizeCliPathInput(pathValue, `Video clip ${clips.length + 1} path`);
     clips.push({
       sourcePath: normalizedSourcePath,
       label: path.basename(normalizedSourcePath).replace(/\.[^/.]+$/, "") || `Clip ${clips.length + 1}`,
@@ -275,12 +477,14 @@ async function promptAudioItem(
   promptApi: CreateTimelineProjectBundlePromptApi,
   baseAudioItem: CreateTimelineProjectBundleAudioInput | undefined
 ): Promise<CreateTimelineProjectBundleAudioInput | undefined> {
-  const pathValue = await promptApi.promptTextValue({
-    message: "Optional audio file path (leave blank to skip)",
+  const normalizedSourcePath = await promptMediaSourcePath(promptApi, {
+    message: "Optional audio file or folder path (leave blank to skip)",
+    label: "Audio file path",
+    kind: "audio",
     initial: baseAudioItem?.sourcePath ?? "",
+    allowBlank: true,
   });
-  if (!pathValue.trim()) return undefined;
-  const normalizedSourcePath = normalizeCliPathInput(pathValue, "Audio file path");
+  if (!normalizedSourcePath.trim()) return undefined;
 
   const trimStartSeconds = await askNonNegativeNumber(
     promptApi,
@@ -343,23 +547,39 @@ export async function promptCreateTimelineProjectBundleOptions(
     const needsNamePrompt = !parsedInput || parsedInput.name == null;
     const needsAspectPrompt = !parsedInput || parsedInput.aspectRatio == null;
     const needsOutputPrompt = includeOutputDirectoryPrompt && (!parsedInput || parsedInput.outputDirectory == null);
+    const name = needsNamePrompt
+      ? await promptApi.promptTextValue({
+          message: "Project name",
+          initial: baseOptions.name,
+          validate: (value) => (value.trim() ? true : "Project name is required."),
+        })
+      : baseOptions.name;
+    const aspectRatio = needsAspectPrompt ? await askAspectRatio(promptApi, baseOptions.aspectRatio) : baseOptions.aspectRatio;
+    const outputDirectory = needsOutputPrompt
+      ? await promptOutputDirectory(promptApi, baseOptions.outputDirectory)
+      : baseOptions.outputDirectory;
+    const videoClips = needsVideoPrompt ? await promptVideoClips(promptApi, []) : baseOptions.videoClips;
+    const audioItem = needsAudioPrompt ? await promptAudioItem(promptApi, undefined) : baseOptions.audioItem;
+    const trackAdjustments = await promptTrackAdjustmentOptions(promptApi, {
+      videoClips,
+      audioItem,
+      initialVideoCloneToFillIndex: baseOptions.videoCloneToFillIndex,
+      initialVideoTrimFinalToAudio: Boolean(baseOptions.videoTrimFinalToAudio),
+      initialAudioTrimFinalToVideo: Boolean(baseOptions.audioTrimFinalToVideo),
+      askVideoCloneToFill: !parsedInput || parsedInput.videoCloneToFillIndex == null,
+      askVideoTrimFinalToAudio: !parsedInput || !parsedInput.videoTrimFinalToAudio,
+      askAudioTrimFinalToVideo: !parsedInput || !parsedInput.audioTrimFinalToVideo,
+    });
 
     return {
       ...baseOptions,
       interactive: true,
-      name: needsNamePrompt
-        ? await promptApi.promptTextValue({
-            message: "Project name",
-            initial: baseOptions.name,
-            validate: (value) => (value.trim() ? true : "Project name is required."),
-          })
-        : baseOptions.name,
-      aspectRatio: needsAspectPrompt ? await askAspectRatio(promptApi, baseOptions.aspectRatio) : baseOptions.aspectRatio,
-      outputDirectory: needsOutputPrompt
-        ? await promptOutputDirectory(promptApi, baseOptions.outputDirectory)
-        : baseOptions.outputDirectory,
-      videoClips: needsVideoPrompt ? await promptVideoClips(promptApi, []) : baseOptions.videoClips,
-      audioItem: needsAudioPrompt ? await promptAudioItem(promptApi, undefined) : baseOptions.audioItem,
+      name,
+      aspectRatio,
+      outputDirectory,
+      videoClips,
+      audioItem,
+      ...trackAdjustments,
     };
   }
 
@@ -371,6 +591,16 @@ export async function promptCreateTimelineProjectBundleOptions(
   const aspectRatio = await askAspectRatio(promptApi, baseOptions.aspectRatio);
   const videoClips = await promptVideoClips(promptApi, baseOptions.videoClips);
   const audioItem = await promptAudioItem(promptApi, baseOptions.audioItem);
+  const trackAdjustments = await promptTrackAdjustmentOptions(promptApi, {
+    videoClips,
+    audioItem,
+    initialVideoCloneToFillIndex: baseOptions.videoCloneToFillIndex,
+    initialVideoTrimFinalToAudio: Boolean(baseOptions.videoTrimFinalToAudio),
+    initialAudioTrimFinalToVideo: Boolean(baseOptions.audioTrimFinalToVideo),
+    askVideoCloneToFill: true,
+    askVideoTrimFinalToAudio: true,
+    askAudioTrimFinalToVideo: true,
+  });
   const outputDirectory = includeOutputDirectoryPrompt
     ? await promptOutputDirectory(promptApi, baseOptions.outputDirectory)
     : baseOptions.outputDirectory;
@@ -383,6 +613,154 @@ export async function promptCreateTimelineProjectBundleOptions(
     outputDirectory,
     videoClips,
     audioItem,
+    ...trackAdjustments,
+  };
+}
+
+export async function resolveCreateTimelineProjectBundleOptions(
+  options: CreateTimelineProjectBundleOptions,
+  dependencies: Pick<CreateTimelineProjectBundleDependencies, "probeMedia"> = {}
+): Promise<CreateTimelineProjectBundleOptions> {
+  if (!hasTrackAdjustmentOptions(options)) {
+    return options;
+  }
+
+  if (options.videoCloneToFillIndex != null && !options.audioItem) {
+    throw new Error("--video-clone-to-fill requires an audio track in the created project.");
+  }
+  if (options.videoCloneToFillIndex != null) {
+    const videoCount = options.videoClips.length;
+    if (videoCount === 0 || options.videoCloneToFillIndex > videoCount) {
+      throw new Error(
+        `--video-clone-to-fill references video ${options.videoCloneToFillIndex}, but only ${videoCount} video clip${videoCount === 1 ? "" : "s"} were provided.`
+      );
+    }
+  }
+
+  const probeMedia = dependencies.probeMedia ?? probeMediaFileWithFfprobe;
+  const mediaByPath = new Map<string, Promise<EditorProjectBundleResolvedMedia>>();
+
+  const getMediaForDuration = async (sourcePath: string, label: string): Promise<EditorProjectBundleResolvedMedia> => {
+    const cached = mediaByPath.get(sourcePath);
+    if (cached) {
+      return cached;
+    }
+    const nextPromise = probeMedia(sourcePath).catch((error) => {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to resolve duration for ${label} (${sourcePath}): ${detail}`);
+    });
+    mediaByPath.set(sourcePath, nextPromise);
+    return nextPromise;
+  };
+
+  const resolveVideoClipWindow = async (
+    clip: CreateTimelineProjectBundleVideoInput,
+    index: number
+  ): Promise<ResolvedMediaTrimWindow> => {
+    if (clip.trimEndSeconds != null) {
+      return resolveConfiguredTrimWindow(clip.trimStartSeconds, clip.trimEndSeconds);
+    }
+    const media = await getMediaForDuration(clip.sourcePath, `video clip ${index + 1}`);
+    if (!(Number.isFinite(media.durationSeconds) && media.durationSeconds > 0)) {
+      throw new Error(`Unable to resolve duration for video clip ${index + 1} (${clip.sourcePath}): ffprobe returned no usable duration.`);
+    }
+    return resolveAssetBackedTrimWindow(clip.trimStartSeconds, clip.trimEndSeconds, media.durationSeconds);
+  };
+
+  const resolveAudioItemWindow = async (
+    item: CreateTimelineProjectBundleAudioInput
+  ): Promise<ResolvedMediaTrimWindow> => {
+    if (item.trimEndSeconds != null) {
+      return resolveConfiguredTrimWindow(item.trimStartSeconds, item.trimEndSeconds);
+    }
+    const media = await getMediaForDuration(item.sourcePath, "audio track");
+    if (!(Number.isFinite(media.durationSeconds) && media.durationSeconds > 0)) {
+      throw new Error(`Unable to resolve duration for audio track (${item.sourcePath}): ffprobe returned no usable duration.`);
+    }
+    return resolveAssetBackedTrimWindow(item.trimStartSeconds, item.trimEndSeconds, media.durationSeconds);
+  };
+
+  const getVideoTrackDuration = async (videoClips: CreateTimelineProjectBundleVideoInput[]) => {
+    const windows = await Promise.all(videoClips.map((clip, index) => resolveVideoClipWindow(clip, index)));
+    return {
+      windows,
+      durationSeconds: roundTimelineSeconds(
+        windows.reduce((total, window) => total + window.durationSeconds, 0)
+      ),
+    };
+  };
+
+  const getAudioTrackEnd = async (audioItem: CreateTimelineProjectBundleAudioInput | undefined) => {
+    if (!audioItem) {
+      return { window: undefined, endSeconds: 0 };
+    }
+    const window = await resolveAudioItemWindow(audioItem);
+    return {
+      window,
+      endSeconds: roundTimelineSeconds(audioItem.startOffsetSeconds + window.durationSeconds),
+    };
+  };
+
+  const videoClips = options.videoClips.map((clip) => ({ ...clip }));
+  let audioItem = options.audioItem ? { ...options.audioItem } : undefined;
+
+  if (options.videoCloneToFillIndex != null && audioItem) {
+    const { endSeconds: audioTrackEnd } = await getAudioTrackEnd(audioItem);
+    const { windows, durationSeconds: initialVideoTrackDuration } = await getVideoTrackDuration(videoClips);
+    let videoTrackDuration = initialVideoTrackDuration;
+    const templateIndex = options.videoCloneToFillIndex - 1;
+    const templateClip = videoClips[templateIndex];
+    const templateWindow = windows[templateIndex];
+    let insertedCloneCount = 0;
+
+    while (videoTrackDuration + TIMELINE_DURATION_EPSILON < audioTrackEnd) {
+      const insertionIndex = templateIndex + insertedCloneCount + 1;
+      videoClips.splice(insertionIndex, 0, { ...templateClip });
+      windows.splice(insertionIndex, 0, templateWindow);
+      insertedCloneCount += 1;
+      videoTrackDuration = roundTimelineSeconds(videoTrackDuration + templateWindow.durationSeconds);
+    }
+  }
+
+  if (options.videoTrimFinalToAudio && audioItem && videoClips.length > 0) {
+    const { endSeconds: audioTrackEnd } = await getAudioTrackEnd(audioItem);
+    const { windows, durationSeconds: videoTrackDuration } = await getVideoTrackDuration(videoClips);
+    if (videoTrackDuration > audioTrackEnd + TIMELINE_DURATION_EPSILON) {
+      const finalIndex = videoClips.length - 1;
+      const finalWindow = windows[finalIndex];
+      const overshootSeconds = roundTimelineSeconds(videoTrackDuration - audioTrackEnd);
+      const nextDurationSeconds = roundTimelineSeconds(finalWindow.durationSeconds - overshootSeconds);
+      if (nextDurationSeconds >= MIN_TIMELINE_MEDIA_DURATION_SECONDS - TIMELINE_DURATION_EPSILON) {
+        const finalClip = videoClips[finalIndex];
+        videoClips[finalIndex] = {
+          ...finalClip,
+          trimStartSeconds: finalWindow.trimStartSeconds,
+          trimEndSeconds: roundTimelineSeconds(finalWindow.trimEndSeconds - overshootSeconds),
+        };
+      }
+    }
+  }
+
+  if (options.audioTrimFinalToVideo && audioItem && videoClips.length > 0) {
+    const { durationSeconds: videoTrackDuration } = await getVideoTrackDuration(videoClips);
+    const { window: audioWindow, endSeconds: audioTrackEnd } = await getAudioTrackEnd(audioItem);
+    if (audioWindow && audioTrackEnd > videoTrackDuration + TIMELINE_DURATION_EPSILON) {
+      const overshootSeconds = roundTimelineSeconds(audioTrackEnd - videoTrackDuration);
+      const nextDurationSeconds = roundTimelineSeconds(audioWindow.durationSeconds - overshootSeconds);
+      if (nextDurationSeconds >= MIN_TIMELINE_MEDIA_DURATION_SECONDS - TIMELINE_DURATION_EPSILON) {
+        audioItem = {
+          ...audioItem,
+          trimStartSeconds: audioWindow.trimStartSeconds,
+          trimEndSeconds: roundTimelineSeconds(audioWindow.trimEndSeconds - overshootSeconds),
+        };
+      }
+    }
+  }
+
+  return {
+    ...options,
+    videoClips,
+    audioItem,
   };
 }
 
@@ -390,8 +768,11 @@ export async function createTimelineProjectBundle(
   options: CreateTimelineProjectBundleOptions,
   dependencies: CreateTimelineProjectBundleDependencies = {}
 ): Promise<CreatedTimelineProjectBundleResult> {
-  const builtBundle = buildEditorProjectBundleFromCliOptions(options, dependencies.now?.() ?? Date.now());
-  const outputDirectory = path.resolve(options.outputDirectory);
+  const resolvedOptions = await resolveCreateTimelineProjectBundleOptions(options, {
+    probeMedia: dependencies.probeMedia,
+  });
+  const builtBundle = buildEditorProjectBundleFromCliOptions(resolvedOptions, dependencies.now?.() ?? Date.now());
+  const outputDirectory = path.resolve(resolvedOptions.outputDirectory);
   const bundlePath = path.join(outputDirectory, builtBundle.bundleDirectoryName);
   const totalSteps = builtBundle.copyPlan.length * 2 + 2;
   let completedSteps = 0;

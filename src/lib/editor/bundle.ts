@@ -356,6 +356,9 @@ export async function materializeEditorProjectBundle(
         throw new Error(`Bundle media file "${bundlePath}" is missing.`);
       }
       const metadata = await input.readMetadata(file);
+      if (metadata.kind === "image") {
+        throw new Error(`Bundle media file "${bundlePath}" must resolve to video or audio, not image.`);
+      }
       return {
         kind: metadata.kind,
         filename: file.name,

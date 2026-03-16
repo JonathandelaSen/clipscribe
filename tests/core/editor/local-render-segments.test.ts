@@ -2,14 +2,34 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT,
-  BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS,
+  buildBrowserRenderPlan,
   buildSegmentedBrowserRenderSegments,
+  selectBrowserRenderProfile,
   shouldUseSegmentedBrowserRender,
 } from "../../../src/lib/editor/local-render-segments";
 import type { EditorProjectRecord } from "../../../src/lib/editor/types";
 
-function createTestProject(): EditorProjectRecord {
+function createTestProject(options?: {
+  clipDurations?: number[];
+  audioItemCount?: number;
+  subtitlesEnabled?: boolean;
+  reverseFirstClip?: boolean;
+}): EditorProjectRecord {
+  const clipDurations = options?.clipDurations ?? [40, 40, 40, 40, 40];
+  const audioItemCount = options?.audioItemCount ?? 0;
+
+  const videoClips = clipDurations.map((durationSeconds, index) => ({
+    id: `clip_${index + 1}`,
+    assetId: `video_${index + 1}`,
+    label: `Clip ${index + 1}`,
+    trimStartSeconds: 0,
+    trimEndSeconds: durationSeconds,
+    canvas: { zoom: 1, panX: 0, panY: 0 },
+    volume: 1,
+    muted: false,
+    actions: { reverse: options?.reverseFirstClip === true && index === 0 },
+  }));
+
   return {
     id: "project_1",
     name: "Long Timeline",
@@ -18,96 +38,36 @@ function createTestProject(): EditorProjectRecord {
     lastOpenedAt: 0,
     status: "draft",
     aspectRatio: "16:9",
-    assetIds: ["video_1", "video_2", "video_3", "video_4", "video_5", "music_1"],
+    assetIds: [
+      ...videoClips.map((clip) => clip.assetId),
+      ...Array.from({ length: audioItemCount }, (_value, index) => `music_${index + 1}`),
+    ],
     timeline: {
       playheadSeconds: 0,
       zoomLevel: 1,
       selectedItem: undefined,
-      videoClips: [
-        {
-          id: "clip_1",
-          assetId: "video_1",
-          label: "Clip 1",
-          trimStartSeconds: 0,
-          trimEndSeconds: 40,
-          canvas: { zoom: 1, panX: 0, panY: 0 },
-          volume: 1,
-          muted: false,
-          actions: { reverse: false },
-        },
-        {
-          id: "clip_2",
-          assetId: "video_2",
-          label: "Clip 2",
-          trimStartSeconds: 0,
-          trimEndSeconds: 40,
-          canvas: { zoom: 1, panX: 0, panY: 0 },
-          volume: 1,
-          muted: false,
-          actions: { reverse: false },
-        },
-        {
-          id: "clip_3",
-          assetId: "video_3",
-          label: "Clip 3",
-          trimStartSeconds: 0,
-          trimEndSeconds: 40,
-          canvas: { zoom: 1, panX: 0, panY: 0 },
-          volume: 1,
-          muted: false,
-          actions: { reverse: false },
-        },
-        {
-          id: "clip_4",
-          assetId: "video_4",
-          label: "Clip 4",
-          trimStartSeconds: 0,
-          trimEndSeconds: 40,
-          canvas: { zoom: 1, panX: 0, panY: 0 },
-          volume: 1,
-          muted: false,
-          actions: { reverse: false },
-        },
-        {
-          id: "clip_5",
-          assetId: "video_5",
-          label: "Clip 5",
-          trimStartSeconds: 0,
-          trimEndSeconds: 40,
-          canvas: { zoom: 1, panX: 0, panY: 0 },
-          volume: 1,
-          muted: false,
-          actions: { reverse: false },
-        },
-      ],
+      imageItems: [],
+      videoClips,
       videoClipGroups: [
         {
           id: "group_1",
           kind: "joined",
-          clipIds: ["clip_1", "clip_2"],
+          clipIds: videoClips.slice(0, 2).map((clip) => clip.id),
           label: "Pair 1",
         },
-        {
-          id: "group_2",
-          kind: "joined",
-          clipIds: ["clip_3", "clip_4"],
-          label: "Pair 2",
-        },
       ],
-      audioItems: [
-        {
-          id: "audio_1",
-          assetId: "music_1",
-          startOffsetSeconds: 0,
-          trimStartSeconds: 0,
-          trimEndSeconds: 180,
-          volume: 0.65,
-          muted: false,
-        },
-      ],
+      audioItems: Array.from({ length: audioItemCount }, (_value, index) => ({
+        id: `audio_${index + 1}`,
+        assetId: `music_${index + 1}`,
+        startOffsetSeconds: 0,
+        trimStartSeconds: 0,
+        trimEndSeconds: 180,
+        volume: 0.65,
+        muted: false,
+      })),
     },
     subtitles: {
-      enabled: false,
+      enabled: options?.subtitlesEnabled ?? false,
       preset: "clean_caption",
       positionXPercent: 50,
       positionYPercent: 84,
@@ -116,14 +76,106 @@ function createTestProject(): EditorProjectRecord {
   };
 }
 
-test("shouldUseSegmentedBrowserRender flips on for clip-heavy or duration-heavy timelines", () => {
-  assert.equal(shouldUseSegmentedBrowserRender({ clipCount: 6, durationSeconds: 120 }), false);
-  assert.equal(shouldUseSegmentedBrowserRender({ clipCount: 18, durationSeconds: 120 }), true);
-  assert.equal(shouldUseSegmentedBrowserRender({ clipCount: 6, durationSeconds: 300 }), true);
+test("selectBrowserRenderProfile chooses low, medium, high, and extreme tiers", () => {
+  const lowProject = createTestProject({ clipDurations: [300, 300, 300], audioItemCount: 0 });
+  const mediumProject = createTestProject({ clipDurations: [300, 300, 300], audioItemCount: 1 });
+  const highProject = createTestProject({ clipDurations: [300, 300, 300], subtitlesEnabled: true });
+
+  assert.equal(selectBrowserRenderProfile({ project: lowProject, resolution: "720p" }).name, "low");
+  assert.equal(selectBrowserRenderProfile({ project: mediumProject, resolution: "720p" }).name, "medium");
+  assert.equal(selectBrowserRenderProfile({ project: highProject, resolution: "720p" }).name, "high");
+  assert.equal(selectBrowserRenderProfile({ project: lowProject, resolution: "4K" }).name, "extreme");
+});
+
+test("shouldUseSegmentedBrowserRender respects the active browser budgets", () => {
+  assert.equal(
+    shouldUseSegmentedBrowserRender({
+      clipCount: 3,
+      durationSeconds: 120,
+      maxClipCount: 3,
+      maxDurationSeconds: 120,
+    }),
+    false
+  );
+  assert.equal(
+    shouldUseSegmentedBrowserRender({
+      clipCount: 4,
+      durationSeconds: 120,
+      maxClipCount: 3,
+      maxDurationSeconds: 120,
+    }),
+    true
+  );
+  assert.equal(
+    shouldUseSegmentedBrowserRender({
+      clipCount: 3,
+      durationSeconds: 121,
+      maxClipCount: 3,
+      maxDurationSeconds: 120,
+    }),
+    true
+  );
+});
+
+test("buildBrowserRenderPlan broadens segment budgets for long clean 720p exports", () => {
+  const project = createTestProject({ clipDurations: [900], audioItemCount: 0 });
+  const plan = buildBrowserRenderPlan({ project, resolution: "720p" });
+  const segments = buildSegmentedBrowserRenderSegments({
+    project,
+    maxClipCount: plan.profile.maxClipCount,
+    maxDurationSeconds: plan.profile.maxDurationSeconds,
+  });
+
+  assert.equal(plan.profile.name, "low");
+  assert.equal(plan.profile.maxClipCount, 3);
+  assert.equal(plan.profile.maxDurationSeconds, 120);
+  assert.equal(plan.shouldSegment, true);
+  assert.equal(segments.length, 8);
+});
+
+test("buildBrowserRenderPlan skips audio remix and final mux for segmented clip-audio-only exports", () => {
+  const project = createTestProject({ clipDurations: [900], audioItemCount: 0 });
+  const plan = buildBrowserRenderPlan({ project, resolution: "720p" });
+
+  assert.equal(plan.shouldSegment, true);
+  assert.equal(plan.includeAudioInSegments, true);
+  assert.equal(plan.needsAudioRemixPass, false);
+  assert.equal(plan.needsFinalMuxPass, false);
+});
+
+test("buildBrowserRenderPlan keeps the safer segmented audio flow when timeline audio exists", () => {
+  const project = createTestProject({ clipDurations: [900], audioItemCount: 1 });
+  const plan = buildBrowserRenderPlan({ project, resolution: "720p" });
+
+  assert.equal(plan.profile.name, "medium");
+  assert.equal(plan.shouldSegment, true);
+  assert.equal(plan.includeAudioInSegments, false);
+  assert.equal(plan.needsAudioRemixPass, true);
+  assert.equal(plan.needsFinalMuxPass, true);
+});
+
+test("buildBrowserRenderPlan does not segment image-only timelines", () => {
+  const project = createTestProject({ clipDurations: [], audioItemCount: 1 });
+  project.timeline.videoClipGroups = [];
+  project.timeline.imageItems = [
+    {
+      id: "image_1",
+      assetId: "image_asset_1",
+      label: "Cover",
+      canvas: { zoom: 1, panX: 0, panY: 0 },
+    },
+  ];
+  project.assetIds.push("image_asset_1");
+
+  const plan = buildBrowserRenderPlan({ project, resolution: "1080p" });
+
+  assert.equal(plan.shouldSegment, false);
+  assert.equal(plan.needsAudioRemixPass, false);
+  assert.equal(plan.needsFinalMuxPass, false);
 });
 
 test("buildSegmentedBrowserRenderSegments keeps clip boundaries and slices spanning audio tracks", () => {
-  const project = createTestProject();
+  const project = createTestProject({ audioItemCount: 1 });
   const segments = buildSegmentedBrowserRenderSegments({
     project,
     maxClipCount: 2,
@@ -157,28 +209,13 @@ test("buildSegmentedBrowserRenderSegments keeps clip boundaries and slices spann
   );
 });
 
-test("buildSegmentedBrowserRenderSegments defaults stay within the documented segment budgets", () => {
-  const project = createTestProject();
-  const segments = buildSegmentedBrowserRenderSegments({ project });
-
-  assert.ok(segments.every((segment) => segment.clipCount <= BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT));
-  assert.ok(segments.every((segment) => segment.durationSeconds <= BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS));
-});
-
 test("buildSegmentedBrowserRenderSegments splits long reversed clips into bounded trim windows", () => {
-  const project = createTestProject();
-  project.timeline.videoClips = [
-    {
-      ...project.timeline.videoClips[0],
-      id: "reverse_clip",
-      label: "Reverse Clip",
-      trimStartSeconds: 10,
-      trimEndSeconds: 110,
-      actions: { reverse: true },
-    },
-  ];
+  const project = createTestProject({
+    clipDurations: [100],
+    audioItemCount: 0,
+    reverseFirstClip: true,
+  });
   project.timeline.videoClipGroups = [];
-  project.timeline.audioItems = [];
 
   const segments = buildSegmentedBrowserRenderSegments({
     project,
@@ -189,11 +226,11 @@ test("buildSegmentedBrowserRenderSegments splits long reversed clips into bounde
   assert.equal(segments.length, 3);
   assert.deepEqual(
     segments.map((segment) => segment.project.timeline.videoClips[0]?.trimStartSeconds),
-    [70, 30, 10]
+    [60, 20, 0]
   );
   assert.deepEqual(
     segments.map((segment) => segment.project.timeline.videoClips[0]?.trimEndSeconds),
-    [110, 70, 30]
+    [100, 60, 20]
   );
   assert.deepEqual(
     segments.map((segment) => segment.durationSeconds),

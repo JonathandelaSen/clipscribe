@@ -4,6 +4,8 @@ import type {
   TimelineAudioItem,
   TimelineAudioPlacement,
   TimelineClipGroup,
+  TimelineImageItem,
+  TimelineImagePlacement,
   TimelineClipPlacement,
   TimelineSelection,
   TimelineSelectionKind,
@@ -60,6 +62,8 @@ export interface TimelineVideoGroupBlockPlacement {
 export type TimelineVideoBlockPlacement =
   | TimelineVideoClipBlockPlacement
   | TimelineVideoGroupBlockPlacement;
+
+export const TIMELINE_IMAGE_TRACK_FALLBACK_DURATION_SECONDS = 5;
 
 export function getVideoClipDuration(clip: TimelineVideoClip): number {
   return roundMs(Math.max(0.5, clip.trimEndSeconds - clip.trimStartSeconds));
@@ -298,13 +302,48 @@ export function getTimelineAudioEnd(items: TimelineAudioItem[]): number {
   return placements.length ? placements[placements.length - 1].endSeconds : 0;
 }
 
+function getProjectNonImageDuration(project: Pick<EditorProjectRecord, "timeline">): number {
+  return roundMs(Math.max(getProjectVideoDuration(project), getTimelineAudioEnd(project.timeline.audioItems)));
+}
+
+export function getTimelineImageTrackDuration(
+  items: TimelineImageItem[],
+  baseDurationSeconds: number
+): number {
+  if (items.length === 0) return 0;
+  return roundMs(Math.max(baseDurationSeconds, TIMELINE_IMAGE_TRACK_FALLBACK_DURATION_SECONDS));
+}
+
+export function getTimelineImagePlacements(
+  project: Pick<EditorProjectRecord, "timeline">
+): TimelineImagePlacement[] {
+  const durationSeconds = getTimelineImageTrackDuration(
+    project.timeline.imageItems,
+    getProjectNonImageDuration(project)
+  );
+  if (durationSeconds <= 0) return [];
+  return project.timeline.imageItems.map((item, index) => ({
+    item,
+    index,
+    startSeconds: 0,
+    endSeconds: durationSeconds,
+    durationSeconds,
+  }));
+}
+
 export function getProjectVideoDuration(project: Pick<EditorProjectRecord, "timeline">): number {
   const placements = getTimelineClipPlacements(project.timeline.videoClips);
   return placements.length ? placements[placements.length - 1].endSeconds : 0;
 }
 
 export function getProjectDuration(project: Pick<EditorProjectRecord, "timeline">): number {
-  return roundMs(Math.max(getProjectVideoDuration(project), getTimelineAudioEnd(project.timeline.audioItems)));
+  const nonImageDuration = getProjectNonImageDuration(project);
+  return roundMs(
+    Math.max(
+      nonImageDuration,
+      getTimelineImageTrackDuration(project.timeline.imageItems, nonImageDuration)
+    )
+  );
 }
 
 export function clampVideoClipToAsset(clip: TimelineVideoClip, assetDurationSeconds: number): TimelineVideoClip {
@@ -551,6 +590,10 @@ export function removeTimelineAudioItem(items: TimelineAudioItem[], itemId: stri
   return items.filter((item) => item.id !== itemId);
 }
 
+export function removeTimelineImageItem(items: TimelineImageItem[], itemId: string): TimelineImageItem[] {
+  return items.filter((item) => item.id !== itemId);
+}
+
 export function replaceTimelineClip(
   clips: TimelineVideoClip[],
   nextClip: TimelineVideoClip
@@ -565,10 +608,213 @@ export function replaceTimelineAudioItem(
   return normalizeTimelineAudioItems(items.map((item) => (item.id === nextItem.id ? nextItem : item)));
 }
 
+export function replaceTimelineImageItem(
+  items: TimelineImageItem[],
+  nextItem: TimelineImageItem
+): TimelineImageItem[] {
+  return items.map((item) => (item.id === nextItem.id ? nextItem : item));
+}
+
+export interface TrimTimelineClipToMatchTrackResult {
+  videoClips: TimelineVideoClip[];
+  trimmed: boolean;
+  trimmedSeconds: number;
+}
+
+export function trimTimelineClipToMatchTrackEnd(
+  clips: TimelineVideoClip[],
+  clipId: string,
+  targetDurationSeconds: number
+): TrimTimelineClipToMatchTrackResult {
+  const lastPlacement = getTimelineClipPlacements(clips).at(-1);
+  if (!lastPlacement || lastPlacement.clip.id !== clipId || lastPlacement.endSeconds <= targetDurationSeconds) {
+    return {
+      videoClips: clips,
+      trimmed: false,
+      trimmedSeconds: 0,
+    };
+  }
+
+  const overshootSeconds = roundMs(lastPlacement.endSeconds - targetDurationSeconds);
+  const nextDuration = roundMs(lastPlacement.durationSeconds - overshootSeconds);
+  if (overshootSeconds <= 0 || nextDuration < 0.5) {
+    return {
+      videoClips: clips,
+      trimmed: false,
+      trimmedSeconds: 0,
+    };
+  }
+
+  const nextClip: TimelineVideoClip = {
+    ...lastPlacement.clip,
+    trimEndSeconds: roundMs(lastPlacement.clip.trimEndSeconds - overshootSeconds),
+  };
+
+  return {
+    videoClips: replaceTimelineClip(clips, nextClip),
+    trimmed: true,
+    trimmedSeconds: overshootSeconds,
+  };
+}
+
+export interface TrimTimelineClipGroupToMatchTrackResult {
+  videoClips: TimelineVideoClip[];
+  videoClipGroups: TimelineClipGroup[];
+  trimmed: boolean;
+  trimmedSeconds: number;
+  tailClipId: string | null;
+}
+
+export function trimTimelineClipGroupToMatchTrackEnd(
+  clips: TimelineVideoClip[],
+  groups: TimelineClipGroup[],
+  groupId: string,
+  targetDurationSeconds: number
+): TrimTimelineClipGroupToMatchTrackResult {
+  const normalizedGroups = normalizeTimelineClipGroups(groups, clips);
+  const lastBlock = getTimelineVideoBlockPlacements(clips, normalizedGroups).at(-1);
+  if (!lastBlock || lastBlock.kind !== "group" || lastBlock.id !== groupId || lastBlock.endSeconds <= targetDurationSeconds) {
+    return {
+      videoClips: clips,
+      videoClipGroups: normalizedGroups,
+      trimmed: false,
+      trimmedSeconds: 0,
+      tailClipId: null,
+    };
+  }
+
+  const tailPlacement = lastBlock.clipPlacements.at(-1);
+  if (!tailPlacement) {
+    return {
+      videoClips: clips,
+      videoClipGroups: normalizedGroups,
+      trimmed: false,
+      trimmedSeconds: 0,
+      tailClipId: null,
+    };
+  }
+
+  const overshootSeconds = roundMs(lastBlock.endSeconds - targetDurationSeconds);
+  const nextDuration = roundMs(tailPlacement.durationSeconds - overshootSeconds);
+  if (overshootSeconds <= 0 || nextDuration < 0.5) {
+    return {
+      videoClips: clips,
+      videoClipGroups: normalizedGroups,
+      trimmed: false,
+      trimmedSeconds: 0,
+      tailClipId: tailPlacement.clip.id,
+    };
+  }
+
+  const nextClips = replaceTimelineClip(clips, {
+    ...tailPlacement.clip,
+    trimEndSeconds: roundMs(tailPlacement.clip.trimEndSeconds - overshootSeconds),
+  });
+
+  return {
+    videoClips: nextClips,
+    videoClipGroups: normalizeTimelineClipGroups(normalizedGroups, nextClips),
+    trimmed: true,
+    trimmedSeconds: overshootSeconds,
+    tailClipId: tailPlacement.clip.id,
+  };
+}
+
+export interface TrimTimelineAudioItemToMatchTrackResult {
+  audioItems: TimelineAudioItem[];
+  trimmed: boolean;
+  trimmedSeconds: number;
+}
+
+export function trimTimelineAudioItemToMatchTrackEnd(
+  items: TimelineAudioItem[],
+  itemId: string,
+  targetDurationSeconds: number
+): TrimTimelineAudioItemToMatchTrackResult {
+  const lastPlacement = getTimelineAudioPlacements(items).at(-1);
+  if (!lastPlacement || lastPlacement.item.id !== itemId || lastPlacement.endSeconds <= targetDurationSeconds) {
+    return {
+      audioItems: items,
+      trimmed: false,
+      trimmedSeconds: 0,
+    };
+  }
+
+  const overshootSeconds = roundMs(lastPlacement.endSeconds - targetDurationSeconds);
+  const nextDuration = roundMs(lastPlacement.durationSeconds - overshootSeconds);
+  if (overshootSeconds <= 0 || nextDuration < 0.5) {
+    return {
+      audioItems: items,
+      trimmed: false,
+      trimmedSeconds: 0,
+    };
+  }
+
+  return {
+    audioItems: replaceTimelineAudioItem(items, {
+      ...lastPlacement.item,
+      trimEndSeconds: roundMs(lastPlacement.item.trimEndSeconds - overshootSeconds),
+    }),
+    trimmed: true,
+    trimmedSeconds: overshootSeconds,
+  };
+}
+
 export function createClonedTimelineClip(clip: TimelineVideoClip): TimelineVideoClip {
   return {
     ...clip,
     id: makeId("edclip"),
+  };
+}
+
+export function createClonedTimelineImageItem(item: TimelineImageItem): TimelineImageItem {
+  return {
+    ...item,
+    id: makeId("edimage"),
+  };
+}
+
+export interface CloneTimelineClipToFillResult {
+  videoClips: TimelineVideoClip[];
+  cloneCount: number;
+  lastInsertedClipId: string | null;
+}
+
+export function cloneTimelineClipToFill(
+  clips: TimelineVideoClip[],
+  clipId: string,
+  targetDurationSeconds: number
+): CloneTimelineClipToFillResult {
+  const template = clips.find((clip) => clip.id === clipId);
+  const currentDuration = getTimelineClipPlacements(clips).at(-1)?.endSeconds ?? 0;
+  if (!template || targetDurationSeconds <= currentDuration) {
+    return {
+      videoClips: clips,
+      cloneCount: 0,
+      lastInsertedClipId: null,
+    };
+  }
+
+  let nextClips = clips;
+  let afterClipId = clipId;
+  let cloneCount = 0;
+  let lastInsertedClipId: string | null = null;
+  let nextDuration = currentDuration;
+  const clipDuration = getVideoClipDuration(template);
+
+  while (nextDuration < targetDurationSeconds) {
+    const nextClip = createClonedTimelineClip(template);
+    nextClips = insertTimelineClipAfter(nextClips, nextClip, afterClipId);
+    afterClipId = nextClip.id;
+    lastInsertedClipId = nextClip.id;
+    cloneCount += 1;
+    nextDuration = roundMs(nextDuration + clipDuration);
+  }
+
+  return {
+    videoClips: nextClips,
+    cloneCount,
+    lastInsertedClipId,
   };
 }
 
@@ -610,10 +856,103 @@ export function duplicateTimelineClipGroup(
   };
 }
 
+export interface CloneTimelineClipGroupToFillResult {
+  videoClips: TimelineVideoClip[];
+  videoClipGroups: TimelineClipGroup[];
+  cloneCount: number;
+  lastInsertedGroupId: string | null;
+}
+
+export function cloneTimelineClipGroupToFill(
+  clips: TimelineVideoClip[],
+  groups: TimelineClipGroup[],
+  groupId: string,
+  targetDurationSeconds: number
+): CloneTimelineClipGroupToFillResult {
+  const groupBlock = getTimelineVideoBlockPlacements(clips, groups).find(
+    (block) => block.kind === "group" && block.id === groupId
+  );
+  const currentDuration = getTimelineClipPlacements(clips).at(-1)?.endSeconds ?? 0;
+  if (!groupBlock || targetDurationSeconds <= currentDuration) {
+    return {
+      videoClips: clips,
+      videoClipGroups: normalizeTimelineClipGroups(groups, clips),
+      cloneCount: 0,
+      lastInsertedGroupId: null,
+    };
+  }
+
+  let nextClips = clips;
+  let nextGroups = normalizeTimelineClipGroups(groups, clips);
+  let currentGroupId = groupId;
+  let cloneCount = 0;
+  let lastInsertedGroupId: string | null = null;
+  let nextDuration = currentDuration;
+
+  while (nextDuration < targetDurationSeconds) {
+    const duplicated = duplicateTimelineClipGroup(nextClips, nextGroups, currentGroupId);
+    if (!duplicated) break;
+    nextClips = duplicated.videoClips;
+    nextGroups = duplicated.videoClipGroups;
+    currentGroupId = duplicated.duplicatedGroup.id;
+    lastInsertedGroupId = duplicated.duplicatedGroup.id;
+    cloneCount += 1;
+    nextDuration = roundMs(nextDuration + groupBlock.durationSeconds);
+  }
+
+  return {
+    videoClips: nextClips,
+    videoClipGroups: nextGroups,
+    cloneCount,
+    lastInsertedGroupId,
+  };
+}
+
 export function createClonedTimelineAudioItem(item: TimelineAudioItem): TimelineAudioItem {
   return {
     ...item,
     id: makeId("edaudio"),
+  };
+}
+
+export interface CloneTimelineAudioItemToFillResult {
+  audioItems: TimelineAudioItem[];
+  cloneCount: number;
+  lastInsertedItemId: string | null;
+}
+
+export function cloneTimelineAudioItemToFill(
+  items: TimelineAudioItem[],
+  itemId: string,
+  targetDurationSeconds: number
+): CloneTimelineAudioItemToFillResult {
+  const template = items.find((item) => item.id === itemId);
+  const currentDuration = getTimelineAudioEnd(items);
+  if (!template || targetDurationSeconds <= currentDuration) {
+    return {
+      audioItems: items,
+      cloneCount: 0,
+      lastInsertedItemId: null,
+    };
+  }
+
+  let nextItems = items;
+  let afterItemId = itemId;
+  let cloneCount = 0;
+  let lastInsertedItemId: string | null = null;
+
+  while (getTimelineAudioEnd(nextItems) < targetDurationSeconds) {
+    const nextItem = createClonedTimelineAudioItem(template);
+    nextItems = insertTimelineAudioItemAfter(nextItems, nextItem, afterItemId);
+    afterItemId = nextItem.id;
+    lastInsertedItemId = nextItem.id;
+    cloneCount += 1;
+  }
+
+  return {
+    audioItems: nextItems,
+    cloneCount,
+    lastInsertedItemId,
   };
 }
 
@@ -755,8 +1094,10 @@ export function findAudioItemAtProjectTime(
 export function getFirstTimelineSelection(
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
-  videoClipGroups: TimelineClipGroup[] = []
+  videoClipGroups: TimelineClipGroup[] = [],
+  imageItems: TimelineImageItem[] = []
 ): TimelineSelection | undefined {
+  if (imageItems[0]) return { kind: "image", id: imageItems[0].id };
   const firstVideoBlock = getTimelineVideoBlockPlacements(videoClips, videoClipGroups)[0];
   if (firstVideoBlock) {
     return getTimelineSelectionForVideoBlock(firstVideoBlock);
@@ -769,9 +1110,13 @@ export function hasTimelineSelection(
   selection: TimelineSelection | undefined,
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
-  videoClipGroups: TimelineClipGroup[] = []
+  videoClipGroups: TimelineClipGroup[] = [],
+  imageItems: TimelineImageItem[] = []
 ): boolean {
   if (!selection) return false;
+  if (selection.kind === "image") {
+    return imageItems.some((item) => item.id === selection.id);
+  }
   if (selection.kind === "video") {
     return videoClips.some((clip) => clip.id === selection.id);
   }
@@ -784,15 +1129,23 @@ export function hasTimelineSelection(
 export function ensureProjectSelection(project: EditorProjectRecord): EditorProjectRecord {
   const videoClipGroups = normalizeTimelineClipGroups(project.timeline.videoClipGroups ?? [], project.timeline.videoClips);
   const audioItems = normalizeTimelineAudioItems(project.timeline.audioItems ?? []);
-  const selectedItem = hasTimelineSelection(project.timeline.selectedItem, project.timeline.videoClips, audioItems, videoClipGroups)
+  const imageItems = Array.isArray(project.timeline.imageItems) ? project.timeline.imageItems : [];
+  const selectedItem = hasTimelineSelection(
+    project.timeline.selectedItem,
+    project.timeline.videoClips,
+    audioItems,
+    videoClipGroups,
+    imageItems
+  )
     ? project.timeline.selectedItem
-    : getFirstTimelineSelection(project.timeline.videoClips, audioItems, videoClipGroups);
+    : getFirstTimelineSelection(project.timeline.videoClips, audioItems, videoClipGroups, imageItems);
 
   return {
     ...project,
     timeline: {
       ...project.timeline,
       selectedItem,
+      imageItems,
       videoClipGroups,
       audioItems,
     },
@@ -804,8 +1157,16 @@ export function getSelectionForLaneIndex(
   index: number,
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
-  videoClipGroups: TimelineClipGroup[] = []
+  videoClipGroups: TimelineClipGroup[] = [],
+  imageItems: TimelineImageItem[] = []
 ): TimelineSelection | undefined {
+  if (kind === "image") {
+    if (imageItems[index]) {
+      return { kind: "image", id: imageItems[index].id };
+    }
+    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
+  }
+
   if (kind === "video") {
     const candidateClipIds = [videoClips[index]?.id, index > 0 ? videoClips[index - 1]?.id : undefined];
     for (const candidateClipId of candidateClipIds) {
@@ -816,7 +1177,7 @@ export function getSelectionForLaneIndex(
       }
       return { kind: "video", id: candidateClipId };
     }
-    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups);
+    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
   }
 
   const lane = audioItems;
@@ -826,7 +1187,7 @@ export function getSelectionForLaneIndex(
   if (index > 0 && lane[index - 1]) {
     return { kind, id: lane[index - 1].id };
   }
-  return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups);
+  return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
 }
 
 export function getAssetById(

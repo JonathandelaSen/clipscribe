@@ -97,9 +97,9 @@ function normalizeWorkspaceAsset(
     throw new Error(`assets[${index + 1}] must be an object.`);
   }
 
-  const kind = raw.kind === "video" || raw.kind === "audio" ? raw.kind : null;
+  const kind = raw.kind === "video" || raw.kind === "audio" || raw.kind === "image" ? raw.kind : null;
   if (!kind) {
-    throw new Error(`assets[${index + 1}].kind must be "video" or "audio".`);
+    throw new Error(`assets[${index + 1}].kind must be "video", "audio", or "image".`);
   }
 
   const sourceType = raw.sourceType === "upload" || raw.sourceType === "history" ? raw.sourceType : null;

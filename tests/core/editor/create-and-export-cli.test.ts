@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   createAndExportTimelineProject,
+  getCreateAndExportTimelineProjectHelpText,
   parseCreateAndExportTimelineProjectArgs,
   prepareCreateAndExportTimelineProjectOptions,
 } from "../../../src/lib/editor/create-and-export-cli";
@@ -23,6 +24,12 @@ test("create-and-export parsing keeps bundle output and export output separate",
     "9:16",
     "--video",
     "./media/intro.mp4",
+    "--audio",
+    "./audio/bed.mp3",
+    "--video-clone-to-fill",
+    "1",
+    "--video-trim-final-to-audio",
+    "--audio-trim-final-to-video",
     "--output",
     "./bundles",
     "--resolution",
@@ -40,6 +47,17 @@ test("create-and-export parsing keeps bundle output and export output separate",
   assert.equal(options.exportOutputPath, "/repo/final.mp4");
   assert.equal(options.resolution, "720p");
   assert.equal(options.force, true);
+  assert.equal(options.create.videoCloneToFillIndex, 1);
+  assert.equal(options.create.videoTrimFinalToAudio, true);
+  assert.equal(options.create.audioTrimFinalToVideo, true);
+});
+
+test("create-and-export help text lists the track fill and match options", () => {
+  const helpText = getCreateAndExportTimelineProjectHelpText();
+
+  assert.match(helpText, /--video-clone-to-fill <i>/);
+  assert.match(helpText, /--video-trim-final-to-audio/);
+  assert.match(helpText, /--audio-trim-final-to-video/);
 });
 
 test("create-and-export preparation rejects missing video paths in json mode", async () => {
@@ -72,11 +90,11 @@ test("interactive create-and-export prompts ask export settings before create fi
             return "./exports";
           case "Project name":
             return "Interactive Flow";
-          case "Video clip 1 path":
+          case "Video clip 1 path or folder":
             return "/repo/source.mp4";
           case "Label":
             return "Clip One";
-          case "Optional audio file path (leave blank to skip)":
+          case "Optional audio file or folder path (leave blank to skip)":
             return "";
           default:
             return initial ?? "";
@@ -105,7 +123,55 @@ test("interactive create-and-export prompts ask export settings before create fi
     "Project name",
   ]);
   assert.ok(messages.indexOf("Aspect ratio") > messages.indexOf("Project name"));
-  assert.ok(messages.indexOf("Video clip 1 path") > messages.indexOf("Aspect ratio"));
+  assert.ok(messages.indexOf("Video clip 1 path or folder") > messages.indexOf("Aspect ratio"));
+});
+
+test("interactive create-and-export lets a folder input open the media browser for video selection", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  let browserInput: { startDirectory: string; kind: "video" | "audio" } | undefined;
+  const parsed = parseCreateAndExportTimelineProjectArgs(["--interactive"]);
+
+  const options = await prepareCreateAndExportTimelineProjectOptions(parsed, "/repo", {
+    isInteractive: true,
+    promptApi: {
+      promptForExportResolution: async (fallback) => fallback,
+      promptTextValue: async ({ message, initial }) => {
+        switch (message) {
+          case "Output directory":
+            return "./exports";
+          case "Project name":
+            return "Interactive Flow";
+          case "Video clip 1 path or folder":
+            return tempDir;
+          case "Optional audio file or folder path (leave blank to skip)":
+            return "";
+          default:
+            return initial ?? "";
+        }
+      },
+      promptConfirmValue: async ({ message, initial }) => {
+        if (message === "Add another video clip?") return false;
+        return initial;
+      },
+      promptNumberValue: async ({ initial }) => initial,
+      promptSelectValue: async <T>({ choices, initial }: { choices: Array<{ value: T }>; initial?: T }) =>
+        (initial ?? choices[0]?.value) as T,
+      promptForMediaPath: async (input) => {
+        browserInput = input;
+        return "/repo/picked.mp4";
+      },
+    },
+  });
+
+  assert.deepEqual(browserInput, {
+    startDirectory: tempDir,
+    kind: "video",
+  });
+  assert.equal(options.create.videoClips[0]?.sourcePath, "/repo/picked.mp4");
 });
 
 test("hybrid create-and-export prompting only asks for missing values", async () => {
@@ -130,7 +196,7 @@ test("hybrid create-and-export prompting only asks for missing values", async ()
       },
       promptTextValue: async ({ message }) => {
         messages.push(message);
-        if (message === "Optional audio file path (leave blank to skip)") {
+        if (message === "Optional audio file or folder path (leave blank to skip)") {
           return "";
         }
         return "./unused";
@@ -155,7 +221,7 @@ test("hybrid create-and-export prompting only asks for missing values", async ()
   assert.deepEqual(messages, [
     "Use the default MP4 destination inside the generated workspace exports folder?",
     "Aspect ratio",
-    "Optional audio file path (leave blank to skip)",
+    "Optional audio file or folder path (leave blank to skip)",
   ]);
   assert.ok(!messages.includes("Project name"));
   assert.ok(!messages.includes("Label"));

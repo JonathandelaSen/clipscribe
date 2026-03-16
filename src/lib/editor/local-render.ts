@@ -15,10 +15,10 @@ import {
 } from "./core/export-plan";
 import { buildEditorExportFilename } from "./export-output";
 import {
-  BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT,
-  BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS,
+  buildBrowserRenderPlan,
   buildSegmentedBrowserRenderSegments,
-  shouldUseSegmentedBrowserRender,
+  getRetryBrowserRenderProfile,
+  type BrowserRenderPlan,
 } from "./local-render-segments";
 import {
   createEditorFfmpegActivityWatchdog,
@@ -54,6 +54,16 @@ interface MountedFileInputRef {
 interface RenderPassResult {
   warnings: string[];
   ffmpegArgs: string[];
+  subtitleFrameCount: number;
+}
+
+interface RenderAttemptResult {
+  file: File;
+  width: number;
+  height: number;
+  warnings: string[];
+  ffmpegCommandPreview: string[];
+  notes: string[];
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -111,6 +121,10 @@ function withSegmentContext(message: string, segmentIndex: number, segmentCount:
   return [headline, segmentLine, ...rest].filter(Boolean).join("\n");
 }
 
+function formatElapsedSeconds(elapsedMs: number): string {
+  return `${(elapsedMs / 1_000).toFixed(1)}s`;
+}
+
 export interface LocalEditorExportInput {
   project: EditorProjectRecord;
   resolvedAssets: ResolvedEditorAsset[];
@@ -130,42 +144,7 @@ export interface LocalEditorExportResult {
 }
 
 export async function exportEditorProjectLocally(input: LocalEditorExportInput): Promise<LocalEditorExportResult> {
-  setBrowserRenderStage(input.renderLifecycle, "preparing");
-  const ff = await getFFmpeg();
-  throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
-  const mountRoot = `/timeline_${Date.now()}`;
-  const outputPath = `/timeline_out_${Date.now()}.mp4`;
-  const segmentMountRoot = `${mountRoot}/segments_concat`;
-  const segmentManifestPath = `${mountRoot}/segments.ffconcat`;
-  const stitchedVideoPath = `${mountRoot}/timeline_stitched_video.mp4`;
-  const mixedAudioPath = `${mountRoot}/timeline_mix.m4a`;
-  const textEncoder = new TextEncoder();
-  const availableAssets = input.resolvedAssets.filter((asset) => !asset.missing && asset.file);
-  if (availableAssets.length === 0) {
-    throw new Error("No project assets are available for export.");
-  }
-
-  const fileInputRefs: MountedFileInputRef[] = [];
-  const ffmpegLogTail: string[] = [];
-  const ffmpegLogHighlights: string[] = [];
-  const renderClipCount = input.project.timeline.videoClips.length;
-  const renderAudioItemCount = input.project.timeline.audioItems.length;
-  const stallTimeoutMs = getFfmpegRenderStallTimeoutMs(input.resolution);
-  const temporaryFiles = new Set<string>([
-    outputPath,
-    segmentManifestPath,
-    stitchedVideoPath,
-    mixedAudioPath,
-  ]);
-
   let lastProgressPct = 0;
-  let totalSubtitleFrameCount = 0;
-  let currentExecDurationSeconds = 0;
-  let progressTimeBaselineSeconds: number | null = null;
-  let logTimeBaselineSeconds: number | null = null;
-  let activityWatchdog: EditorFfmpegActivityWatchdog | null = null;
-  let currentRenderProgressEmitter: (renderPct: number) => void = () => undefined;
-  let segmentMountCreated = false;
 
   const emitProgress = (pct: number) => {
     const next = Math.round(clampNumber(pct, 0, 100));
@@ -174,10 +153,91 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     input.onProgress?.(next);
   };
 
+  const initialRenderPlan = buildBrowserRenderPlan({
+    project: input.project,
+    resolution: input.resolution,
+  });
+
+  try {
+    return await runBrowserRenderAttempt({
+      input,
+      emitProgress,
+      renderPlan: initialRenderPlan,
+      retriedFromProfileName: null,
+    });
+  } catch (error) {
+    if (isBrowserRenderCanceledError(error) || input.renderLifecycle?.signal?.aborted) {
+      throw error;
+    }
+
+    const retryProfile = getRetryBrowserRenderProfile({
+      error,
+      currentProfile: initialRenderPlan.profile,
+    });
+    if (!retryProfile) {
+      throw error;
+    }
+
+    return runBrowserRenderAttempt({
+      input,
+      emitProgress,
+      renderPlan: buildBrowserRenderPlan({
+        project: input.project,
+        resolution: input.resolution,
+        profileName: retryProfile.name,
+      }),
+      retriedFromProfileName: initialRenderPlan.profile.name,
+    });
+  }
+}
+
+async function runBrowserRenderAttempt(input: {
+  input: LocalEditorExportInput;
+  emitProgress: (pct: number) => void;
+  renderPlan: BrowserRenderPlan;
+  retriedFromProfileName: BrowserRenderPlan["profile"]["name"] | null;
+}): Promise<RenderAttemptResult> {
+  setBrowserRenderStage(input.input.renderLifecycle, "preparing");
+  const ff = await getFFmpeg();
+  throwIfBrowserRenderCanceled(input.input.renderLifecycle?.signal);
+
+  const attemptStartedAt = Date.now();
+  const mountRoot = `/timeline_${Date.now()}_${input.renderPlan.profile.name}`;
+  const outputPath = `/timeline_out_${Date.now()}.mp4`;
+  const segmentMountRoot = `${mountRoot}/segments_concat`;
+  const segmentManifestPath = `${mountRoot}/segments.ffconcat`;
+  const stitchedVideoPath = `${mountRoot}/timeline_stitched_video.mp4`;
+  const mixedAudioPath = `${mountRoot}/timeline_mix.m4a`;
+  const textEncoder = new TextEncoder();
+  const availableAssets = input.input.resolvedAssets.filter((asset) => !asset.missing && asset.file);
+  if (availableAssets.length === 0) {
+    throw new Error("No project assets are available for export.");
+  }
+
+  const fileInputRefs: MountedFileInputRef[] = [];
+  const ffmpegLogTail: string[] = [];
+  const ffmpegLogHighlights: string[] = [];
+  const renderClipCount = input.input.project.timeline.videoClips.length;
+  const renderAudioItemCount = input.input.project.timeline.audioItems.length;
+  const stallTimeoutMs = getFfmpegRenderStallTimeoutMs(input.input.resolution);
+  const temporaryFiles = new Set<string>([
+    outputPath,
+    segmentManifestPath,
+    stitchedVideoPath,
+    mixedAudioPath,
+  ]);
+
+  let currentExecDurationSeconds = 0;
+  let progressTimeBaselineSeconds: number | null = null;
+  let logTimeBaselineSeconds: number | null = null;
+  let activityWatchdog: EditorFfmpegActivityWatchdog | null = null;
+  let currentRenderProgressEmitter: (renderPct: number) => void = () => undefined;
+  let segmentMountCreated = false;
+
   const emitRenderProgress = (renderPct: number) => {
     const safeRenderPct = clampNumber(renderPct, 0, 100);
     const span = LOCAL_EDITOR_EXPORT_PROGRESS.renderMax - LOCAL_EDITOR_EXPORT_PROGRESS.preRender;
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender + (safeRenderPct / 100) * span);
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender + (safeRenderPct / 100) * span);
   };
 
   const resetProgressTimeBaselines = () => {
@@ -279,7 +339,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       await runEditorFfmpegExec({
         ff,
         args: execInput.args,
-        resolution: input.resolution,
+        resolution: input.input.resolution,
         clipCount: execInput.clipCount,
         durationSeconds: execInput.durationSeconds,
         logTail: ffmpegLogTail,
@@ -288,7 +348,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         subtitleFrameCount: execInput.subtitleFrameCount,
         activityWatchdog,
         resetFfmpeg: resetFFmpeg,
-        lifecycle: input.renderLifecycle,
+        lifecycle: input.input.renderLifecycle,
       });
     } finally {
       activityWatchdog = null;
@@ -298,7 +358,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
 
   const readRenderedFile = async (path: string): Promise<Uint8Array> => {
     const output = await ff.readFile(path);
-    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+    throwIfBrowserRenderCanceled(input.input.renderLifecycle?.signal);
     const data = copyBinaryOutput(output);
     if (data.byteLength < 1024) {
       throw new Error("Rendered output is empty.");
@@ -310,33 +370,31 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     project: EditorProjectRecord;
     outputPath: string;
     mountedInputs: ResolvedExportInput[];
+    includeAudio: boolean;
     onRenderProgress?: (renderPct: number) => void;
-    includeAudio?: boolean;
   }): Promise<RenderPassResult> => {
     const exportPlan = buildEditorExportPlan({
       project: passInput.project,
       inputs: passInput.mountedInputs,
-      resolution: input.resolution,
+      resolution: input.input.resolution,
       includeAudio: passInput.includeAudio,
     });
     const timelineCaptions = buildProjectCaptionTimeline({
       project: passInput.project,
-      assets: input.resolvedAssets.map((resolved) => resolved.asset),
-      historyMap: input.historyMap,
+      assets: input.input.resolvedAssets.map((resolved) => resolved.asset),
+      historyMap: input.input.historyMap,
     });
     const subtitleFrames = await renderTimelineSubtitlesToPngs({
       chunks: timelineCaptions,
       project: passInput.project,
       width: exportPlan.width,
       height: exportPlan.height,
-      signal: input.renderLifecycle?.signal,
+      signal: input.input.renderLifecycle?.signal,
     });
-
-    totalSubtitleFrameCount += subtitleFrames.length;
 
     try {
       for (const frame of subtitleFrames) {
-        throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+        throwIfBrowserRenderCanceled(input.input.renderLifecycle?.signal);
         temporaryFiles.add(frame.vfsPath);
         await ff.writeFile(frame.vfsPath, frame.pngBytes);
       }
@@ -374,11 +432,11 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         "-c:v",
         "libx264",
         "-preset",
-        "veryfast",
+        input.renderPlan.profile.videoPreset,
         "-crf",
-        input.resolution === "4K" ? "24" : "22",
+        String(input.renderPlan.profile.crf),
       ];
-      if (passInput.includeAudio !== false && exportPlan.mixedAudioLabel) {
+      if (passInput.includeAudio && exportPlan.mixedAudioLabel) {
         args.push(
           "-map",
           `[${exportPlan.mixedAudioLabel}]`,
@@ -396,7 +454,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         args,
         durationSeconds: Math.max(exportPlan.durationSeconds, 0.5),
         clipCount: passInput.project.timeline.videoClips.length,
-        audioItemCount: passInput.includeAudio === false ? 0 : passInput.project.timeline.audioItems.length,
+        audioItemCount: passInput.includeAudio ? passInput.project.timeline.audioItems.length : 0,
         subtitleFrameCount: subtitleFrames.length,
         onRenderProgress: passInput.onRenderProgress,
       });
@@ -404,6 +462,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       return {
         warnings: exportPlan.warnings,
         ffmpegArgs: args,
+        subtitleFrameCount: subtitleFrames.length,
       };
     } finally {
       for (const frame of subtitleFrames) {
@@ -455,15 +514,16 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
     return {
       warnings: audioPlan.warnings,
       ffmpegArgs: args,
+      subtitleFrameCount: 0,
     };
   };
 
   try {
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.init);
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.init);
     await ff.createDir(mountRoot);
 
     for (const [index, resolved] of availableAssets.entries()) {
-      throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+      throwIfBrowserRenderCanceled(input.input.renderLifecycle?.signal);
       const assetDir = `${mountRoot}/${resolved.asset.id}`;
       await ff.createDir(assetDir);
       await ff.mount("WORKERFS" as never, { files: [resolved.file!] }, assetDir);
@@ -474,7 +534,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         file: resolved.file!,
       });
     }
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.mounted);
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.mounted);
 
     const availableAssetsById = new Map(availableAssets.map((asset) => [asset.asset.id, asset]));
     const mountedInputs = fileInputRefs.map((entry) => {
@@ -490,25 +550,22 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       };
     });
 
-    const fullExportPlan = buildEditorExportPlan({
-      project: input.project,
-      inputs: mountedInputs,
-      resolution: input.resolution,
-    });
-    const fullRenderDurationSeconds = Math.max(fullExportPlan.durationSeconds, 0.5);
-    const candidateSegments = shouldUseSegmentedBrowserRender({
-      clipCount: renderClipCount,
-      durationSeconds: fullRenderDurationSeconds,
-    })
-      ? buildSegmentedBrowserRenderSegments({ project: input.project })
+    const candidateSegments = input.renderPlan.shouldSegment
+      ? buildSegmentedBrowserRenderSegments({
+          project: input.input.project,
+          maxClipCount: input.renderPlan.profile.maxClipCount,
+          maxDurationSeconds: input.renderPlan.profile.maxDurationSeconds,
+        })
       : [];
     const useSegmentedRender = candidateSegments.length > 1;
 
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender);
-    setBrowserRenderStage(input.renderLifecycle, "rendering");
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.preRender);
+    setBrowserRenderStage(input.input.renderLifecycle, "rendering");
 
     let warnings: string[] = [];
     let ffmpegCommandPreview: string[] = [];
+    let totalSubtitleFrameCount = 0;
+    let audioFinalizeSkipped = false;
 
     if (useSegmentedRender) {
       const segmentFiles: File[] = [];
@@ -523,17 +580,18 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
             project: segment.project,
             outputPath: segmentOutputPath,
             mountedInputs,
-            includeAudio: false,
+            includeAudio: input.renderPlan.includeAudioInSegments,
             onRenderProgress: (renderPct) => {
               const renderedSeconds =
                 completedDurationSeconds + (clampNumber(renderPct, 0, 100) / 100) * segment.durationSeconds;
               emitRenderProgress(
-                (renderedSeconds / fullRenderDurationSeconds) * SEGMENTED_RENDER_SEGMENT_BUDGET_PCT
+                (renderedSeconds / Math.max(input.renderPlan.durationSeconds, 0.5)) * SEGMENTED_RENDER_SEGMENT_BUDGET_PCT
               );
             },
           });
 
           warnings.push(...pass.warnings);
+          totalSubtitleFrameCount += pass.subtitleFrameCount;
           if (ffmpegCommandPreview.length === 0) {
             ffmpegCommandPreview = [
               "ffmpeg",
@@ -550,7 +608,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
             )
           );
         } catch (error) {
-          if (isBrowserRenderCanceledError(error) || input.renderLifecycle?.signal?.aborted) {
+          if (isBrowserRenderCanceledError(error) || input.input.renderLifecycle?.signal?.aborted) {
             throw error;
           }
 
@@ -575,7 +633,7 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
 
         completedDurationSeconds += segment.durationSeconds;
         emitRenderProgress(
-          (completedDurationSeconds / fullRenderDurationSeconds) * SEGMENTED_RENDER_SEGMENT_BUDGET_PCT
+          (completedDurationSeconds / Math.max(input.renderPlan.durationSeconds, 0.5)) * SEGMENTED_RENDER_SEGMENT_BUDGET_PCT
         );
       }
 
@@ -587,99 +645,139 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
         textEncoder.encode(buildConcatManifest(segmentFiles.map((file) => `${segmentMountRoot}/${file.name}`)))
       );
 
-      const concatArgs = [
-        "-f",
-        "concat",
-        "-safe",
-        "0",
-        "-i",
-        segmentManifestPath,
-        "-c:v",
-        "copy",
-        "-an",
-        stitchedVideoPath,
-      ];
+      if (input.renderPlan.includeAudioInSegments) {
+        audioFinalizeSkipped = true;
+        const concatArgs = [
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          segmentManifestPath,
+          "-c:v",
+          "copy",
+          "-c:a",
+          "copy",
+          outputPath,
+        ];
 
-      await runFfmpegExecWithFallbackProgress({
-        args: concatArgs,
-        durationSeconds: fullRenderDurationSeconds,
-        clipCount: renderClipCount,
-        audioItemCount: 0,
-        subtitleFrameCount: totalSubtitleFrameCount,
-        onRenderProgress: (renderPct) => {
-          emitRenderProgress(
-            SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
-              (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.25)
-          );
-        },
-      });
+        await runFfmpegExecWithFallbackProgress({
+          args: concatArgs,
+          durationSeconds: Math.max(input.renderPlan.durationSeconds, 0.5),
+          clipCount: renderClipCount,
+          audioItemCount: 0,
+          subtitleFrameCount: totalSubtitleFrameCount,
+          onRenderProgress: (renderPct) => {
+            emitRenderProgress(
+              SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
+                (clampNumber(renderPct, 0, 100) / 100) * SEGMENTED_RENDER_FINALIZE_BUDGET_PCT
+            );
+          },
+        });
 
-      const audioPass = await renderAudioMixPass({
-        project: input.project,
-        outputPath: mixedAudioPath,
-        mountedInputs,
-        onRenderProgress: (renderPct) => {
-          emitRenderProgress(
-            SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
-              SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.25 +
-              (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.45)
-          );
-        },
-      });
-      warnings.push(...audioPass.warnings);
+        ffmpegCommandPreview = [
+          "ffmpeg",
+          ...concatArgs.map((value) => stripMountRoot(value, mountRoot)),
+        ];
+      } else {
+        const concatArgs = [
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          segmentManifestPath,
+          "-c:v",
+          "copy",
+          "-an",
+          stitchedVideoPath,
+        ];
 
-      const muxArgs = [
-        "-i",
-        stitchedVideoPath,
-        "-i",
-        mixedAudioPath,
-        "-c:v",
-        "copy",
-        "-c:a",
-        "copy",
-        outputPath,
-      ];
-      await runFfmpegExecWithFallbackProgress({
-        args: muxArgs,
-        durationSeconds: fullRenderDurationSeconds,
-        clipCount: renderClipCount,
-        audioItemCount: renderAudioItemCount,
-        subtitleFrameCount: totalSubtitleFrameCount,
-        onRenderProgress: (renderPct) => {
-          emitRenderProgress(
-            SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
-              SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.7 +
-              (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.3)
-          );
-        },
-      });
+        await runFfmpegExecWithFallbackProgress({
+          args: concatArgs,
+          durationSeconds: Math.max(input.renderPlan.durationSeconds, 0.5),
+          clipCount: renderClipCount,
+          audioItemCount: 0,
+          subtitleFrameCount: totalSubtitleFrameCount,
+          onRenderProgress: (renderPct) => {
+            emitRenderProgress(
+              SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
+                (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.25)
+            );
+          },
+        });
 
-      ffmpegCommandPreview = [
-        "ffmpeg",
-        ...muxArgs.map((value) => stripMountRoot(value, mountRoot)),
-      ];
+        const audioPass = await renderAudioMixPass({
+          project: input.input.project,
+          outputPath: mixedAudioPath,
+          mountedInputs,
+          onRenderProgress: (renderPct) => {
+            emitRenderProgress(
+              SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
+                SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.25 +
+                (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.45)
+            );
+          },
+        });
+        warnings.push(...audioPass.warnings);
+
+        const muxArgs = [
+          "-i",
+          stitchedVideoPath,
+          "-i",
+          mixedAudioPath,
+          "-c:v",
+          "copy",
+          "-c:a",
+          "copy",
+          outputPath,
+        ];
+        await runFfmpegExecWithFallbackProgress({
+          args: muxArgs,
+          durationSeconds: Math.max(input.renderPlan.durationSeconds, 0.5),
+          clipCount: renderClipCount,
+          audioItemCount: renderAudioItemCount,
+          subtitleFrameCount: totalSubtitleFrameCount,
+          onRenderProgress: (renderPct) => {
+            emitRenderProgress(
+              SEGMENTED_RENDER_SEGMENT_BUDGET_PCT +
+                SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.7 +
+                (clampNumber(renderPct, 0, 100) / 100) * (SEGMENTED_RENDER_FINALIZE_BUDGET_PCT * 0.3)
+            );
+          },
+        });
+
+        ffmpegCommandPreview = [
+          "ffmpeg",
+          ...muxArgs.map((value) => stripMountRoot(value, mountRoot)),
+        ];
+      }
     } else {
       const pass = await renderProjectPass({
-        project: input.project,
+        project: input.input.project,
         outputPath,
         mountedInputs,
+        includeAudio: true,
       });
       warnings = pass.warnings;
+      totalSubtitleFrameCount = pass.subtitleFrameCount;
       ffmpegCommandPreview = [
         "ffmpeg",
         ...pass.ffmpegArgs.map((value) => stripMountRoot(value, mountRoot)),
       ];
     }
 
-    setBrowserRenderStage(input.renderLifecycle, "handoff");
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.readOutput);
+    setBrowserRenderStage(input.input.renderLifecycle, "handoff");
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.readOutput);
 
     const data = await readRenderedFile(outputPath);
-    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
-    const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
-    const filename = buildEditorExportFilename(input.project.name, input.project.aspectRatio, input.resolution);
+    throwIfBrowserRenderCanceled(input.input.renderLifecycle?.signal);
+    const { width, height } = getEditorOutputDimensions(input.input.project.aspectRatio, input.input.resolution);
+    const filename = buildEditorExportFilename(input.input.project.name, input.input.project.aspectRatio, input.input.resolution);
     const file = new File([toOwnedBytes(data)], filename, { type: "video/mp4" });
-    emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.packaged);
+    input.emitProgress(LOCAL_EDITOR_EXPORT_PROGRESS.packaged);
+
+    const attemptElapsedMs = Date.now() - attemptStartedAt;
 
     return {
       file,
@@ -688,7 +786,11 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
       warnings: dedupeStrings(warnings),
       ffmpegCommandPreview,
       notes: [
-        `Timeline export via ffmpeg.wasm (${input.project.aspectRatio} @ ${input.resolution}).`,
+        `Timeline export via ffmpeg.wasm (${input.input.project.aspectRatio} @ ${input.input.resolution}).`,
+        `Automatic browser render tier: ${input.renderPlan.profile.name}.`,
+        input.retriedFromProfileName
+          ? `Retry fallback used: initial tier ${input.retriedFromProfileName}, final tier ${input.renderPlan.profile.name}.`
+          : "Browser render completed without a fallback retry.",
         `${renderClipCount} video clips in ripple sequence.`,
         renderAudioItemCount
           ? `${renderAudioItemCount} audio track item${renderAudioItemCount === 1 ? "" : "s"} mixed with clip audio.`
@@ -697,17 +799,23 @@ export async function exportEditorProjectLocally(input: LocalEditorExportInput):
           ? `${totalSubtitleFrameCount} subtitle frames burned into the output.`
           : "No subtitle burn-in frames were rendered.",
         useSegmentedRender
-          ? `Browser export rendered ${candidateSegments.length} video-only segments, stitched them, then mixed audio separately (up to ${BROWSER_SEGMENT_RENDER_MAX_CLIP_COUNT} clip or ${BROWSER_SEGMENT_RENDER_MAX_DURATION_SECONDS}s per segment) to reduce FFmpeg.wasm memory pressure.`
+          ? `Browser export rendered ${candidateSegments.length} segment${candidateSegments.length === 1 ? "" : "s"} with budgets up to ${input.renderPlan.profile.maxClipCount} clip${input.renderPlan.profile.maxClipCount === 1 ? "" : "s"} or ${input.renderPlan.profile.maxDurationSeconds}s each.`
           : "Browser timeline export used a single FFmpeg.wasm render pass.",
+        useSegmentedRender
+          ? audioFinalizeSkipped
+            ? "Segmented browser export kept clip audio inside each segment, so the separate audio remix and final mux passes were skipped."
+            : "Segmented browser export used the slower audio remix/final mux flow because timeline audio items were present."
+          : "Single-pass browser render did not need segmented finalize passes.",
+        `Browser export wall-clock render time: ${formatElapsedSeconds(attemptElapsedMs)}.`,
         "Browser timeline export disables +faststart so long local renders avoid a second MP4 rewrite pass.",
         "Filtering and encoding are limited to one FFmpeg thread in browser export to reduce peak memory usage.",
         "Muxing queue size raised to 4096 packets to reduce long-timeline stream buffering failures.",
         `Render stall watchdog: ${Math.round(stallTimeoutMs / 1000)}s without FFmpeg activity before abort.`,
-        input.resolution === "4K" ? "4K is experimental in browser and may fail on lower-memory devices." : "Standard browser export preset.",
+        input.input.resolution === "4K" ? "4K is experimental in browser and may fail on lower-memory devices." : "Adaptive browser export preset.",
       ],
     };
   } catch (error) {
-    if (isBrowserRenderCanceledError(error) || input.renderLifecycle?.signal?.aborted) {
+    if (isBrowserRenderCanceledError(error) || input.input.renderLifecycle?.signal?.aborted) {
       throw error;
     }
 

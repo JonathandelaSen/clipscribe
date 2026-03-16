@@ -5,6 +5,9 @@ import {
   canJoinTimelineClips,
   clampAudioItemToAsset,
   clampVideoClipToAsset,
+  cloneTimelineAudioItemToFill,
+  cloneTimelineClipGroupToFill,
+  cloneTimelineClipToFill,
   createJoinedTimelineClipGroup,
   duplicateTimelineClipGroup,
   ensureProjectSelection,
@@ -29,11 +32,15 @@ import {
   resetTimelineVideoClipFrame,
   resetTimelineVideoClipTrim,
   splitTimelineClip,
+  trimTimelineAudioItemToMatchTrackEnd,
+  trimTimelineClipGroupToMatchTrackEnd,
+  trimTimelineClipToMatchTrackEnd,
   unjoinTimelineClipGroup,
 } from "../../../src/lib/editor/core/timeline";
 import {
   DEFAULT_EDITOR_MEDIA_VOLUME,
   createDefaultAudioTrack,
+  createDefaultImageTrackItem,
   createDefaultVideoClip,
   createEmptyEditorProject,
   getDefaultEditorCanvasState,
@@ -233,6 +240,108 @@ test("duplicate and remove helpers preserve joined group structure", () => {
   assert.deepEqual(removed.videoClipGroups, []);
 });
 
+test("cloneTimelineClipToFill inserts repeated copies after the selected clip", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 3 });
+  const third = createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 4 });
+
+  const cloned = cloneTimelineClipToFill([first, second, third], second.id, 14);
+
+  assert.equal(cloned.cloneCount, 2);
+  assert.deepEqual(
+    cloned.videoClips.map((clip) => clip.assetId),
+    ["a", "b", "b", "b", "c"]
+  );
+  assert.equal(cloned.lastInsertedClipId, cloned.videoClips[3]?.id ?? null);
+});
+
+test("cloneTimelineClipGroupToFill duplicates the selected joined block as a unit", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 3 });
+  const third = createDefaultVideoClip({ assetId: "c", label: "C", durationSeconds: 4 });
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [first.id, second.id],
+      label: "A + B",
+    },
+  ];
+
+  const cloned = cloneTimelineClipGroupToFill([first, second, third], groups, "group_1", 18);
+  const blocks = getTimelineVideoBlockPlacements(cloned.videoClips, cloned.videoClipGroups);
+
+  assert.equal(cloned.cloneCount, 2);
+  assert.equal(cloned.videoClipGroups.length, 3);
+  assert.deepEqual(
+    cloned.videoClips.map((clip) => clip.assetId),
+    ["a", "b", "a", "b", "a", "b", "c"]
+  );
+  assert.deepEqual(blocks.map((block) => block.kind), ["group", "group", "group", "clip"]);
+  assert.equal(cloned.lastInsertedGroupId, cloned.videoClipGroups[2]?.id ?? null);
+});
+
+test("trimTimelineClipToMatchTrackEnd trims only the selected last clip", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 10 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 20 });
+
+  const trimmed = trimTimelineClipToMatchTrackEnd([first, second], second.id, 25);
+
+  assert.equal(trimmed.trimmed, true);
+  assert.equal(trimmed.trimmedSeconds, 5);
+  assert.equal(trimmed.videoClips[1]?.trimEndSeconds, 15);
+});
+
+test("trimTimelineClipToMatchTrackEnd is a no-op for non-final clips", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 10 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 20 });
+
+  const trimmed = trimTimelineClipToMatchTrackEnd([first, second], first.id, 25);
+
+  assert.equal(trimmed.trimmed, false);
+  assert.equal(trimmed.videoClips[0]?.trimEndSeconds, 10);
+  assert.equal(trimmed.videoClips[1]?.trimEndSeconds, 20);
+});
+
+test("trimTimelineClipGroupToMatchTrackEnd shortens only the joined block tail clip", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 8 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 6 });
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [first.id, second.id],
+      label: "A + B",
+    },
+  ];
+
+  const trimmed = trimTimelineClipGroupToMatchTrackEnd([first, second], groups, "group_1", 10);
+
+  assert.equal(trimmed.trimmed, true);
+  assert.equal(trimmed.trimmedSeconds, 4);
+  assert.equal(trimmed.videoClips[1]?.trimEndSeconds, 2);
+  assert.equal(trimmed.videoClipGroups.length, 1);
+  assert.equal(trimmed.tailClipId, second.id);
+});
+
+test("trimTimelineClipGroupToMatchTrackEnd does nothing when the tail clip cannot absorb the overshoot", () => {
+  const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 8 });
+  const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 6 });
+  const groups = [
+    {
+      id: "group_1",
+      kind: "joined" as const,
+      clipIds: [first.id, second.id],
+      label: "A + B",
+    },
+  ];
+
+  const trimmed = trimTimelineClipGroupToMatchTrackEnd([first, second], groups, "group_1", 7);
+
+  assert.equal(trimmed.trimmed, false);
+  assert.equal(trimmed.videoClips[1]?.trimEndSeconds, 6);
+});
+
 test("unjoinTimelineClipGroup and replaceTimelineClipGroupWithClip cleanly collapse joined state", () => {
   const first = createDefaultVideoClip({ assetId: "a", label: "A", durationSeconds: 2 });
   const second = createDefaultVideoClip({ assetId: "b", label: "B", durationSeconds: 2 });
@@ -292,6 +401,15 @@ test("getProjectDuration respects the longer of video sequence or audio items", 
   ];
 
   assert.equal(getProjectDuration(project), 17);
+});
+
+test("getProjectDuration gives the image track a sensible full-length fallback when no other media defines duration", () => {
+  const project = createEmptyEditorProject();
+  project.timeline.imageItems = [
+    createDefaultImageTrackItem({ assetId: "image-1", label: "Cover" }),
+  ];
+
+  assert.equal(getProjectDuration(project), 5);
 });
 
 test("findClipAtProjectTime resolves the active clip in sequence time", () => {
@@ -383,6 +501,68 @@ test("insertTimelineAudioItemAfter ripples later audio items to the right", () =
       { assetId: "aud-b", startOffsetSeconds: 6 },
     ]
   );
+});
+
+test("cloneTimelineAudioItemToFill inserts repeated copies after the selected audio item", () => {
+  const first = {
+    ...createDefaultAudioTrack({ assetId: "aud-a", durationSeconds: 4 }),
+    startOffsetSeconds: 0,
+    trimEndSeconds: 4,
+  };
+  const second = {
+    ...createDefaultAudioTrack({ assetId: "aud-b", durationSeconds: 3 }),
+    startOffsetSeconds: 10,
+    trimEndSeconds: 3,
+  };
+
+  const cloned = cloneTimelineAudioItemToFill([first, second], first.id, 20);
+
+  assert.equal(cloned.cloneCount, 2);
+  assert.deepEqual(
+    cloned.audioItems.map((item) => ({
+      assetId: item.assetId,
+      startOffsetSeconds: item.startOffsetSeconds,
+    })),
+    [
+      { assetId: "aud-a", startOffsetSeconds: 0 },
+      { assetId: "aud-a", startOffsetSeconds: 4 },
+      { assetId: "aud-a", startOffsetSeconds: 8 },
+      { assetId: "aud-b", startOffsetSeconds: 18 },
+    ]
+  );
+  assert.equal(cloned.lastInsertedItemId, cloned.audioItems[2]?.id ?? null);
+});
+
+test("trimTimelineAudioItemToMatchTrackEnd trims only the selected last audio item", () => {
+  const item = {
+    ...createDefaultAudioTrack({ assetId: "aud-a", durationSeconds: 18 }),
+    startOffsetSeconds: 0,
+    trimEndSeconds: 18,
+  };
+
+  const trimmed = trimTimelineAudioItemToMatchTrackEnd([item], item.id, 12);
+
+  assert.equal(trimmed.trimmed, true);
+  assert.equal(trimmed.trimmedSeconds, 6);
+  assert.equal(trimmed.audioItems[0]?.trimEndSeconds, 12);
+});
+
+test("fill and match helpers no-op when the target already fits or is empty", () => {
+  const clip = createDefaultVideoClip({ assetId: "clip", label: "Clip", durationSeconds: 6 });
+  const audioItem = {
+    ...createDefaultAudioTrack({ assetId: "aud", durationSeconds: 6 }),
+    trimEndSeconds: 6,
+  };
+
+  const clipClone = cloneTimelineClipToFill([clip], clip.id, 0);
+  const audioClone = cloneTimelineAudioItemToFill([audioItem], audioItem.id, 6);
+  const clipTrim = trimTimelineClipToMatchTrackEnd([clip], clip.id, 6);
+  const audioTrim = trimTimelineAudioItemToMatchTrackEnd([audioItem], audioItem.id, 9);
+
+  assert.equal(clipClone.cloneCount, 0);
+  assert.equal(audioClone.cloneCount, 0);
+  assert.equal(clipTrim.trimmed, false);
+  assert.equal(audioTrim.trimmed, false);
 });
 
 test("getSelectionForLaneIndex falls back to the next remaining item after delete", () => {

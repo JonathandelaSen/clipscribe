@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildEditorProjectBundleFromCliOptions,
+  getCreateTimelineProjectBundleHelpText,
   normalizeCliPathInput,
   normalizeCreateTimelineProjectBundleCliInput,
   parseCreateTimelineProjectBundleArgs,
@@ -26,6 +27,9 @@ test("CLI parsing and normalization maps repeated flags into ordered clip option
     "2:0.4",
     "--video-muted",
     "1",
+    "--video-clone-to-fill",
+    "2",
+    "--video-trim-final-to-audio",
     "--audio",
     "./audio/bed.mp3",
     "--audio-start",
@@ -35,6 +39,7 @@ test("CLI parsing and normalization maps repeated flags into ordered clip option
     "--audio-volume",
     "0.65",
     "--audio-muted",
+    "--audio-trim-final-to-video",
     "--output",
     "./dist",
   ]);
@@ -83,6 +88,9 @@ test("CLI parsing and normalization maps repeated flags into ordered clip option
     volume: 0.65,
     muted: true,
   });
+  assert.equal(normalized.videoCloneToFillIndex, 2);
+  assert.equal(normalized.videoTrimFinalToAudio, true);
+  assert.equal(normalized.audioTrimFinalToVideo, true);
 });
 
 test("CLI normalization rejects clip indexes that are outside the provided video range", () => {
@@ -98,6 +106,20 @@ test("CLI normalization rejects clip indexes that are outside the provided video
   assert.throws(
     () => normalizeCreateTimelineProjectBundleCliInput(parsed, "/repo"),
     /references video 3, but only 2 video clips were provided/
+  );
+});
+
+test("CLI normalization requires audio when cloning a video clip to fill the track", () => {
+  const parsed = parseCreateTimelineProjectBundleArgs([
+    "--video",
+    "./media/intro.mp4",
+    "--video-clone-to-fill",
+    "1",
+  ]);
+
+  assert.throws(
+    () => normalizeCreateTimelineProjectBundleCliInput(parsed, "/repo"),
+    /--video-clone-to-fill requires --audio/
   );
 });
 
@@ -119,6 +141,14 @@ test("CLI path normalization strips wrapping quotes and shell-escaped spaces", (
     normalizeCliPathInput("/Users/jon/Documents/My\\ Folder/Exports", "--output"),
     "/Users/jon/Documents/My Folder/Exports"
   );
+});
+
+test("create bundle help text lists the track fill and match options", () => {
+  const helpText = getCreateTimelineProjectBundleHelpText();
+
+  assert.match(helpText, /--video-clone-to-fill <i>/);
+  assert.match(helpText, /--video-trim-final-to-audio/);
+  assert.match(helpText, /--audio-trim-final-to-video/);
 });
 
 test("bundle builder creates stable media paths and deduplicates repeated source files", () => {

@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { getEditorExportCapability } from "../../../src/lib/editor/export-capabilities";
 import {
+  createDefaultImageTrackItem,
   createDefaultVideoClip,
   createEditorAssetRecord,
   createEmptyEditorProject,
@@ -99,7 +100,48 @@ test("system export capability blocks empty timelines", () => {
   });
 
   assert.equal(capability.supported, false);
-  assert.match(capability.reasons.join("\n"), /Add at least one video clip/);
+  assert.match(capability.reasons.join("\n"), /Add at least one video clip or image track item/);
+});
+
+test("system export capability accepts image-only timelines when the image asset is upload-backed", () => {
+  const project = createEmptyEditorProject({
+    id: "cap_image_project",
+    now: 100,
+    name: "Image Capability Test",
+    aspectRatio: "16:9",
+  });
+  const asset = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "image",
+    filename: "cover.png",
+    mimeType: "image/png",
+    sizeBytes: 100,
+    durationSeconds: 0,
+    width: 1920,
+    height: 1080,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+    id: "asset_image_main",
+    now: 100,
+  });
+
+  project.assetIds = [asset.id];
+  project.timeline.imageItems = [
+    createDefaultImageTrackItem({
+      assetId: asset.id,
+      label: "Cover",
+    }),
+  ];
+
+  const capability = getEditorExportCapability({
+    engine: "system",
+    project,
+    assets: [{ asset }],
+  });
+
+  assert.equal(capability.supported, true);
+  assert.deepEqual(capability.reasons, []);
 });
 
 test("system export capability ignores incompatible assets that are not used by the export", () => {

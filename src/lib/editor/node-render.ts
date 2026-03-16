@@ -209,14 +209,13 @@ export function buildNodeEditorExportCommand(input: {
     "veryfast",
     "-crf",
     input.resolution === "4K" ? "24" : "22",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "192k",
     "-movflags",
     "+faststart",
-    input.outputPath,
   ];
+  if (exportPlan.mixedAudioLabel) {
+    ffmpegArgs.push("-c:a", "aac", "-b:a", "192k");
+  }
+  ffmpegArgs.push(input.outputPath);
 
   return {
     width: exportPlan.width,
@@ -227,10 +226,17 @@ export function buildNodeEditorExportCommand(input: {
     ffmpegCommandPreview: ["ffmpeg", ...ffmpegArgs],
     notes: [
       `Timeline export via system ffmpeg (${input.project.aspectRatio} @ ${input.resolution}).`,
-      `${input.project.timeline.videoClips.length} video clips in ripple sequence.`,
+      input.project.timeline.videoClips.length
+        ? `${input.project.timeline.videoClips.length} video clips in ripple sequence.`
+        : "No video clips on the base track.",
+      input.project.timeline.imageItems.length
+        ? `${input.project.timeline.imageItems.length} image track item${input.project.timeline.imageItems.length === 1 ? "" : "s"} layered across the export.`
+        : "No image overlay track.",
       input.project.timeline.audioItems.length
         ? `${input.project.timeline.audioItems.length} audio track item${input.project.timeline.audioItems.length === 1 ? "" : "s"} mixed with clip audio.`
-        : "Clip audio only.",
+        : exportPlan.mixedAudioLabel
+          ? "Clip audio only."
+          : "No audio track.",
       "No subtitle burn-in is rendered by the CLI exporter.",
       input.resolution === "4K" ? "4K uses a slightly higher CRF preset." : "Standard CLI export preset.",
     ],

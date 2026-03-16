@@ -15,6 +15,7 @@ import {
   useState,
 } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -24,7 +25,10 @@ import {
   Film,
   FolderOpen,
   GripVertical,
+  Image as ImageIcon,
   Loader2,
+  Maximize2,
+  MoreHorizontal,
   Music4,
   Pause,
   Play,
@@ -57,12 +61,21 @@ import {
 import {
   EDITOR_ASPECT_RATIO_LABELS,
   getAspectRatioNumber,
+  getEditorOutputDimensions,
 } from "@/lib/editor/core/aspect-ratio";
+import {
+  buildEditorCanvasPreviewLayout,
+  getEditorCanvasCoverZoom,
+} from "@/lib/editor/core/canvas-frame";
 import {
   appendTimelineAudioItem,
   clampAudioItemToAsset,
   clampVideoClipToAsset,
   canJoinTimelineClips,
+  cloneTimelineAudioItemToFill,
+  cloneTimelineClipGroupToFill,
+  cloneTimelineClipToFill,
+  createClonedTimelineImageItem,
   createJoinedTimelineClipGroup,
   createClonedTimelineAudioItem,
   createClonedTimelineClip,
@@ -74,6 +87,7 @@ import {
   getSelectionForLaneIndex,
   getTimelineAudioPlacements,
   getTimelineClipPlacements,
+  getTimelineImagePlacements,
   getTimelineSelectionForVideoBlock,
   getTimelineVideoBlockPlacements,
   insertTimelineAudioItemAfter,
@@ -81,16 +95,21 @@ import {
   removeTimelineAudioItem,
   removeTimelineClip,
   removeTimelineClipGroup,
+  removeTimelineImageItem,
   reorderTimelineVideoBlock,
   replaceTimelineAudioItem,
   replaceTimelineClip,
   replaceTimelineClipGroupWithClip,
+  replaceTimelineImageItem,
   resetTimelineAudioItemTrack,
   resetTimelineAudioItemTrim,
   resetTimelineVideoClipAudio,
   resetTimelineVideoClipFrame,
   resetTimelineVideoClipTrim,
   splitTimelineClip,
+  trimTimelineAudioItemToMatchTrackEnd,
+  trimTimelineClipGroupToMatchTrackEnd,
+  trimTimelineClipToMatchTrackEnd,
   unjoinTimelineClipGroup,
   type TimelineVideoBlockPlacement,
 } from "@/lib/editor/core/timeline";
@@ -120,6 +139,7 @@ import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
   createDefaultAudioTrack,
+  createDefaultImageTrackItem,
   createDefaultVideoClip,
   createEditorAssetRecord,
   getEditorProjectPersistenceFingerprint,
@@ -139,6 +159,7 @@ import type {
   ResolvedEditorAsset,
   TimelineAudioItem,
   TimelineClipGroup,
+  TimelineImageItem,
   TimelineSelection,
   TimelineVideoClip,
 } from "@/lib/editor/types";
@@ -147,6 +168,12 @@ import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import {
   Dialog,
   DialogClose,
@@ -157,6 +184,12 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -183,6 +216,8 @@ const EDITOR_LABEL_CLASS = "text-[10px] font-medium uppercase tracking-[0.28em] 
 const EDITOR_TOOLBAR_BUTTON_CLASS =
   "h-8 rounded-[0.85rem] border border-white/8 bg-white/[0.035] px-3 text-xs text-white/72 hover:bg-white/[0.08] hover:text-white";
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
+const IMAGE_TRACK_MIN_ZOOM = 0.6;
+const IMAGE_TRACK_MAX_ZOOM = 6;
 
 type InspectorVideoTab = "edit" | "transform" | "join";
 
@@ -203,6 +238,10 @@ type PanelVisibilityState = {
 
 type TimelineClipboardItem =
   | {
+      kind: "image";
+      item: TimelineImageItem;
+    }
+  | {
       kind: "video";
       item: TimelineVideoClip;
     }
@@ -221,8 +260,17 @@ type ExportDestination = {
   name: string;
 };
 
+type TimelineTrackActionState = {
+  canCloneToFill: boolean;
+  canTrimToMatch: boolean;
+};
+
 function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function getTimelineAssetLabel(filename: string) {
+  return filename.replace(/\.[^/.]+$/, "");
 }
 
 function isAbortLikeError(error: unknown) {
@@ -328,10 +376,13 @@ function ProjectAssetThumbnail({
 }) {
   const asset = resolvedAsset?.asset;
   const videoUrl = useObjectUrl(asset?.kind === "video" ? resolvedAsset?.file : null);
+  const imageUrl = useObjectUrl(asset?.kind === "image" ? resolvedAsset?.file : null);
 
   if (!asset) return null;
 
   const isVideo = asset.kind === "video";
+  const isImage = asset.kind === "image";
+  const durationLabel = asset.kind === "image" ? "Still" : secondsToClock(asset.durationSeconds);
 
   return (
     <div
@@ -358,12 +409,23 @@ function ProjectAssetThumbnail({
               preload="metadata"
               className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.04]"
             />
+          ) : isImage && imageUrl ? (
+            <Image
+              src={imageUrl}
+              alt={asset.filename}
+              fill
+              unoptimized
+              sizes="(max-width: 1280px) 50vw, 20vw"
+              className="object-cover transition-transform duration-300 group-hover:scale-[1.04]"
+            />
           ) : (
             <div
               className={cn(
                 "flex h-full w-full items-center justify-center",
                 isVideo
                   ? "bg-[radial-gradient(circle_at_40%_30%,rgba(56,189,248,0.16),transparent_50%),linear-gradient(145deg,rgba(15,19,28,0.98),rgba(8,11,17,0.98))]"
+                  : isImage
+                    ? "bg-[radial-gradient(circle_at_50%_24%,rgba(16,185,129,0.16),transparent_48%),linear-gradient(145deg,rgba(10,22,20,0.98),rgba(6,12,14,0.98))]"
                   : "bg-[radial-gradient(ellipse_at_50%_20%,rgba(251,191,36,0.14),transparent_55%),linear-gradient(145deg,rgba(18,16,24,0.98),rgba(10,9,15,0.98))]"
               )}
             >
@@ -372,10 +434,12 @@ function ProjectAssetThumbnail({
                   "rounded-xl border p-3 backdrop-blur-sm",
                   isVideo
                     ? "border-cyan-300/12 bg-cyan-400/[0.06] text-cyan-200/60"
+                    : isImage
+                      ? "border-emerald-300/12 bg-emerald-400/[0.06] text-emerald-200/70"
                     : "border-amber-300/12 bg-amber-400/[0.06] text-amber-200/60"
                 )}
               >
-                {isVideo ? <Film className="h-5 w-5" /> : <Music4 className="h-5 w-5" />}
+                {isVideo ? <Film className="h-5 w-5" /> : isImage ? <ImageIcon className="h-5 w-5" /> : <Music4 className="h-5 w-5" />}
               </div>
             </div>
           )}
@@ -401,10 +465,12 @@ function ProjectAssetThumbnail({
                 "shrink-0 rounded-md px-1.5 py-0.5 font-mono text-[10px] tracking-wide",
                 isVideo
                   ? "bg-white/10 text-white/55"
+                  : isImage
+                    ? "bg-emerald-400/10 text-emerald-100/70"
                   : "bg-amber-400/10 text-amber-200/55"
               )}
             >
-              {secondsToClock(asset.durationSeconds)}
+              {durationLabel}
             </div>
           </div>
         </div>
@@ -599,6 +665,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const historyButtonRef = useRef<HTMLButtonElement | null>(null);
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const srtInputRef = useRef<HTMLInputElement | null>(null);
+  const timelinePreviewFrameRef = useRef<HTMLDivElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const autosaveHashRef = useRef<string>("");
@@ -670,6 +737,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [focusedJoinedClipId, setFocusedJoinedClipId] = useState<string | null>(null);
+  const [timelinePreviewFrameSize, setTimelinePreviewFrameSize] = useState({ width: 0, height: 0 });
   const [panelVisibility, setPanelVisibility] = useState<PanelVisibilityState>({
     left: true,
     center: true,
@@ -714,6 +782,35 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   useEffect(() => {
     setIsSavePickerSupported(isEditorSavePickerSupported());
   }, []);
+
+  useEffect(() => {
+    const element = timelinePreviewFrameRef.current;
+    if (!element) return;
+
+    const syncSize = () => {
+      const rect = element.getBoundingClientRect();
+      const nextWidth = Math.max(0, Math.round(rect.width));
+      const nextHeight = Math.max(0, Math.round(rect.height));
+      setTimelinePreviewFrameSize((current) =>
+        current.width === nextWidth && current.height === nextHeight
+          ? current
+          : { width: nextWidth, height: nextHeight }
+      );
+    };
+
+    syncSize();
+
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(() => {
+      syncSize();
+    });
+    observer.observe(element);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [panelVisibility.center, previewMode.kind, project?.aspectRatio]);
 
   const stopSystemExportProgressRamp = useCallback(() => {
     if (systemExportProgressTimerRef.current == null) return;
@@ -904,6 +1001,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     () => (project ? getTimelineAudioPlacements(project.timeline.audioItems) : []),
     [project]
   );
+  const imagePlacements = useMemo(
+    () => (project ? getTimelineImagePlacements(project) : []),
+    [project]
+  );
   const projectDuration = useMemo(() => (project ? getProjectDuration(project) : 0), [project]);
   const exportCapability = useMemo(
     () =>
@@ -927,10 +1028,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const missingTimelineAsset = project.timeline.videoClips.some(
       (clip) => resolvedAssetsMap.get(clip.assetId)?.missing
     );
+    const missingImageAsset = project.timeline.imageItems.some(
+      (item) => resolvedAssetsMap.get(item.assetId)?.missing
+    );
     const missingAudioAsset = project.timeline.audioItems.some(
       (item) => resolvedAssetsMap.get(item.assetId)?.missing
     );
-    if (missingTimelineAsset || missingAudioAsset) {
+    if (missingTimelineAsset || missingImageAsset || missingAudioAsset) {
       reasons.push("One or more timeline assets are missing. Replace them before exporting.");
     }
     if (isSavePickerSupported && !exportDestination) {
@@ -945,6 +1049,29 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   );
 
   const selectedItem = project?.timeline.selectedItem;
+  const clipMap = useMemo(
+    () => new Map((project?.timeline.videoClips ?? []).map((clip) => [clip.id, clip])),
+    [project]
+  );
+  const audioItemMap = useMemo(
+    () => new Map((project?.timeline.audioItems ?? []).map((item) => [item.id, item])),
+    [project]
+  );
+  const videoGroupMap = useMemo(
+    () => new Map(videoClipGroups.map((group) => [group.id, group])),
+    [videoClipGroups]
+  );
+  const videoGroupBlockMap = useMemo(
+    () =>
+      new Map(
+        videoBlockPlacements
+          .filter((block): block is Extract<TimelineVideoBlockPlacement, { kind: "group" }> => block.kind === "group")
+          .map((block) => [block.id, block])
+      ),
+    [videoBlockPlacements]
+  );
+  const videoTrackEnd = clipPlacements.at(-1)?.endSeconds ?? 0;
+  const audioTrackEnd = audioPlacements.at(-1)?.endSeconds ?? 0;
   const selectedClip = useMemo(
     () =>
       selectedItem?.kind === "video"
@@ -966,12 +1093,89 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : undefined,
     [project, selectedItem]
   );
+  const selectedImageItem = useMemo(
+    () =>
+      selectedItem?.kind === "image"
+        ? project?.timeline.imageItems.find((item) => item.id === selectedItem.id)
+        : undefined,
+    [project, selectedItem]
+  );
   const selectedGroupClipPlacements = useMemo(
     () =>
       selectedVideoGroup
         ? clipPlacements.filter((placement) => selectedVideoGroup.clipIds.includes(placement.clip.id))
         : [],
     [clipPlacements, selectedVideoGroup]
+  );
+  const getTimelineTrackActionState = useCallback(
+    (selection: TimelineSelection | undefined): TimelineTrackActionState => {
+      if (!selection) {
+        return {
+          canCloneToFill: false,
+          canTrimToMatch: false,
+        };
+      }
+
+      if (selection.kind === "video") {
+        const lastPlacement = clipPlacements.at(-1);
+        const overshootSeconds = videoTrackEnd - audioTrackEnd;
+        return {
+          canCloneToFill: clipMap.has(selection.id) && audioTrackEnd > videoTrackEnd,
+          canTrimToMatch:
+            lastPlacement?.clip.id === selection.id &&
+            overshootSeconds > 0 &&
+            lastPlacement.durationSeconds - overshootSeconds >= 0.5,
+        };
+      }
+
+      if (selection.kind === "video-group") {
+        const lastBlock = videoBlockPlacements.at(-1);
+        const groupBlock = videoGroupBlockMap.get(selection.id);
+        const tailPlacement = groupBlock?.clipPlacements.at(-1);
+        const overshootSeconds = videoTrackEnd - audioTrackEnd;
+        return {
+          canCloneToFill: videoGroupMap.has(selection.id) && audioTrackEnd > videoTrackEnd,
+          canTrimToMatch:
+            lastBlock?.kind === "group" &&
+            lastBlock.id === selection.id &&
+            Boolean(tailPlacement) &&
+            overshootSeconds > 0 &&
+            (tailPlacement?.durationSeconds ?? 0) - overshootSeconds >= 0.5,
+        };
+      }
+
+      if (selection.kind === "image") {
+        return {
+          canCloneToFill: false,
+          canTrimToMatch: false,
+        };
+      }
+
+      const lastPlacement = audioPlacements.at(-1);
+      const overshootSeconds = audioTrackEnd - videoTrackEnd;
+      return {
+        canCloneToFill: audioItemMap.has(selection.id) && videoTrackEnd > audioTrackEnd,
+        canTrimToMatch:
+          lastPlacement?.item.id === selection.id &&
+          overshootSeconds > 0 &&
+          lastPlacement.durationSeconds - overshootSeconds >= 0.5,
+      };
+    },
+    [
+      audioItemMap,
+      audioPlacements,
+      audioTrackEnd,
+      clipMap,
+      clipPlacements,
+      videoBlockPlacements,
+      videoGroupBlockMap,
+      videoGroupMap,
+      videoTrackEnd,
+    ]
+  );
+  const selectedTrackActionState = useMemo(
+    () => getTimelineTrackActionState(selectedItem),
+    [getTimelineTrackActionState, selectedItem]
   );
   const focusedJoinedClip = useMemo(() => {
     if (!selectedVideoGroup || !project) return undefined;
@@ -991,6 +1195,27 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     () => (selectedAudioItem ? assetMap.get(selectedAudioItem.assetId) : undefined),
     [assetMap, selectedAudioItem]
   );
+  const selectedImageAsset = useMemo(
+    () => (selectedImageItem ? assetMap.get(selectedImageItem.assetId) : undefined),
+    [assetMap, selectedImageItem]
+  );
+  const selectedImageCoverZoom = useMemo(() => {
+    if (!project || !selectedImageAsset?.width || !selectedImageAsset?.height) return 1;
+    const { width, height } = getEditorOutputDimensions(project.aspectRatio, "1080p");
+    return getEditorCanvasCoverZoom({
+      sourceWidth: selectedImageAsset.width,
+      sourceHeight: selectedImageAsset.height,
+      outputWidth: width,
+      outputHeight: height,
+    });
+  }, [project, selectedImageAsset?.height, selectedImageAsset?.width]);
+  const imageZoomSliderMax = useMemo(() => {
+    const currentZoom = selectedImageItem?.canvas.zoom ?? 1;
+    return Math.min(
+      IMAGE_TRACK_MAX_ZOOM,
+      Math.max(2.4, Math.ceil(Math.max(selectedImageCoverZoom, currentZoom) * 10) / 10 + 0.2)
+    );
+  }, [selectedImageCoverZoom, selectedImageItem?.canvas.zoom]);
   const activePlacement = useMemo(() => {
     return (
       clipPlacements.find(
@@ -1007,7 +1232,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         playheadSeconds < placement.endSeconds
     );
   }, [audioPlacements, playheadSeconds]);
+  const activeImagePlacement = useMemo(() => {
+    return (
+      imagePlacements.find(
+        (placement) =>
+          playheadSeconds >= placement.startSeconds &&
+          playheadSeconds < placement.endSeconds
+      ) ?? imagePlacements[0]
+    );
+  }, [imagePlacements, playheadSeconds]);
   const activeResolvedAsset = activePlacement ? resolvedAssetsMap.get(activePlacement.clip.assetId) : undefined;
+  const activeResolvedImageAsset = activeImagePlacement ? resolvedAssetsMap.get(activeImagePlacement.item.assetId) : undefined;
   const activeResolvedAudioAsset = activeAudioPlacement ? resolvedAssetsMap.get(activeAudioPlacement.item.assetId) : undefined;
   const captionTimeline = useMemo(() => {
     if (!project) return [] as TimelineCaptionChunk[];
@@ -1034,13 +1269,46 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     previewMode.kind === "asset" ? assets.find((asset) => asset.id === previewMode.assetId) : undefined;
   const previewedResolvedAsset = previewedAsset ? resolvedAssetsMap.get(previewedAsset.id) : undefined;
   const previewVideoAsset = isTimelinePreview ? activeResolvedAsset : previewedResolvedAsset?.asset.kind === "video" ? previewedResolvedAsset : undefined;
+  const previewImageAsset = isTimelinePreview
+    ? activeResolvedImageAsset
+    : previewedResolvedAsset?.asset.kind === "image"
+    ? previewedResolvedAsset
+    : undefined;
   const previewAudioAsset = isTimelinePreview
     ? activeResolvedAudioAsset
     : previewedResolvedAsset?.asset.kind === "audio"
     ? previewedResolvedAsset
     : undefined;
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
+  const previewImageUrl = useObjectUrl(previewImageAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const timelineImagePreviewLayout = useMemo(() => {
+    if (
+      !isTimelinePreview ||
+      !activeImagePlacement ||
+      !previewImageAsset?.asset.width ||
+      !previewImageAsset.asset.height ||
+      timelinePreviewFrameSize.width <= 0 ||
+      timelinePreviewFrameSize.height <= 0
+    ) {
+      return null;
+    }
+
+    return buildEditorCanvasPreviewLayout({
+      sourceWidth: previewImageAsset.asset.width,
+      sourceHeight: previewImageAsset.asset.height,
+      canvas: activeImagePlacement.item.canvas,
+      viewportWidth: timelinePreviewFrameSize.width,
+      viewportHeight: timelinePreviewFrameSize.height,
+    });
+  }, [
+    activeImagePlacement,
+    isTimelinePreview,
+    previewImageAsset?.asset.height,
+    previewImageAsset?.asset.width,
+    timelinePreviewFrameSize.height,
+    timelinePreviewFrameSize.width,
+  ]);
   const activeReversePreviewRequest = useMemo(() => {
     if (!isTimelinePreview || !activePlacement?.clip.actions.reverse || !activeResolvedAsset?.file) {
       return null;
@@ -1133,6 +1401,20 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ];
     });
   }, [videoBlockPlacements, visibleDuration, visibleEnd, visibleStart]);
+  const visibleImagePlacements = useMemo(() => {
+    return imagePlacements.flatMap((placement) => {
+      const overlapStart = Math.max(placement.startSeconds, visibleStart);
+      const overlapEnd = Math.min(placement.endSeconds, visibleEnd);
+      if (overlapEnd <= overlapStart) return [];
+      return [
+        {
+          ...placement,
+          leftPct: ((overlapStart - visibleStart) / visibleDuration) * 100,
+          widthPct: ((overlapEnd - overlapStart) / visibleDuration) * 100,
+        },
+      ];
+    });
+  }, [imagePlacements, visibleDuration, visibleEnd, visibleStart]);
   const visibleAudioPlacements = useMemo(() => {
     return audioPlacements.flatMap((placement) => {
       const overlapStart = Math.max(placement.startSeconds, visibleStart);
@@ -1401,7 +1683,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       setFocusedJoinedClipId(null);
     }
 
-    if (selectedItem?.kind === "audio") {
+    if (selectedItem?.kind === "audio" || selectedItem?.kind === "image") {
       setInspectorVideoTab((prev) => (prev === "edit" ? prev : "edit"));
     }
   }, [focusedJoinedClipId, project?.timeline.videoClips, selectedItem, selectedVideoGroup]);
@@ -1644,6 +1926,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
+  const updateSelectedImageItem = (updater: (item: TimelineImageItem) => TimelineImageItem) => {
+    if (!selectedImageItem) return;
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        imageItems: replaceTimelineImageItem(current.timeline.imageItems, updater(selectedImageItem)),
+      },
+    }));
+  };
+
   const resetInspectorClipTrim = () => {
     if (!inspectorClipAsset) return;
     updateInspectorClip((clip) => resetTimelineVideoClipTrim(clip, inspectorClipAsset.durationSeconds));
@@ -1683,6 +1976,42 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
+  const resetSelectedImageFrame = () => {
+    updateSelectedImageItem((item) => ({
+      ...item,
+      canvas: {
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+      },
+    }));
+  };
+
+  const fitSelectedImageToFrame = () => {
+    if (!project || !selectedImageAsset?.width || !selectedImageAsset?.height) return;
+    const { width, height } = getEditorOutputDimensions(project.aspectRatio, "1080p");
+    const nextZoom = clampNumber(
+      getEditorCanvasCoverZoom({
+        sourceWidth: selectedImageAsset.width,
+        sourceHeight: selectedImageAsset.height,
+        outputWidth: width,
+        outputHeight: height,
+      }),
+      IMAGE_TRACK_MIN_ZOOM,
+      IMAGE_TRACK_MAX_ZOOM
+    );
+
+    updateSelectedImageItem((item) => ({
+      ...item,
+      canvas: {
+        ...item.canvas,
+        zoom: nextZoom,
+        panX: 0,
+        panY: 0,
+      },
+    }));
+  };
+
   const focusTimelineSelection = (
     selection: TimelineSelection,
     nextPlayheadSeconds?: number,
@@ -1718,7 +2047,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (!project) return;
     const clip = createDefaultVideoClip({
       assetId: asset.id,
-      label: asset.filename.replace(/\.[^/.]+$/, ""),
+      label: getTimelineAssetLabel(asset.filename),
       durationSeconds: asset.durationSeconds,
     });
     const nextClips = [...project.timeline.videoClips];
@@ -1737,6 +2066,29 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
     setTimelinePlayhead(insertedPlacement?.startSeconds ?? playheadRef.current);
     setPreviewMode({ kind: "timeline" });
+  };
+
+  const setImageAssetOnTimeline = (asset: EditorAssetRecord) => {
+    if (!project) return;
+    const existingItem = project.timeline.imageItems[0];
+    const imageItem = createDefaultImageTrackItem({
+      assetId: asset.id,
+      label: getTimelineAssetLabel(asset.filename),
+    });
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        imageItems: [imageItem],
+        selectedItem: { kind: "image", id: imageItem.id },
+      },
+    }));
+    setPreviewMode({ kind: "timeline" });
+    if (existingItem) {
+      toast.success(`Replaced the image track with ${asset.filename}`);
+    } else {
+      toast.success(`Added ${asset.filename} across the full image track`);
+    }
   };
 
   const joinSelectedTimelineClips = () => {
@@ -1978,6 +2330,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const copySelectedTimelineItem = () => {
+    if (selectedImageItem) {
+      clipboardRef.current = {
+        kind: "image",
+        item: {
+          ...selectedImageItem,
+          canvas: { ...selectedImageItem.canvas },
+        },
+      };
+      return true;
+    }
     if (selectedClip) {
       clipboardRef.current = {
         kind: "video",
@@ -2099,6 +2461,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return true;
     }
 
+    if (clipboardItem.kind === "image") {
+      const nextItem = createClonedTimelineImageItem(clipboardItem.item);
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          imageItems: [nextItem],
+          selectedItem: { kind: "image", id: nextItem.id },
+        },
+      }));
+      return true;
+    }
+
     const nextItem = createClonedTimelineAudioItem(clipboardItem.item);
     const afterItemId = project.timeline.selectedItem?.kind === "audio" ? project.timeline.selectedItem.id : undefined;
     const nextAudioItems = insertTimelineAudioItemAfter(project.timeline.audioItems, nextItem, afterItemId);
@@ -2119,6 +2494,20 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const duplicateSelectedTimelineItem = () => {
     if (!project) return false;
+
+    if (selectedImageItem) {
+      const nextItem = createClonedTimelineImageItem(selectedImageItem);
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          imageItems: [nextItem],
+          selectedItem: { kind: "image", id: nextItem.id },
+        },
+      }));
+      return true;
+    }
 
     if (selectedVideoGroup) {
       const result = duplicateTimelineClipGroup(
@@ -2190,6 +2579,152 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     return false;
   };
 
+  const cloneTimelineSelectionToFill = (selection: TimelineSelection | undefined) => {
+    if (!project || !selection || !getTimelineTrackActionState(selection).canCloneToFill) return false;
+
+    if (selection.kind === "video-group") {
+      const result = cloneTimelineClipGroupToFill(
+        project.timeline.videoClips,
+        project.timeline.videoClipGroups,
+        selection.id,
+        audioTrackEnd
+      );
+      if (result.cloneCount === 0 || !result.lastInsertedGroupId) return false;
+      const insertedGroupId = result.lastInsertedGroupId;
+      const insertedBlock = getTimelineVideoBlockPlacements(result.videoClips, result.videoClipGroups).find(
+        (block) => block.kind === "group" && block.id === insertedGroupId
+      );
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: result.videoClips,
+          videoClipGroups: result.videoClipGroups,
+          selectedItem: { kind: "video-group", id: insertedGroupId },
+        },
+      }));
+      setSelectedVideoClipIds([]);
+      setFocusedJoinedClipId(insertedBlock?.clipIds[0] ?? null);
+      if (insertedBlock) {
+        setTimelinePlayhead(insertedBlock.startSeconds);
+      }
+      toast.success(`Filled the video track with ${result.cloneCount} block clone${result.cloneCount === 1 ? "" : "s"}`);
+      return true;
+    }
+
+    if (selection.kind === "video") {
+      const result = cloneTimelineClipToFill(project.timeline.videoClips, selection.id, audioTrackEnd);
+      if (result.cloneCount === 0 || !result.lastInsertedClipId) return false;
+      const insertedClipId = result.lastInsertedClipId;
+      const placement = getTimelineClipPlacements(result.videoClips).find(
+        (entry) => entry.clip.id === insertedClipId
+      );
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: result.videoClips,
+          selectedItem: { kind: "video", id: insertedClipId },
+        },
+      }));
+      setSelectedVideoClipIds([insertedClipId]);
+      if (placement) {
+        setTimelinePlayhead(placement.startSeconds);
+      }
+      toast.success(`Filled the video track with ${result.cloneCount} clone${result.cloneCount === 1 ? "" : "s"}`);
+      return true;
+    }
+
+    const result = cloneTimelineAudioItemToFill(project.timeline.audioItems, selection.id, videoTrackEnd);
+    if (result.cloneCount === 0 || !result.lastInsertedItemId) return false;
+    const insertedItemId = result.lastInsertedItemId;
+    const insertedItem = result.audioItems.find((item) => item.id === insertedItemId);
+    setPreviewMode({ kind: "timeline" });
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        audioItems: result.audioItems,
+        selectedItem: { kind: "audio", id: insertedItemId },
+      },
+    }));
+    setSelectedVideoClipIds([]);
+    if (insertedItem) {
+      setTimelinePlayhead(insertedItem.startOffsetSeconds);
+    }
+    toast.success(`Filled the audio track with ${result.cloneCount} clone${result.cloneCount === 1 ? "" : "s"}`);
+    return true;
+  };
+
+  const trimTimelineSelectionToMatchTrack = (selection: TimelineSelection | undefined) => {
+    if (!project || !selection || !getTimelineTrackActionState(selection).canTrimToMatch) return false;
+
+    if (selection.kind === "video-group") {
+      const result = trimTimelineClipGroupToMatchTrackEnd(
+        project.timeline.videoClips,
+        project.timeline.videoClipGroups,
+        selection.id,
+        audioTrackEnd
+      );
+      if (!result.trimmed) return false;
+      if (result.tailClipId) {
+        invalidateReversePreviewCache(result.tailClipId);
+      }
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: result.videoClips,
+          videoClipGroups: result.videoClipGroups,
+          selectedItem: { kind: "video-group", id: selection.id },
+        },
+      }));
+      setSelectedVideoClipIds([]);
+      toast.success("Trimmed the video track to match the audio track");
+      return true;
+    }
+
+    if (selection.kind === "video") {
+      const result = trimTimelineClipToMatchTrackEnd(project.timeline.videoClips, selection.id, audioTrackEnd);
+      if (!result.trimmed) return false;
+      invalidateReversePreviewCache(selection.id);
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          videoClips: result.videoClips,
+          selectedItem: { kind: "video", id: selection.id },
+        },
+      }));
+      setSelectedVideoClipIds([selection.id]);
+      toast.success("Trimmed the video track to match the audio track");
+      return true;
+    }
+
+    const result = trimTimelineAudioItemToMatchTrackEnd(project.timeline.audioItems, selection.id, videoTrackEnd);
+    if (!result.trimmed) return false;
+    setPreviewMode({ kind: "timeline" });
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        audioItems: result.audioItems,
+        selectedItem: { kind: "audio", id: selection.id },
+      },
+    }));
+    setSelectedVideoClipIds([]);
+    toast.success("Trimmed the audio track to match the video track");
+    return true;
+  };
+
+  const cloneSelectedTimelineItemToFill = () => cloneTimelineSelectionToFill(selectedItem);
+
+  const trimSelectedTimelineItemToMatchTrack = () => trimTimelineSelectionToMatchTrack(selectedItem);
+
   const removeSelectedTimelineItem = () => {
     if (!project?.timeline.selectedItem) return false;
 
@@ -2224,7 +2759,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                   0,
                   nextTimeline.videoClips,
                   current.timeline.audioItems,
-                  nextTimeline.videoClipGroups
+                  nextTimeline.videoClipGroups,
+                  current.timeline.imageItems
                 ),
           },
         };
@@ -2249,7 +2785,33 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               removedIndex,
               nextClips,
               current.timeline.audioItems,
-              current.timeline.videoClipGroups
+              current.timeline.videoClipGroups,
+              current.timeline.imageItems
+            ),
+          },
+        };
+      });
+      return true;
+    }
+
+    if (project.timeline.selectedItem.kind === "image") {
+      const removedIndex = project.timeline.imageItems.findIndex((item) => item.id === project.timeline.selectedItem?.id);
+      if (removedIndex < 0) return false;
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => {
+        const nextImageItems = removeTimelineImageItem(current.timeline.imageItems, current.timeline.selectedItem?.id ?? "");
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            imageItems: nextImageItems,
+            selectedItem: getSelectionForLaneIndex(
+              "image",
+              removedIndex,
+              current.timeline.videoClips,
+              current.timeline.audioItems,
+              current.timeline.videoClipGroups,
+              nextImageItems
             ),
           },
         };
@@ -2272,7 +2834,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             removedIndex,
             current.timeline.videoClips,
             nextAudioItems,
-            current.timeline.videoClipGroups
+            current.timeline.videoClipGroups,
+            current.timeline.imageItems
           ),
         },
       };
@@ -2308,7 +2871,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         projectId: project.id,
         kind: metadata.kind,
         filename: file.name,
-        mimeType: file.type || (metadata.kind === "video" ? "video/mp4" : "audio/mpeg"),
+        mimeType:
+          file.type ||
+          (metadata.kind === "video"
+            ? "video/mp4"
+            : metadata.kind === "image"
+              ? "image/png"
+              : "audio/mpeg"),
         sizeBytes: file.size,
         durationSeconds: metadata.durationSeconds,
         width: metadata.width,
@@ -2348,7 +2917,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       projectId: project.id,
       kind: metadata.kind,
       filename: item.filename,
-      mimeType: mediaFile.file.type || (metadata.kind === "video" ? "video/mp4" : "audio/mpeg"),
+      mimeType:
+        mediaFile.file.type ||
+        (metadata.kind === "video"
+          ? "video/mp4"
+          : metadata.kind === "image"
+            ? "image/png"
+            : "audio/mpeg"),
       sizeBytes: mediaFile.file.size,
       durationSeconds: metadata.durationSeconds,
       width: metadata.width,
@@ -2414,6 +2989,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       assetIds: current.assetIds.filter((id) => id !== asset.id),
       timeline: {
         ...current.timeline,
+        imageItems: current.timeline.imageItems.filter((item) => item.assetId !== asset.id),
         videoClips: current.timeline.videoClips.filter((clip) => clip.assetId !== asset.id),
         audioItems: current.timeline.audioItems.filter((item) => item.assetId !== asset.id),
       },
@@ -2764,24 +3340,30 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const previewTitle =
     previewMode.kind === "asset"
       ? previewedAsset?.filename ?? "Asset Preview"
-      : activePlacement?.clip.label ?? "Timeline Preview";
+      : activePlacement?.clip.label ?? activeImagePlacement?.item.label ?? "Timeline Preview";
   const previewMeta =
     previewMode.kind === "asset"
       ? previewedAsset
-        ? `${previewedAsset.kind} · ${secondsToClock(previewedAsset.durationSeconds)} · ${previewedAsset.sourceType}`
+        ? `${previewedAsset.kind} · ${previewedAsset.kind === "image" ? "Still" : secondsToClock(previewedAsset.durationSeconds)} · ${previewedAsset.sourceType}`
         : "This asset is no longer available."
       : `${secondsToClock(playheadSeconds)} / ${secondsToClock(projectDuration)}`;
   const previewBadge =
     previewMode.kind === "asset"
       ? previewedAsset?.kind === "audio"
         ? "Asset audio"
-        : "Asset clip"
-      : `${project.aspectRatio} timeline`;
+        : previewedAsset?.kind === "image"
+          ? "Asset image"
+          : "Asset clip"
+      : activeImagePlacement
+        ? `${project.aspectRatio} timeline + image`
+        : `${project.aspectRatio} timeline`;
   const selectedTimelineLabel =
     selectedItem?.kind === "video-group"
       ? selectedVideoGroup?.label
       : selectedItem?.kind === "video"
         ? selectedClip?.label
+      : selectedItem?.kind === "image"
+        ? selectedImageItem?.label ?? selectedImageAsset?.filename
       : selectedAudioAsset?.filename ?? (selectedAudioItem ? "Audio item" : undefined);
   const visibleWindowLabel = `${secondsToClock(visibleStart)} - ${secondsToClock(
     Math.min(projectDuration, visibleEnd)
@@ -2814,7 +3396,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       <input
         ref={mediaInputRef}
         type="file"
-        accept="video/*,audio/*"
+        accept="video/*,audio/*,image/*"
         className="hidden"
         multiple
         onChange={(event) => void handleImportFiles(event.target.files)}
@@ -2944,7 +3526,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             </>
                           ) : assets.length === 0 ? (
                             <div className="grid h-full place-items-center rounded-[0.9rem] border border-dashed border-white/10 bg-black/20 p-4 text-center text-sm text-white/45">
-                              Import clips or pull media from history to populate this project.
+                              Import video, audio, or image assets, or pull media from history to populate this project.
                             </div>
                           ) : (
                             <div className="grid grid-cols-2 gap-2 xl:grid-cols-3">
@@ -3049,6 +3631,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       <div className="flex min-h-0 flex-1 flex-col rounded-[0.75rem] border border-white/8 bg-[linear-gradient(180deg,rgba(9,12,17,0.98),rgba(5,8,12,0.98))] p-1.5">
                         <div className="flex min-h-0 flex-1 items-center justify-center">
                           <div
+                            ref={timelinePreviewFrameRef}
                             className="relative max-h-full w-full overflow-hidden rounded-[1rem] border border-white/8 bg-black shadow-[0_14px_24px_rgba(0,0,0,0.26)]"
                             style={{
                               width: "min(100%, 760px)",
@@ -3056,20 +3639,64 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             }}
                           >
                             {previewMode.kind === "timeline" ? (
-                              effectiveTimelineVideoUrl ? (
+                              effectiveTimelineVideoUrl || previewImageUrl ? (
                                 <>
-                                  <video
-                                    ref={videoRef}
-                                    key={`timeline:${effectiveTimelineVideoUrl}`}
-                                    src={effectiveTimelineVideoUrl}
-                                    preload="auto"
-                                    playsInline
-                                    className="absolute inset-0 h-full w-full object-cover"
-                                    style={{
-                                      transform: `translate(${activePlacement?.clip.canvas.panX ?? 0}px, ${activePlacement?.clip.canvas.panY ?? 0}px) scale(${activePlacement?.clip.canvas.zoom ?? 1})`,
-                                      transformOrigin: "center center",
-                                    }}
-                                  />
+                                  {effectiveTimelineVideoUrl ? (
+                                    <video
+                                      ref={videoRef}
+                                      key={`timeline:${effectiveTimelineVideoUrl}`}
+                                      src={effectiveTimelineVideoUrl}
+                                      preload="auto"
+                                      playsInline
+                                      className="absolute inset-0 h-full w-full object-cover"
+                                      style={{
+                                        transform: `translate(${activePlacement?.clip.canvas.panX ?? 0}px, ${activePlacement?.clip.canvas.panY ?? 0}px) scale(${activePlacement?.clip.canvas.zoom ?? 1})`,
+                                        transformOrigin: "center center",
+                                      }}
+                                    />
+                                  ) : null}
+                                  {previewImageUrl ? (
+                                    timelineImagePreviewLayout &&
+                                    previewImageAsset?.asset.width &&
+                                    previewImageAsset.asset.height ? (
+                                      <div className="absolute inset-0 overflow-hidden bg-black">
+                                        <div
+                                          className="absolute left-0 top-0"
+                                          style={{
+                                            width: timelineImagePreviewLayout.canvasWidth,
+                                            height: timelineImagePreviewLayout.canvasHeight,
+                                            transform: `translate(${-timelineImagePreviewLayout.cropX}px, ${-timelineImagePreviewLayout.cropY}px)`,
+                                          }}
+                                        >
+                                          <Image
+                                            src={previewImageUrl}
+                                            alt={activeImagePlacement?.item.label ?? "Timeline image"}
+                                            width={previewImageAsset.asset.width}
+                                            height={previewImageAsset.asset.height}
+                                            unoptimized
+                                            className="absolute max-w-none select-none"
+                                            style={{
+                                              left: timelineImagePreviewLayout.padX,
+                                              top: timelineImagePreviewLayout.padY,
+                                              width: timelineImagePreviewLayout.scaledWidth,
+                                              height: timelineImagePreviewLayout.scaledHeight,
+                                            }}
+                                          />
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="absolute inset-0 bg-black">
+                                        <Image
+                                          src={previewImageUrl}
+                                          alt={activeImagePlacement?.item.label ?? "Timeline image"}
+                                          fill
+                                          unoptimized
+                                          sizes="760px"
+                                          className="object-contain"
+                                        />
+                                      </div>
+                                    )
+                                  ) : null}
                                   {project.subtitles.enabled && currentCaption ? (
                                     <div
                                       className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-1/2 text-center"
@@ -3116,7 +3743,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     ) : (
                                       <>
                                         <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
-                                        No video source resolved for the current playhead.
+                                        No visual source resolved for the current playhead.
                                       </>
                                     )}
                                   </div>
@@ -3141,7 +3768,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 </div>
                               )
                             ) : previewedAsset?.kind === "audio" ? (
-                              <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_30%),linear-gradient(180deg,rgba(15,18,27,0.95),rgba(4,7,12,0.98))] p-8 text-center">
+                                <div className="absolute inset-0 flex flex-col items-center justify-center gap-6 bg-[radial-gradient(circle_at_top,rgba(251,191,36,0.18),transparent_30%),linear-gradient(180deg,rgba(15,18,27,0.95),rgba(4,7,12,0.98))] p-8 text-center">
                                 <div className="rounded-full border border-white/10 bg-white/5 p-5 text-amber-100">
                                   <Music4 className="h-8 w-8" />
                                 </div>
@@ -3157,10 +3784,28 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                   <div className="text-sm text-white/45">This audio file is missing from browser storage.</div>
                                 )}
                               </div>
+                            ) : previewedAsset?.kind === "image" ? (
+                              previewImageUrl ? (
+                                <Image
+                                  src={previewImageUrl}
+                                  alt={previewedAsset.filename}
+                                  fill
+                                  unoptimized
+                                  sizes="760px"
+                                  className="object-contain bg-[radial-gradient(circle_at_top,rgba(16,185,129,0.12),transparent_32%),linear-gradient(180deg,rgba(8,18,17,0.98),rgba(4,8,10,0.98))]"
+                                />
+                              ) : (
+                                <div className="absolute inset-0 grid place-items-center text-center text-white/45">
+                                  <div>
+                                    <ImageIcon className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                    This image is missing from browser storage.
+                                  </div>
+                                </div>
+                              )
                             ) : (
                               <div className="absolute inset-0 grid place-items-center text-center text-white/45">
                                 <div>
-                                  <Film className="mx-auto mb-4 h-12 w-12 text-white/20" />
+                                  <ImageIcon className="mx-auto mb-4 h-12 w-12 text-white/20" />
                                   Select a project asset to preview it here.
                                 </div>
                               </div>
@@ -3206,7 +3851,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           ) : (
                             <div className="flex flex-wrap items-center justify-between gap-3 rounded-[0.9rem] border border-cyan-400/14 bg-cyan-400/[0.045] px-3 py-2.5">
                               <div className="text-sm text-white/58">
-                                Project assets preview independently. Click any clip in the timeline to return to the live sequence.
+                                Project assets preview independently. Click any timeline item to return to the live sequence.
                               </div>
                               <Button
                                 variant="outline"
@@ -3283,21 +3928,56 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     </div>
                                   ) : null}
                                 </div>
-                                <div
-                                  className={cn(
-                                    "rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]",
-                                    selectedVideoGroup
-                                      ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+                                <div className="flex items-start gap-2">
+                                  <div
+                                    className={cn(
+                                      "rounded-full px-3 py-1 text-[10px] uppercase tracking-[0.24em]",
+                                      selectedVideoGroup
+                                        ? "border border-amber-300/20 bg-amber-300/10 text-amber-100"
+                                        : inspectorClip.actions.reverse
+                                        ? "border border-cyan-300/24 bg-cyan-300/12 text-cyan-100"
+                                        : "border border-white/8 bg-white/[0.04] text-white/45"
+                                    )}
+                                  >
+                                    {selectedVideoGroup
+                                      ? "Joined"
                                       : inspectorClip.actions.reverse
-                                      ? "border border-cyan-300/24 bg-cyan-300/12 text-cyan-100"
-                                      : "border border-white/8 bg-white/[0.04] text-white/45"
-                                  )}
-                                >
-                                  {selectedVideoGroup
-                                    ? "Joined"
-                                    : inspectorClip.actions.reverse
-                                      ? "Reverse On"
-                                      : "Normal"}
+                                        ? "Reverse On"
+                                        : "Normal"}
+                                  </div>
+                                  <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
+                                      <Button
+                                        type="button"
+                                        size="icon-xs"
+                                        variant="ghost"
+                                        className="mt-0.5 rounded-md text-white/46 hover:bg-white/[0.06] hover:text-white"
+                                        aria-label="Clip actions"
+                                      >
+                                        <MoreHorizontal className="h-4 w-4" />
+                                      </Button>
+                                    </DropdownMenuTrigger>
+                                    <DropdownMenuContent>
+                                      <DropdownMenuItem
+                                        disabled={!selectedTrackActionState.canCloneToFill}
+                                        onSelect={() => {
+                                          cloneSelectedTimelineItemToFill();
+                                        }}
+                                      >
+                                        <Copy className="h-4 w-4" />
+                                        Clone to Fill Track
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem
+                                        disabled={!selectedTrackActionState.canTrimToMatch}
+                                        onSelect={() => {
+                                          trimSelectedTimelineItemToMatchTrack();
+                                        }}
+                                      >
+                                        <Scissors className="h-4 w-4" />
+                                        Trim End to Match Other Track
+                                      </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                  </DropdownMenu>
                                 </div>
                               </div>
                             </div>
@@ -3607,13 +4287,153 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               </TabsContent>
                             </Tabs>
                           </div>
+                        ) : selectedImageItem && selectedImageAsset ? (
+                          <div className="space-y-2.5">
+                            <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className={EDITOR_LABEL_CLASS}>Image Track</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">{selectedImageItem.label}</div>
+                                  <div className="mt-1 text-sm text-white/50">
+                                    {selectedImageAsset.filename} · full-length overlay
+                                  </div>
+                                </div>
+                                <div className="rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-emerald-100">
+                                  I1
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Frame</div>
+                                <div className="flex items-center gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    disabled={!selectedImageAsset?.width || !selectedImageAsset?.height}
+                                    className="h-7 rounded-md px-2 text-[10px] uppercase tracking-[0.2em] text-white/46 hover:bg-white/[0.06] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+                                    onClick={fitSelectedImageToFrame}
+                                  >
+                                    <Maximize2 className="mr-1.5 h-3.5 w-3.5" />
+                                    Fit To Frame
+                                  </Button>
+                                  <SectionResetButton onClick={resetSelectedImageFrame} />
+                                </div>
+                              </div>
+                              <label className="text-xs text-white/55">Zoom · {selectedImageItem.canvas.zoom.toFixed(2)}x</label>
+                              <input
+                                type="range"
+                                min={IMAGE_TRACK_MIN_ZOOM}
+                                max={imageZoomSliderMax}
+                                step={0.01}
+                                value={selectedImageItem.canvas.zoom}
+                                onChange={(event) =>
+                                  updateSelectedImageItem((item) => ({
+                                    ...item,
+                                    canvas: {
+                                      ...item.canvas,
+                                      zoom: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              {selectedImageCoverZoom > 1 ? (
+                                <div className="text-[11px] text-white/42">
+                                  Fit To Frame centers the image and sets the minimum zoom needed to cover every edge.
+                                </div>
+                              ) : null}
+                              <label className="text-xs text-white/55">Pan X · {Math.round(selectedImageItem.canvas.panX)}px</label>
+                              <input
+                                type="range"
+                                min={-240}
+                                max={240}
+                                step={1}
+                                value={selectedImageItem.canvas.panX}
+                                onChange={(event) =>
+                                  updateSelectedImageItem((item) => ({
+                                    ...item,
+                                    canvas: {
+                                      ...item.canvas,
+                                      panX: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Pan Y · {Math.round(selectedImageItem.canvas.panY)}px</label>
+                              <input
+                                type="range"
+                                min={-240}
+                                max={240}
+                                step={1}
+                                value={selectedImageItem.canvas.panY}
+                                onChange={(event) =>
+                                  updateSelectedImageItem((item) => ({
+                                    ...item,
+                                    canvas: {
+                                      ...item.canvas,
+                                      panY: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className={EDITOR_LABEL_CLASS}>Coverage</div>
+                              <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                This image automatically spans the full project duration, so it stays in sync as the rest of the timeline grows or shrinks.
+                              </div>
+                            </div>
+                          </div>
                         ) : selectedAudioItem && selectedAudioAsset ? (
                           <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
-                              <div className={EDITOR_LABEL_CLASS}>Selected Audio Item</div>
-                              <div className="mt-2 text-lg font-semibold text-white">{selectedAudioAsset.filename}</div>
-                              <div className="mt-1 text-sm text-white/50">
-                                {secondsToClock(selectedAudioAsset.durationSeconds)} source · starts at {secondsToClock(selectedAudioItem.startOffsetSeconds)}
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className={EDITOR_LABEL_CLASS}>Selected Audio Item</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">{selectedAudioAsset.filename}</div>
+                                  <div className="mt-1 text-sm text-white/50">
+                                    {secondsToClock(selectedAudioAsset.durationSeconds)} source · starts at {secondsToClock(selectedAudioItem.startOffsetSeconds)}
+                                  </div>
+                                </div>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button
+                                      type="button"
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      className="mt-0.5 rounded-md text-white/46 hover:bg-white/[0.06] hover:text-white"
+                                      aria-label="Audio actions"
+                                    >
+                                      <MoreHorizontal className="h-4 w-4" />
+                                    </Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent>
+                                    <DropdownMenuItem
+                                      disabled={!selectedTrackActionState.canCloneToFill}
+                                      onSelect={() => {
+                                        cloneSelectedTimelineItemToFill();
+                                      }}
+                                    >
+                                      <Copy className="h-4 w-4" />
+                                      Clone to Fill Track
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem
+                                      disabled={!selectedTrackActionState.canTrimToMatch}
+                                      onSelect={() => {
+                                        trimSelectedTimelineItemToMatchTrack();
+                                      }}
+                                    >
+                                      <Scissors className="h-4 w-4" />
+                                      Trim End to Match Other Track
+                                    </DropdownMenuItem>
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
                               </div>
                             </div>
 
@@ -3716,7 +4536,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           </div>
                         ) : (
                           <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/45">
-                            Select a timeline video clip to use actions. Audio selections still show trim and track controls here.
+                            Select a timeline item to edit it here. Video clips expose trim/audio tools, audio keeps its track controls, and image items let you frame the full-length overlay.
                           </div>
                         )}
                       </div>
@@ -3738,6 +4558,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.22em]",
                         selectedItem?.kind === "audio"
                           ? "border border-amber-300/16 bg-amber-300/8 text-amber-100/80"
+                          : selectedItem?.kind === "image"
+                            ? "border border-emerald-300/18 bg-emerald-300/10 text-emerald-100/80"
                           : "border border-cyan-400/16 bg-cyan-400/8 text-cyan-100/80"
                       )}
                     >
@@ -3806,8 +4628,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               </div>
 
               <div className="grid min-h-0 flex-1 grid-cols-[84px_minmax(0,1fr)] overflow-hidden bg-[linear-gradient(180deg,rgba(8,11,16,0.98),rgba(4,7,12,0.98))]">
-                <div className="grid min-h-0 grid-rows-[38px_minmax(0,1fr)_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
+                <div className="grid min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
                   <div className={cn(EDITOR_LABEL_CLASS, "flex items-center px-3")}>Time</div>
+                  <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
+                    <div className="font-mono text-sm font-semibold text-emerald-100">I1</div>
+                    <div className="text-[11px] text-white/38">
+                      {project.timeline.imageItems.length ? "Full image track" : "Image lane"}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!selectedImageItem}
+                        className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
+                        onClick={resetSelectedImageFrame}
+                      >
+                        <RotateCcw className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!selectedImageItem}
+                        className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
+                        onClick={removeSelectedTimelineItem}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
                   <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
                     <div className="font-mono text-sm font-semibold text-cyan-100">V1</div>
                     <div className="text-[11px] text-white/38">Video lane</div>
@@ -3869,7 +4717,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                     <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-[10px] -translate-x-1/2 rounded-b-full border border-red-300/40 bg-red-400/90 shadow-[0_4px_12px_rgba(248,113,113,0.4)]" />
                   </div>
 
-                  <div className="grid h-full min-h-0 grid-rows-[38px_minmax(0,1fr)_96px]">
+                  <div className="grid h-full min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_96px]">
                     <div
                       className="relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.028),rgba(255,255,255,0.01))]"
                       onClick={seekVisibleTimeline}
@@ -3899,6 +4747,98 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           </div>
                         );
                       })}
+                    </div>
+
+                    <div
+                      className={cn(
+                        "relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.02),rgba(255,255,255,0.008))]",
+                        draggingAssetKind === "image" ? "bg-emerald-300/[0.05]" : ""
+                      )}
+                      onClick={seekVisibleTimeline}
+                      onDragOver={(event) => {
+                        if (dragAssetKindRef.current !== "image") return;
+                        event.preventDefault();
+                      }}
+                      onDrop={(event) => {
+                        if (dragAssetKindRef.current !== "image") return;
+                        event.preventDefault();
+                        const draggedAssetId = dragAssetIdRef.current;
+                        if (!draggedAssetId) return;
+                        const draggedAsset = assetMap.get(draggedAssetId);
+                        if (draggedAsset?.kind === "image") {
+                          setImageAssetOnTimeline(draggedAsset);
+                        }
+                        clearTimelineDragState();
+                      }}
+                    >
+                      {timelineMinorTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`image-minor-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.03]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+                      {timelineTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`image-grid-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.05]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+
+                      {visibleImagePlacements.length > 0 ? (
+                        visibleImagePlacements.map((placement) => {
+                          const itemAsset = assetMap.get(placement.item.assetId);
+                          const isSelected = selectedItem?.kind === "image" && selectedItem.id === placement.item.id;
+                          return (
+                            <button
+                              key={placement.item.id}
+                              type="button"
+                              className={cn(
+                                "absolute top-1/2 h-[68%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
+                                isSelected
+                                  ? "border-white/80 bg-[linear-gradient(180deg,rgba(17,94,89,0.88),rgba(7,54,51,0.94))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.22),0_0_20px_rgba(16,185,129,0.1)]"
+                                  : "border-emerald-300/24 bg-[linear-gradient(180deg,rgba(14,94,75,0.78),rgba(7,54,45,0.9))] shadow-[inset_0_1px_0_rgba(110,231,183,0.12)] hover:border-emerald-200/40 hover:bg-[linear-gradient(180deg,rgba(18,110,86,0.8),rgba(10,62,50,0.92))]"
+                              )}
+                              style={{
+                                left: `${placement.leftPct}%`,
+                                width: `${placement.widthPct}%`,
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                focusTimelineSelection({ kind: "image", id: placement.item.id }, placement.startSeconds);
+                              }}
+                            >
+                              <div className="pointer-events-none flex h-full flex-col justify-between">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="truncate text-sm font-medium text-emerald-50">
+                                    {placement.item.label}
+                                  </div>
+                                  <span className="font-mono text-[11px] text-emerald-100/60">
+                                    {secondsToClock(placement.durationSeconds)}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-emerald-50/60">
+                                  <span className="truncate">{itemAsset?.filename ?? "Image overlay"}</span>
+                                  <span className="font-mono">Full track</span>
+                                </div>
+                                <div className="mt-2 h-7 rounded-[0.65rem] bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.24)_0,rgba(255,255,255,0.24)_5px,transparent_5px,transparent_12px)] opacity-85" />
+                              </div>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <div className="absolute left-[4%] top-1/2 w-[32%] min-w-[220px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-emerald-300/16 bg-emerald-300/[0.035] px-4 py-3 text-left">
+                          <div className={EDITOR_LABEL_CLASS}>Image lane empty</div>
+                          <div className="mt-2 text-sm text-white/56">Drag an image here to cover the full project length.</div>
+                        </div>
+                      )}
                     </div>
 
                     <div
@@ -3997,184 +4937,212 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           isPrimarySelected || (block.kind === "clip" && selectedVideoClipSet.has(block.clip.id));
                         const isDragging = draggingVideoBlockId === block.id;
                         const isDropTarget = dropTargetIndex === index && draggingVideoBlockId !== block.id;
+                        const blockSelection = getTimelineSelectionForVideoBlock(block);
+                        const blockActionState = getTimelineTrackActionState(blockSelection);
                         return (
-                          <button
-                            key={block.id}
-                            type="button"
-                            draggable
-                            onDragStart={() => {
-                              dragVideoBlockRef.current = { id: block.id, kind: block.kind };
-                              dragAssetIdRef.current = null;
-                              dragAssetKindRef.current = null;
-                              setDraggingVideoBlockId(block.id);
-                              setDraggingAssetId(null);
-                              setDraggingAssetKind(null);
-                              setDropTargetIndex(index);
-                            }}
-                            onDragEnd={() => {
-                              clearTimelineDragState();
-                            }}
-                            onDragOver={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              if (dragAssetKindRef.current === "video" || dragVideoBlockRef.current) {
-                                setDropTargetIndex(index);
-                              }
-                            }}
-                            onDrop={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              const draggedAssetId = dragAssetIdRef.current;
-                              const draggedAssetKind = dragAssetKindRef.current;
-                              if (draggedAssetId && draggedAssetKind === "video") {
-                                const draggedAsset = assetMap.get(draggedAssetId);
-                                if (draggedAsset?.kind === "video") {
-                                  insertVideoAssetAtTimelineIndex(
-                                    draggedAsset,
-                                    block.kind === "group" ? block.clipPlacements[0]?.index ?? project.timeline.videoClips.length : block.clipPlacement.index
-                                  );
-                                }
-                                clearTimelineDragState();
-                                return;
-                              }
-                              const draggedBlock = dragVideoBlockRef.current;
-                              if (!draggedBlock) return;
-                              updateProject((current) => {
-                                const nextTimeline = reorderTimelineVideoBlock(
-                                  current.timeline.videoClips,
-                                  current.timeline.videoClipGroups,
-                                  draggedBlock,
-                                  block.index
-                                );
-                                return {
-                                  ...current,
-                                  timeline: {
-                                    ...current.timeline,
-                                    videoClips: nextTimeline.videoClips,
-                                    videoClipGroups: nextTimeline.videoClipGroups,
-                                  },
-                                };
-                              });
-                              clearTimelineDragState();
-                            }}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              const isJoinSelectionClick =
-                                block.kind === "clip" &&
-                                inspectorVideoTab === "join" &&
-                                selectedItem?.kind === "video" &&
-                                selectedItem.id !== block.clip.id;
-                              focusTimelineSelection(
-                                getTimelineSelectionForVideoBlock(block),
-                                block.startSeconds,
-                                {
-                                  extendVideoSelection:
+                          <ContextMenu key={block.id}>
+                            <ContextMenuTrigger asChild>
+                              <button
+                                type="button"
+                                draggable
+                                onContextMenu={() => {
+                                  focusTimelineSelection(blockSelection);
+                                }}
+                                onDragStart={() => {
+                                  dragVideoBlockRef.current = { id: block.id, kind: block.kind };
+                                  dragAssetIdRef.current = null;
+                                  dragAssetKindRef.current = null;
+                                  setDraggingVideoBlockId(block.id);
+                                  setDraggingAssetId(null);
+                                  setDraggingAssetKind(null);
+                                  setDropTargetIndex(index);
+                                }}
+                                onDragEnd={() => {
+                                  clearTimelineDragState();
+                                }}
+                                onDragOver={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  if (dragAssetKindRef.current === "video" || dragVideoBlockRef.current) {
+                                    setDropTargetIndex(index);
+                                  }
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  const draggedAssetId = dragAssetIdRef.current;
+                                  const draggedAssetKind = dragAssetKindRef.current;
+                                  if (draggedAssetId && draggedAssetKind === "video") {
+                                    const draggedAsset = assetMap.get(draggedAssetId);
+                                    if (draggedAsset?.kind === "video") {
+                                      insertVideoAssetAtTimelineIndex(
+                                        draggedAsset,
+                                        block.kind === "group" ? block.clipPlacements[0]?.index ?? project.timeline.videoClips.length : block.clipPlacement.index
+                                      );
+                                    }
+                                    clearTimelineDragState();
+                                    return;
+                                  }
+                                  const draggedBlock = dragVideoBlockRef.current;
+                                  if (!draggedBlock) return;
+                                  updateProject((current) => {
+                                    const nextTimeline = reorderTimelineVideoBlock(
+                                      current.timeline.videoClips,
+                                      current.timeline.videoClipGroups,
+                                      draggedBlock,
+                                      block.index
+                                    );
+                                    return {
+                                      ...current,
+                                      timeline: {
+                                        ...current.timeline,
+                                        videoClips: nextTimeline.videoClips,
+                                        videoClipGroups: nextTimeline.videoClipGroups,
+                                      },
+                                    };
+                                  });
+                                  clearTimelineDragState();
+                                }}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  const isJoinSelectionClick =
                                     block.kind === "clip" &&
-                                    (event.metaKey || event.ctrlKey || event.shiftKey || isJoinSelectionClick),
-                                }
-                              );
-                            }}
-                            className={cn(
-                              "absolute top-1/2 h-[82%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
-                              isPrimarySelected
-                                ? "border-white/80 bg-[linear-gradient(180deg,rgba(52,58,68,0.92),rgba(18,22,29,0.98))] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(255,255,255,0.24),0_0_24px_rgba(255,255,255,0.1)]"
-                                : isSelected
-                                  ? "border-white/55 bg-[linear-gradient(180deg,rgba(40,45,54,0.9),rgba(16,20,27,0.96))] shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_0_18px_rgba(255,255,255,0.06)]"
-                                : "border-white/10 bg-[linear-gradient(180deg,rgba(28,33,42,0.9),rgba(14,17,23,0.96))] hover:border-white/18 hover:bg-[linear-gradient(180deg,rgba(34,40,50,0.92),rgba(17,20,28,0.96))]",
-                              isDragging ? "scale-[0.985] opacity-60" : "",
-                              isDropTarget ? "shadow-[0_0_0_1px_rgba(103,232,249,0.18)]" : "",
-                              "cursor-grab active:cursor-grabbing"
-                            )}
-                            style={{
-                              left: `${block.leftPct}%`,
-                              width: `${block.widthPct}%`,
-                            }}
-                          >
-                            <div className="pointer-events-none absolute inset-y-2 left-1.5 w-[4px] rounded-full bg-white/18" />
-                            <div className="pointer-events-none absolute inset-y-2 right-1.5 w-[4px] rounded-full bg-white/10" />
-                            {block.kind === "group"
-                              ? block.clipPlacements.slice(0, -1).map((clipPlacement) => {
-                                  const dividerPct =
-                                    ((clipPlacement.endSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
-                                  return (
-                                    <div
-                                      key={`${block.id}-${clipPlacement.clip.id}-divider`}
-                                      className="pointer-events-none absolute inset-y-2 z-10 w-px bg-white/14"
-                                      style={{ left: `calc(${dividerPct}% - 0.5px)` }}
-                                    />
+                                    inspectorVideoTab === "join" &&
+                                    selectedItem?.kind === "video" &&
+                                    selectedItem.id !== block.clip.id;
+                                  focusTimelineSelection(
+                                    blockSelection,
+                                    block.startSeconds,
+                                    {
+                                      extendVideoSelection:
+                                        block.kind === "clip" &&
+                                        (event.metaKey || event.ctrlKey || event.shiftKey || isJoinSelectionClick),
+                                    }
                                   );
-                                })
-                              : null}
-                            <div className="pointer-events-none flex h-full flex-col justify-between pl-2">
-                              <div>
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="truncate text-sm font-medium text-white">
-                                    {block.kind === "group" ? block.group.label : block.clip.label}
-                                  </div>
-                                  {block.kind === "group" ? (
-                                    <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-amber-100">
-                                      Join
-                                    </span>
-                                  ) : block.clip.actions.reverse ? (
-                                    <span className="rounded-full border border-cyan-300/22 bg-cyan-300/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-cyan-100">
-                                      Rev
-                                    </span>
-                                  ) : null}
-                                </div>
-                                <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/44">
-                                  <span className="truncate">
-                                    {block.kind === "group"
-                                      ? `${block.clipPlacements.length} clips joined`
-                                      : block.clip.muted
-                                        ? "Muted clip audio"
-                                        : "Clip audio on"}
-                                  </span>
-                                  <span className="font-mono">{secondsToClock(block.durationSeconds)}</span>
-                                </div>
-                              </div>
-                              <div className="mt-3 space-y-1.5">
-                                {block.kind === "group" ? (
-                                  <>
-                                    <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${block.clipPlacements.length}, minmax(0, 1fr))` }}>
-                                      {block.clipPlacements.map((clipPlacement) => (
-                                        <div
-                                          key={`${block.id}-${clipPlacement.clip.id}-label`}
-                                          className="truncate rounded-[0.65rem] border border-white/8 bg-white/[0.035] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-white/50"
-                                        >
-                                          {clipPlacement.clip.label}
-                                        </div>
-                                      ))}
-                                    </div>
-                                    <div className="relative h-5 overflow-hidden rounded-[0.6rem] bg-black/25">
-                                      {block.clipPlacements.map((clipPlacement, clipIndex) => {
-                                        const leftPct =
-                                          ((clipPlacement.startSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
-                                        const widthPct =
-                                          (clipPlacement.durationSeconds / Math.max(block.durationSeconds, 0.001)) * 100;
-                                        return (
-                                          <div
-                                            key={`${block.id}-${clipPlacement.clip.id}-segment`}
-                                            className={cn(
-                                              "absolute inset-y-0 border-r border-white/10",
-                                              clipIndex % 2 === 0
-                                                ? "bg-[repeating-linear-gradient(90deg,rgba(251,191,36,0.32)_0,rgba(251,191,36,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
-                                                : "bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.32)_0,rgba(56,189,248,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
-                                            )}
-                                            style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
-                                          />
-                                        );
-                                      })}
-                                    </div>
-                                  </>
-                                ) : (
-                                  <>
-                                    <div className="h-8 rounded-[0.7rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.02))]" />
-                                    <div className="h-5 rounded-[0.6rem] bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.34)_0,rgba(56,189,248,0.34)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]" />
-                                  </>
+                                }}
+                                className={cn(
+                                  "absolute top-1/2 h-[82%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
+                                  isPrimarySelected
+                                    ? "border-white/80 bg-[linear-gradient(180deg,rgba(52,58,68,0.92),rgba(18,22,29,0.98))] shadow-[inset_0_1px_0_rgba(255,255,255,0.2),0_0_0_1px_rgba(255,255,255,0.24),0_0_24px_rgba(255,255,255,0.1)]"
+                                    : isSelected
+                                      ? "border-white/55 bg-[linear-gradient(180deg,rgba(40,45,54,0.9),rgba(16,20,27,0.96))] shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_0_18px_rgba(255,255,255,0.06)]"
+                                      : "border-white/10 bg-[linear-gradient(180deg,rgba(28,33,42,0.9),rgba(14,17,23,0.96))] hover:border-white/18 hover:bg-[linear-gradient(180deg,rgba(34,40,50,0.92),rgba(17,20,28,0.96))]",
+                                  isDragging ? "scale-[0.985] opacity-60" : "",
+                                  isDropTarget ? "shadow-[0_0_0_1px_rgba(103,232,249,0.18)]" : "",
+                                  "cursor-grab active:cursor-grabbing"
                                 )}
-                              </div>
-                            </div>
-                          </button>
+                                style={{
+                                  left: `${block.leftPct}%`,
+                                  width: `${block.widthPct}%`,
+                                }}
+                              >
+                                <div className="pointer-events-none absolute inset-y-2 left-1.5 w-[4px] rounded-full bg-white/18" />
+                                <div className="pointer-events-none absolute inset-y-2 right-1.5 w-[4px] rounded-full bg-white/10" />
+                                {block.kind === "group"
+                                  ? block.clipPlacements.slice(0, -1).map((clipPlacement) => {
+                                      const dividerPct =
+                                        ((clipPlacement.endSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
+                                      return (
+                                        <div
+                                          key={`${block.id}-${clipPlacement.clip.id}-divider`}
+                                          className="pointer-events-none absolute inset-y-2 z-10 w-px bg-white/14"
+                                          style={{ left: `calc(${dividerPct}% - 0.5px)` }}
+                                        />
+                                      );
+                                    })
+                                  : null}
+                                <div className="pointer-events-none flex h-full flex-col justify-between pl-2">
+                                  <div>
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="truncate text-sm font-medium text-white">
+                                        {block.kind === "group" ? block.group.label : block.clip.label}
+                                      </div>
+                                      {block.kind === "group" ? (
+                                        <span className="rounded-full border border-amber-300/20 bg-amber-300/10 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-amber-100">
+                                          Join
+                                        </span>
+                                      ) : block.clip.actions.reverse ? (
+                                        <span className="rounded-full border border-cyan-300/22 bg-cyan-300/12 px-2 py-0.5 text-[9px] uppercase tracking-[0.22em] text-cyan-100">
+                                          Rev
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-white/44">
+                                      <span className="truncate">
+                                        {block.kind === "group"
+                                          ? `${block.clipPlacements.length} clips joined`
+                                          : block.clip.muted
+                                            ? "Muted clip audio"
+                                            : "Clip audio on"}
+                                      </span>
+                                      <span className="font-mono">{secondsToClock(block.durationSeconds)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="mt-3 space-y-1.5">
+                                    {block.kind === "group" ? (
+                                      <>
+                                        <div className="grid gap-1.5" style={{ gridTemplateColumns: `repeat(${block.clipPlacements.length}, minmax(0, 1fr))` }}>
+                                          {block.clipPlacements.map((clipPlacement) => (
+                                            <div
+                                              key={`${block.id}-${clipPlacement.clip.id}-label`}
+                                              className="truncate rounded-[0.65rem] border border-white/8 bg-white/[0.035] px-2 py-1 text-[10px] uppercase tracking-[0.18em] text-white/50"
+                                            >
+                                              {clipPlacement.clip.label}
+                                            </div>
+                                          ))}
+                                        </div>
+                                        <div className="relative h-5 overflow-hidden rounded-[0.6rem] bg-black/25">
+                                          {block.clipPlacements.map((clipPlacement, clipIndex) => {
+                                            const leftPct =
+                                              ((clipPlacement.startSeconds - block.startSeconds) / Math.max(block.durationSeconds, 0.001)) * 100;
+                                            const widthPct =
+                                              (clipPlacement.durationSeconds / Math.max(block.durationSeconds, 0.001)) * 100;
+                                            return (
+                                              <div
+                                                key={`${block.id}-${clipPlacement.clip.id}-segment`}
+                                                className={cn(
+                                                  "absolute inset-y-0 border-r border-white/10",
+                                                  clipIndex % 2 === 0
+                                                    ? "bg-[repeating-linear-gradient(90deg,rgba(251,191,36,0.32)_0,rgba(251,191,36,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
+                                                    : "bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.32)_0,rgba(56,189,248,0.32)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]"
+                                                )}
+                                                style={{ left: `${leftPct}%`, width: `${widthPct}%` }}
+                                              />
+                                            );
+                                          })}
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <div className="h-8 rounded-[0.7rem] border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.045),rgba(255,255,255,0.02))]" />
+                                        <div className="h-5 rounded-[0.6rem] bg-[repeating-linear-gradient(90deg,rgba(56,189,248,0.34)_0,rgba(56,189,248,0.34)_8px,rgba(12,18,25,0.16)_8px,rgba(12,18,25,0.16)_14px)]" />
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </button>
+                            </ContextMenuTrigger>
+                            <ContextMenuContent>
+                              <ContextMenuItem
+                                disabled={!blockActionState.canCloneToFill}
+                                onSelect={() => {
+                                  cloneTimelineSelectionToFill(blockSelection);
+                                }}
+                              >
+                                <Copy className="h-4 w-4" />
+                                Clone to Fill Track
+                              </ContextMenuItem>
+                              <ContextMenuItem
+                                disabled={!blockActionState.canTrimToMatch}
+                                onSelect={() => {
+                                  trimTimelineSelectionToMatchTrack(blockSelection);
+                                }}
+                              >
+                                <Scissors className="h-4 w-4" />
+                                Trim End to Match Other Track
+                              </ContextMenuItem>
+                            </ContextMenuContent>
+                          </ContextMenu>
                         );
                       })}
                     </div>
@@ -4226,41 +5194,69 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         visibleAudioPlacements.map((placement) => {
                           const itemAsset = assetMap.get(placement.item.assetId);
                           const isSelected = selectedItem?.kind === "audio" && selectedItem.id === placement.item.id;
+                          const audioSelection: TimelineSelection = { kind: "audio", id: placement.item.id };
+                          const audioActionState = getTimelineTrackActionState(audioSelection);
                           return (
-                            <button
-                              key={placement.item.id}
-                              type="button"
-                              className={cn(
-                                "absolute top-1/2 h-[68%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
-                                isSelected
-                                  ? "border-white/80 bg-[linear-gradient(180deg,rgba(84,67,32,0.88),rgba(42,31,12,0.94))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.22),0_0_20px_rgba(255,255,255,0.08)]"
-                                  : "border-amber-300/28 bg-[linear-gradient(180deg,rgba(90,61,12,0.78),rgba(47,31,8,0.9))] shadow-[inset_0_1px_0_rgba(253,224,71,0.12)] hover:border-amber-200/40 hover:bg-[linear-gradient(180deg,rgba(104,69,15,0.8),rgba(58,37,10,0.92))]"
-                              )}
-                              style={{
-                                left: `${placement.leftPct}%`,
-                                width: `${placement.widthPct}%`,
-                              }}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                focusTimelineSelection({ kind: "audio", id: placement.item.id }, placement.startSeconds);
-                              }}
-                            >
-                              <div className="pointer-events-none flex h-full flex-col justify-between">
-                                <div className="flex items-center justify-between gap-2">
-                                  <div className="truncate text-sm font-medium text-amber-50">
-                                    {itemAsset?.filename ?? "Audio item"}
+                            <ContextMenu key={placement.item.id}>
+                              <ContextMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  onContextMenu={() => {
+                                    focusTimelineSelection(audioSelection);
+                                  }}
+                                  className={cn(
+                                    "absolute top-1/2 h-[68%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
+                                    isSelected
+                                      ? "border-white/80 bg-[linear-gradient(180deg,rgba(84,67,32,0.88),rgba(42,31,12,0.94))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.22),0_0_20px_rgba(255,255,255,0.08)]"
+                                      : "border-amber-300/28 bg-[linear-gradient(180deg,rgba(90,61,12,0.78),rgba(47,31,8,0.9))] shadow-[inset_0_1px_0_rgba(253,224,71,0.12)] hover:border-amber-200/40 hover:bg-[linear-gradient(180deg,rgba(104,69,15,0.8),rgba(58,37,10,0.92))]"
+                                  )}
+                                  style={{
+                                    left: `${placement.leftPct}%`,
+                                    width: `${placement.widthPct}%`,
+                                  }}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    focusTimelineSelection(audioSelection, placement.startSeconds);
+                                  }}
+                                >
+                                  <div className="pointer-events-none flex h-full flex-col justify-between">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="truncate text-sm font-medium text-amber-50">
+                                        {itemAsset?.filename ?? "Audio item"}
+                                      </div>
+                                      <span className="font-mono text-[11px] text-amber-100/55">
+                                        {secondsToClock(placement.durationSeconds)}
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-amber-50/60">
+                                      <span className="truncate">{placement.item.muted ? "Muted track" : "Track audio on"}</span>
+                                      <span className="font-mono">{secondsToClock(placement.startSeconds)}</span>
+                                    </div>
+                                    <div className="mt-2 h-7 rounded-[0.65rem] bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.28)_0,rgba(255,255,255,0.28)_2px,transparent_2px,transparent_7px)] opacity-85" />
                                   </div>
-                                  <span className="font-mono text-[11px] text-amber-100/55">
-                                    {secondsToClock(placement.durationSeconds)}
-                                  </span>
-                                </div>
-                                <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-amber-50/60">
-                                  <span className="truncate">{placement.item.muted ? "Muted track" : "Track audio on"}</span>
-                                  <span className="font-mono">{secondsToClock(placement.startSeconds)}</span>
-                                </div>
-                                <div className="mt-2 h-7 rounded-[0.65rem] bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.28)_0,rgba(255,255,255,0.28)_2px,transparent_2px,transparent_7px)] opacity-85" />
-                              </div>
-                            </button>
+                                </button>
+                              </ContextMenuTrigger>
+                              <ContextMenuContent>
+                                <ContextMenuItem
+                                  disabled={!audioActionState.canCloneToFill}
+                                  onSelect={() => {
+                                    cloneTimelineSelectionToFill(audioSelection);
+                                  }}
+                                >
+                                  <Copy className="h-4 w-4" />
+                                  Clone to Fill Track
+                                </ContextMenuItem>
+                                <ContextMenuItem
+                                  disabled={!audioActionState.canTrimToMatch}
+                                  onSelect={() => {
+                                    trimTimelineSelectionToMatchTrack(audioSelection);
+                                  }}
+                                >
+                                  <Scissors className="h-4 w-4" />
+                                  Trim End to Match Other Track
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            </ContextMenu>
                           );
                         })
                       ) : project.timeline.audioItems.length ? (

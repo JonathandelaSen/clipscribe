@@ -13,6 +13,7 @@ import type {
   EditorProjectRecord,
   EditorSubtitlePreset,
   TimelineClipGroup,
+  TimelineImageItem,
   TimelineSelection,
   TimelineAudioItem,
   TimelineVideoClipActions,
@@ -82,6 +83,17 @@ export function normalizeTimelineClipGroup(
   };
 }
 
+export function normalizeTimelineImageItem(
+  item: TimelineImageItem | (Partial<TimelineImageItem> & Pick<TimelineImageItem, "id" | "assetId">)
+): TimelineImageItem {
+  return {
+    id: item.id,
+    assetId: item.assetId,
+    label: typeof item.label === "string" ? item.label : "",
+    canvas: item.canvas ?? getDefaultEditorCanvasState(),
+  };
+}
+
 export function createDefaultVideoClip(input: {
   assetId: string;
   label: string;
@@ -115,6 +127,18 @@ export function createDefaultAudioTrack(input: {
   };
 }
 
+export function createDefaultImageTrackItem(input: {
+  assetId: string;
+  label: string;
+}): TimelineImageItem {
+  return {
+    id: makeId("edimage"),
+    assetId: input.assetId,
+    label: input.label,
+    canvas: getDefaultEditorCanvasState(),
+  };
+}
+
 export function createEmptyEditorProject(input?: {
   id?: string;
   now?: number;
@@ -136,6 +160,7 @@ export function createEmptyEditorProject(input?: {
       playheadSeconds: 0,
       zoomLevel: 1,
       selectedItem: undefined,
+      imageItems: [],
       videoClips: [],
       videoClipGroups: [],
       audioItems: [],
@@ -176,6 +201,9 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
       playheadSeconds: timeline.playheadSeconds ?? 0,
       zoomLevel: timeline.zoomLevel ?? 1,
       selectedItem,
+      imageItems: Array.isArray(timeline.imageItems)
+        ? timeline.imageItems.map((item) => normalizeTimelineImageItem(item))
+        : [],
       videoClips: Array.isArray(timeline.videoClips)
         ? timeline.videoClips.map((clip) => normalizeTimelineVideoClip(clip))
         : [],

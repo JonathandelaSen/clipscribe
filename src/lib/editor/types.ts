@@ -7,7 +7,7 @@ export type EditorProjectStatus = "draft" | "exporting" | "error";
 export type EditorExportStatus = "completed" | "failed";
 export type EditorExportEngine = "browser" | "system";
 export type EditorAssetSource = "history" | "upload";
-export type EditorAssetKind = "video" | "audio";
+export type EditorAssetKind = "video" | "audio" | "image";
 
 export type EditorSubtitlePreset = CreatorVerticalEditorPreset["subtitleStyle"];
 
@@ -69,7 +69,14 @@ export interface TimelineAudioItem {
   muted: boolean;
 }
 
-export type TimelineSelectionKind = "video" | "video-group" | "audio";
+export interface TimelineImageItem {
+  id: string;
+  assetId: string;
+  label: string;
+  canvas: EditorCanvasState;
+}
+
+export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image";
 
 export interface TimelineSelection {
   kind: TimelineSelectionKind;
@@ -89,6 +96,7 @@ export interface EditorProjectTimelineState {
   playheadSeconds: number;
   zoomLevel: number;
   selectedItem?: TimelineSelection;
+  imageItems: TimelineImageItem[];
   videoClips: TimelineVideoClip[];
   videoClipGroups: TimelineClipGroup[];
   audioItems: TimelineAudioItem[];
@@ -169,6 +177,14 @@ export interface TimelineClipPlacement {
 
 export interface TimelineAudioPlacement {
   item: TimelineAudioItem;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  index: number;
+}
+
+export interface TimelineImagePlacement {
+  item: TimelineImageItem;
   startSeconds: number;
   endSeconds: number;
   durationSeconds: number;

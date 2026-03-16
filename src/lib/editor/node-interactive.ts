@@ -8,6 +8,36 @@ import prompts, { type Choice } from "prompts";
 import type { EditorResolution } from "./types";
 
 const EDITOR_PROJECT_WORKSPACE_FILENAME = "project.json";
+const LIKELY_VIDEO_EXTENSIONS = new Set([
+  ".avi",
+  ".m4v",
+  ".mkv",
+  ".mov",
+  ".mp4",
+  ".mpeg",
+  ".mpg",
+  ".mts",
+  ".m2ts",
+  ".ts",
+  ".webm",
+  ".wmv",
+]);
+const LIKELY_AUDIO_EXTENSIONS = new Set([
+  ".aac",
+  ".aif",
+  ".aiff",
+  ".flac",
+  ".m4a",
+  ".mka",
+  ".mp3",
+  ".ogg",
+  ".opus",
+  ".wav",
+  ".webm",
+  ".mp4",
+  ".mov",
+  ".mkv",
+]);
 
 interface InteractiveMenuOption<T> {
   title: string;
@@ -71,6 +101,13 @@ async function isReadableFile(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isLikelyMediaFilePath(filePath: string, kind: "video" | "audio"): boolean {
+  const extension = path.extname(filePath).toLowerCase();
+  return kind === "video"
+    ? LIKELY_VIDEO_EXTENSIONS.has(extension)
+    : LIKELY_AUDIO_EXTENSIONS.has(extension);
 }
 
 export async function promptTextValue(input: {
@@ -327,6 +364,23 @@ export async function promptForWorkspaceProjectPath(startDirectory = process.cwd
     directoryEntrySelectDescription: "Select workspace folder",
     isFileSelectable: async (absoluteFilePath, entry) =>
       entry.name === EDITOR_PROJECT_WORKSPACE_FILENAME && isReadableFile(absoluteFilePath),
+  });
+}
+
+export async function promptForMediaFilePath(
+  startDirectory = process.cwd(),
+  kind: "video" | "audio" = "video"
+): Promise<string> {
+  return browseForPath({
+    prompt:
+      kind === "video"
+        ? "Choose a video file to add to the timeline"
+        : "Choose an audio file to use as the track",
+    currentDirectoryLabel: "Browse this folder",
+    startDirectory,
+    isCurrentDirectorySelectable: async () => false,
+    isFileSelectable: async (absoluteFilePath) =>
+      isLikelyMediaFilePath(absoluteFilePath, kind) && isReadableFile(absoluteFilePath),
   });
 }
 

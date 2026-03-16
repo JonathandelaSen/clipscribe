@@ -31,6 +31,9 @@ export function getEditorExportReferencedAssetIds(project: EditorProjectRecord):
   for (const clip of project.timeline.videoClips) {
     assetIds.add(clip.assetId);
   }
+  for (const item of project.timeline.imageItems) {
+    assetIds.add(item.assetId);
+  }
   for (const item of project.timeline.audioItems) {
     assetIds.add(item.assetId);
   }
@@ -52,8 +55,8 @@ function getSystemExportReasons(
 ): string[] {
   const reasons: string[] = [];
 
-  if (project.timeline.videoClips.length === 0) {
-    reasons.push("Add at least one video clip to export the project.");
+  if (project.timeline.videoClips.length === 0 && project.timeline.imageItems.length === 0) {
+    reasons.push("Add at least one video clip or image track item to export the project.");
     return reasons;
   }
 
@@ -79,8 +82,8 @@ export function getEditorExportCapability(input: {
   const reasons =
     input.engine === "system"
       ? getSystemExportReasons(input.project, input.assets)
-      : input.project.timeline.videoClips.length === 0
-        ? ["Add at least one video clip to export the project."]
+      : input.project.timeline.videoClips.length === 0 && input.project.timeline.imageItems.length === 0
+        ? ["Add at least one video clip or image track item to export the project."]
         : [];
 
   return {

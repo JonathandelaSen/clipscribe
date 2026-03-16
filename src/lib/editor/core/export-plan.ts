@@ -1,6 +1,10 @@
 import { buildShortExportGeometry } from "../../creator/core/export-geometry";
 import { getEditorOutputDimensions } from "./aspect-ratio";
-import { getTimelineAudioEnd, getTimelineClipPlacements } from "./timeline";
+import {
+  getProjectDuration,
+  getTimelineClipPlacements,
+  getTimelineImagePlacements,
+} from "./timeline";
 import type {
   EditorAssetRecord,
   EditorProjectRecord,
@@ -40,6 +44,10 @@ function roundMs(value: number): number {
   return Number(value.toFixed(3));
 }
 
+function buildInputArgs(item: ResolvedExportInput): string[] {
+  return item.asset.kind === "image" ? ["-loop", "1", "-i", item.path] : ["-i", item.path];
+}
+
 export function createResolvedExportInputs(resolvedAssets: ResolvedEditorAsset[]): ResolvedExportInput[] {
   let inputIndex = 0;
   return resolvedAssets.flatMap((resolved) => {
@@ -60,13 +68,12 @@ function appendClipAudioFilters(input: {
   inputsByAssetId: Map<string, ResolvedExportInput>;
   warnings: string[];
   filterParts: string[];
+  durationSeconds: number;
 }): {
-  concatAudioInputs: string[];
-  concatSegmentCount: number;
   clipAudioLabel: string;
 } {
+  const clipAudioLabel = "clip_audio_track";
   const concatAudioInputs: string[] = [];
-  let concatSegmentCount = 0;
 
   for (const placement of input.placements) {
     const inputRef = input.inputsByAssetId.get(placement.clip.assetId);
@@ -91,23 +98,20 @@ function appendClipAudioFilters(input: {
     }
 
     concatAudioInputs.push(`[${audioLabel}]`);
-    concatSegmentCount += 1;
   }
 
-  if (concatSegmentCount === 0) {
-    throw new Error("Export plan requires at least one timeline clip.");
+  if (concatAudioInputs.length === 0) {
+    input.filterParts.push(
+      `anullsrc=r=48000:cl=stereo,atrim=duration=${Math.max(input.durationSeconds, 0.5).toFixed(3)}[${clipAudioLabel}]`
+    );
+    return { clipAudioLabel };
   }
 
-  const clipAudioLabel = "clip_audio_track";
   input.filterParts.push(
-    `${concatAudioInputs.join("")}concat=n=${concatSegmentCount}:v=0:a=1[${clipAudioLabel}]`
+    `${concatAudioInputs.join("")}concat=n=${concatAudioInputs.length}:v=0:a=1[${clipAudioLabel}]`
   );
 
-  return {
-    concatAudioInputs,
-    concatSegmentCount,
-    clipAudioLabel,
-  };
+  return { clipAudioLabel };
 }
 
 function appendTimelineAudioMixFilters(input: {
@@ -143,6 +147,45 @@ function appendTimelineAudioMixFilters(input: {
   return mixedAudioLabel;
 }
 
+function appendTimelineImageOverlayFilters(input: {
+  imagePlacements: ReturnType<typeof getTimelineImagePlacements>;
+  inputsByAssetId: Map<string, ResolvedExportInput>;
+  warnings: string[];
+  filterParts: string[];
+  width: number;
+  height: number;
+  baseVideoLabel: string;
+}): string {
+  let currentVideoLabel = input.baseVideoLabel;
+
+  input.imagePlacements.forEach((placement, index) => {
+    const inputRef = input.inputsByAssetId.get(placement.item.assetId);
+    if (!inputRef) {
+      input.warnings.push(`Image track item "${placement.item.label}" is missing its source file.`);
+      return;
+    }
+
+    const geometry = buildShortExportGeometry({
+      sourceWidth: inputRef.asset.width ?? input.width,
+      sourceHeight: inputRef.asset.height ?? input.height,
+      editor: placement.item.canvas,
+      previewViewport: {
+        width: input.width,
+        height: input.height,
+      },
+      outputWidth: input.width,
+      outputHeight: input.height,
+    });
+    const imageLabel = `img${index}`;
+    const outputLabel = index === input.imagePlacements.length - 1 ? "video_track" : `image_overlay_${index}`;
+    input.filterParts.push(`[${inputRef.inputIndex}:v]${geometry.filter}[${imageLabel}]`);
+    input.filterParts.push(`[${currentVideoLabel}][${imageLabel}]overlay=shortest=1:eof_action=pass[${outputLabel}]`);
+    currentVideoLabel = outputLabel;
+  });
+
+  return currentVideoLabel;
+}
+
 export function buildEditorExportPlan(input: {
   project: EditorProjectRecord;
   inputs: ResolvedExportInput[];
@@ -150,15 +193,21 @@ export function buildEditorExportPlan(input: {
   includeAudio?: boolean;
 }): EditorExportPlan {
   const placements = getTimelineClipPlacements(input.project.timeline.videoClips);
+  const imagePlacements = getTimelineImagePlacements(input.project);
   const inputsByAssetId = new Map(input.inputs.map((item) => [item.assetId, item]));
   const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
   const includeAudio = input.includeAudio !== false;
+  const durationSeconds = roundMs(Math.max(getProjectDuration(input.project), 0.5));
+
+  if (placements.length === 0 && imagePlacements.length === 0) {
+    throw new Error("Export plan requires at least one timeline clip or image track item.");
+  }
 
   const warnings: string[] = [];
   const filterParts: string[] = [];
   const concatVideoInputs: string[] = [];
   const concatInterleavedInputs: string[] = [];
-  let concatSegmentCount = 0;
+  const baseVideoLabel = imagePlacements.length > 0 ? "video_track_base" : "video_track";
 
   for (const placement of placements) {
     const inputRef = inputsByAssetId.get(placement.clip.assetId);
@@ -181,9 +230,7 @@ export function buildEditorExportPlan(input: {
       placement.clip.actions.reverse ? "reverse" : null,
       geometry.filter,
     ].filter(Boolean);
-    filterParts.push(
-      `[${inputRef.inputIndex}:v]${videoFilters.join(",")}[${videoLabel}]`
-    );
+    filterParts.push(`[${inputRef.inputIndex}:v]${videoFilters.join(",")}[${videoLabel}]`);
 
     concatVideoInputs.push(`[${videoLabel}]`);
     if (includeAudio) {
@@ -203,34 +250,60 @@ export function buildEditorExportPlan(input: {
       }
       concatInterleavedInputs.push(`[${videoLabel}]`, `[${audioLabel}]`);
     }
-    concatSegmentCount += 1;
   }
 
-  const concatVideoLabel = "video_track";
-  if (concatSegmentCount === 0) {
-    throw new Error("Export plan requires at least one timeline clip.");
+  if (placements.length > 0 && concatVideoInputs.length === 0 && imagePlacements.length === 0) {
+    throw new Error("Export plan could not resolve any timeline video inputs.");
   }
 
   let mixedAudioLabel: string | null = null;
-  if (includeAudio) {
-    filterParts.push(
-      `${concatInterleavedInputs.join("")}concat=n=${concatSegmentCount}:v=1:a=1[${concatVideoLabel}][clip_audio_track]`
-    );
-    mixedAudioLabel = appendTimelineAudioMixFilters({
-      project: input.project,
-      inputsByAssetId,
-      warnings,
-      filterParts,
-      baseAudioLabel: "clip_audio_track",
-    });
+  if (concatVideoInputs.length > 0) {
+    if (includeAudio) {
+      filterParts.push(
+        `${concatInterleavedInputs.join("")}concat=n=${concatVideoInputs.length}:v=1:a=1[${baseVideoLabel}][clip_audio_track]`
+      );
+      mixedAudioLabel = appendTimelineAudioMixFilters({
+        project: input.project,
+        inputsByAssetId,
+        warnings,
+        filterParts,
+        baseAudioLabel: "clip_audio_track",
+      });
+    } else {
+      filterParts.push(`${concatVideoInputs.join("")}concat=n=${concatVideoInputs.length}:v=1:a=0[${baseVideoLabel}]`);
+    }
   } else {
-    filterParts.push(`${concatVideoInputs.join("")}concat=n=${concatSegmentCount}:v=1:a=0[${concatVideoLabel}]`);
+    filterParts.push(
+      `color=c=black:s=${width}x${height}:d=${durationSeconds.toFixed(3)}[${baseVideoLabel}]`
+    );
+    if (includeAudio && input.project.timeline.audioItems.length > 0) {
+      filterParts.push(
+        `anullsrc=r=48000:cl=stereo,atrim=duration=${durationSeconds.toFixed(3)}[clip_audio_track]`
+      );
+      mixedAudioLabel = appendTimelineAudioMixFilters({
+        project: input.project,
+        inputsByAssetId,
+        warnings,
+        filterParts,
+        baseAudioLabel: "clip_audio_track",
+      });
+    }
   }
 
-  const ffmpegArgs = input.inputs.flatMap((item) => ["-i", item.path]);
-  const durationSeconds = roundMs(
-    Math.max(placements[placements.length - 1]?.endSeconds ?? 0, getTimelineAudioEnd(input.project.timeline.audioItems))
-  );
+  const videoTrackLabel =
+    imagePlacements.length > 0
+      ? appendTimelineImageOverlayFilters({
+          imagePlacements,
+          inputsByAssetId,
+          warnings,
+          filterParts,
+          width,
+          height,
+          baseVideoLabel,
+        })
+      : baseVideoLabel;
+
+  const ffmpegArgs = input.inputs.flatMap((item) => buildInputArgs(item));
 
   return {
     width,
@@ -240,7 +313,7 @@ export function buildEditorExportPlan(input: {
     ffmpegArgs,
     filterComplex: filterParts.join(";"),
     warnings,
-    videoTrackLabel: concatVideoLabel,
+    videoTrackLabel,
     mixedAudioLabel,
   };
 }
@@ -253,24 +326,31 @@ export function buildEditorAudioExportPlan(input: {
   const inputsByAssetId = new Map(input.inputs.map((item) => [item.assetId, item]));
   const warnings: string[] = [];
   const filterParts: string[] = [];
+  const durationSeconds = roundMs(Math.max(getProjectDuration(input.project), 0.5));
+
+  if (placements.length === 0 && input.project.timeline.audioItems.length === 0) {
+    throw new Error("Audio export plan requires clip audio or at least one timeline audio item.");
+  }
+
   const { clipAudioLabel } = appendClipAudioFilters({
     placements,
     inputsByAssetId,
     warnings,
     filterParts,
+    durationSeconds,
   });
 
-  const mixedAudioLabel = appendTimelineAudioMixFilters({
-    project: input.project,
-    inputsByAssetId,
-    warnings,
-    filterParts,
-    baseAudioLabel: clipAudioLabel,
-  });
-  const ffmpegArgs = input.inputs.flatMap((item) => ["-i", item.path]);
-  const durationSeconds = roundMs(
-    Math.max(placements[placements.length - 1]?.endSeconds ?? 0, getTimelineAudioEnd(input.project.timeline.audioItems))
-  );
+  const mixedAudioLabel =
+    input.project.timeline.audioItems.length > 0
+      ? appendTimelineAudioMixFilters({
+          project: input.project,
+          inputsByAssetId,
+          warnings,
+          filterParts,
+          baseAudioLabel: clipAudioLabel,
+        })
+      : clipAudioLabel;
+  const ffmpegArgs = input.inputs.flatMap((item) => buildInputArgs(item));
 
   return {
     durationSeconds,

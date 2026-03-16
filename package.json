@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "create:timeline-project": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types ./scripts/create-timeline-project.mts",
+    "create:news-video": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types ./scripts/create-news-video.ts",
     "create-and-export:timeline-project": "rm -rf .tmp/editor-cli && ./node_modules/.bin/tsc -p tsconfig.editor-cli.json && node .tmp/editor-cli/scripts/create-and-export-timeline-project.js",
     "import:timeline-project": "rm -rf .tmp/editor-cli && ./node_modules/.bin/tsc -p tsconfig.editor-cli.json && node .tmp/editor-cli/scripts/import-timeline-project.js",
     "export:timeline-project": "rm -rf .tmp/editor-cli && ./node_modules/.bin/tsc -p tsconfig.editor-cli.json && node .tmp/editor-cli/scripts/export-timeline-project.js",

@@ -1,5 +1,5 @@
 export interface MediaMetadataResult {
-  kind: "video" | "audio";
+  kind: "video" | "audio" | "image";
   durationSeconds: number;
   width?: number;
   height?: number;
@@ -10,9 +10,31 @@ function isVideoFile(file: File): boolean {
   return file.type.startsWith("video/") || /\.(mp4|webm|mov|mkv)$/i.test(file.name);
 }
 
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(file.name);
+}
+
 export async function readMediaMetadata(file: File): Promise<MediaMetadataResult> {
   const url = URL.createObjectURL(file);
   try {
+    if (isImageFile(file) && !isVideoFile(file)) {
+      const image = document.createElement("img");
+      image.src = url;
+      await new Promise<void>((resolve, reject) => {
+        image.addEventListener("load", () => resolve(), { once: true });
+        image.addEventListener("error", () => reject(new Error(`Failed to read metadata for ${file.name}`)), {
+          once: true,
+        });
+      });
+      return {
+        kind: "image",
+        durationSeconds: 0,
+        width: image.naturalWidth || undefined,
+        height: image.naturalHeight || undefined,
+        hasAudio: false,
+      };
+    }
+
     if (isVideoFile(file)) {
       const video = document.createElement("video");
       video.preload = "metadata";
