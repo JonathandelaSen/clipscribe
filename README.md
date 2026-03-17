@@ -27,7 +27,16 @@ The application leverages a local Web Worker and client-side processing via Tran
 - 💾 **Export & Downloads**: Download your generated transcripts as plain text (`.txt`) or as SubRip Subtitles (`.srt`) out of the box. Both features are available inline and in the History tab.
 - 📋 **One-Click Copying**: Easily copy full transcripts or subtitles with integrated clipboard buttons.
 - 🎬 **Video Support & FFmpeg Rendering**: Drop in video files directly. The app processes them locally and can export edited short-form video clips right from your browser via FFmpeg WASM.
-- ✂️ **Built-in Clip Editor**: A comprehensive local video editor tailored for short-form content. Features include trimming, pan/zoom framing, customizable subtitle positioning, and safe-zone overlays for platforms like TikTok, YouTube Shorts, and Instagram Reels.
+- ✂️ **Timeline Studio**: A professional, local-first video editor for short-form content.
+  - **Multi-track Editing**: Manage video, image, and audio lanes with a drag-and-drop timeline.
+  - **Dynamic Inspector**: Fine-tune clips with precision trimming, pan/zoom transforms, and volume controls.
+  - **Instant Preview**: Real-time playback of your project before exporting.
+  - **Safe-zone Overlays**: Built-in guides for TikTok, YouTube Shorts, and Instagram Reels to ensure content is never obscured.
+  - **Local Export**: Fast, private rendering using FFmpeg WASM directly in your browser.
+
+<div align="center">
+  <img src="./docs/timeline_studio.png" alt="Timeline Studio Video Editor" width="100%" />
+</div>
 - 🤖 **Creator AI Tools**: Automatically generate title ideas, SEO descriptions, chapters, and identify "viral clips" from transcripts to effortlessly repurpose long-form content.
 - 🎨 **Visual Subtitles**: Render dynamic subtitles with configurable styles and precise time shifting directly onto video exports.
 
@@ -81,49 +90,64 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 ## CLI Timeline Bundles
 
-You can create an importable Timeline Studio bundle from the terminal and then import it from the editor project library.
+The ClipScribe CLI allows you to automate project creation and video rendering using your local system's resources. The CLI uses bundled `ffmpeg` and `ffprobe` binaries, so no external dependencies are required.
 
-Interactive wizard:
+### 1. Create a Timeline Project
 
+You can bundle multiple media assets into a `.clipscribe-project` folder that can be imported into the web editor or exported via CLI.
+
+**Interactive Wizard:**
 ```bash
 npm run create:timeline-project -- --interactive
 ```
 
-Direct command:
-
+**Direct Command (Example):**
 ```bash
 npm run create:timeline-project -- \
-  --name "Launch Cut" \
+  --name "Launch Highlight" \
   --aspect 9:16 \
-  --video /absolute/path/intro.mp4 \
-  --video /absolute/path/outro.mp4 \
-  --reverse 2 \
-  --video-trim 1:1.5:4.25 \
-  --audio /absolute/path/bed.mp3 \
-  --audio-start 2.5 \
-  --output ./bundles
+  --video ./assets/intro.mp4 \
+  --video ./assets/hero-shot.png \
+  --video ./assets/outro.mp4 \
+  --video-trim 1:0:5.5 \
+  --video-volume 1:0.5 \
+  --audio ./assets/background-track.mp3 \
+  --audio-start 2.0 \
+  --output ./projects
 ```
 
-This creates a folder such as `launch-cut.clipscribe-project/` with `manifest.json` and a `media/` directory. In Timeline Studio, use `Import Bundle` from the project library and select that folder to create a saved local project.
+**Key Options:**
+- `--video <path>`: Add a video or image file to the timeline.
+- `--video-trim <index:start:end>`: Override start/end seconds for a specific 1-based clip index.
+- `--video-volume <index:volume>`: Set clip volume from `0` to `1`.
+- `--video-muted <index>`: Completely mute the audio of a specific video clip.
+- `--reverse <index>`: Play the specified video clip in reverse.
+- `--video-clone-to-fill <index>`: Automatically loop a clip until it matches the audio duration.
+- `--audio-trim-final-to-video`: Automatically trim the audio track to match the total video length.
 
-For an agent-friendly terminal workflow, turn the bundle into an editable workspace file and then export it back to MP4:
+### 2. Import to Workspace
+
+Transform a bundle into an editable workspace folder containing a `project.json` file. This allows headless editing or inspection.
 
 ```bash
-npm run import:timeline-project -- \
-  --bundle ./bundles/launch-cut.clipscribe-project
+npm run import:timeline-project -- --bundle ./projects/launch-highlight.clipscribe-project
 ```
 
-This writes `project.json` into the bundle folder. An agent can inspect or edit that file and then export it:
+### 3. Export to Video
+
+Render your project into a final MP4 file. The CLI will use your system's `ffmpeg` for maximum performance.
 
 ```bash
 npm run export:timeline-project -- \
-  --project ./bundles/launch-cut.clipscribe-project \
-  --resolution 1080p
+  --project ./projects/launch-highlight.clipscribe-project \
+  --resolution 1080p \
+  --output ./exports
 ```
 
-If you run either command without `--bundle` or `--project`, the CLI opens an interactive browser starting in the current directory so you can pick the folder or `project.json` file with the keyboard.
-
-The export command writes the final MP4 to `exports/<project-name>__<aspect>__<resolution>.mp4` inside the workspace by default. Use `--dry-run` to preview the render plan, `--output` to choose another destination, and `--json` for machine-readable CLI output. The CLI now ships with bundled `ffmpeg` and `ffprobe` binaries from npm, so a separate Homebrew install is no longer required after `npm install`.
+**Export Options:**
+- `--resolution <480p|720p|1080p|4k>`: Set target height (default: 1080p).
+- `--dry-run`: View the FFmpeg command and render plan without executing.
+- `--json`: Output machine-readable progress and results.
 
 ## Vibe Coding
 
