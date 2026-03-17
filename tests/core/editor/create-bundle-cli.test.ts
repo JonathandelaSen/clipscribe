@@ -185,7 +185,7 @@ test("full prompting treats a folder video input as a media browser start point"
       includeOutputDirectoryPrompt: false,
       promptApi: {
         promptTextValue: async ({ message, initial }) => {
-          if (message === "Video clip 1 path or folder") {
+          if (message === "Clip 1 path or folder (video or image)") {
             return tempDir;
           }
           if (message === "Optional audio file or folder path (leave blank to skip)") {

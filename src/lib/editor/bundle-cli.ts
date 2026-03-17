@@ -209,13 +209,13 @@ export function getCreateTimelineProjectBundleHelpText(): string {
     "Create an importable Timeline Studio bundle.",
     "",
     "Usage:",
-    "  npm run create:timeline-project -- --video /path/to/a.mp4 --video /path/to/b.mp4 [options]",
+    "  npm run create:timeline-project -- --video /path/to/a.mp4 --video /path/to/image.png [options]",
     "",
     "Options:",
     "  --interactive                Run the prompt-based wizard",
     "  --name <value>               Project name",
     "  --aspect <16:9|9:16|1:1|4:5> Output aspect ratio (default: 16:9)",
-    "  --video <path>               Add a video clip in sequence order (repeatable)",
+    "  --video <path>               Add a video or image clip in sequence order (repeatable)",
     "  --audio <path>               Add one optional top-level audio track",
     "  --reverse <index>            Reverse the given 1-based video clip index (repeatable)",
     "  --video-trim <i:start:end>   Override one clip trim window (repeatable)",
@@ -338,7 +338,7 @@ export function normalizeCreateTimelineProjectBundleCliInput(
   cwd = DEFAULT_OUTPUT_DIRECTORY
 ): CreateTimelineProjectBundleOptions {
   if (!parsed.interactive && parsed.videoPaths.length === 0) {
-    throw new Error("At least one --video path is required unless you use --interactive.");
+    throw new Error("At least one --video path (video or image file) is required unless you use --interactive.");
   }
   if (parsed.videoCloneToFillIndex != null && !parsed.audioPath) {
     throw new Error("--video-clone-to-fill requires --audio so the target track length is known.");

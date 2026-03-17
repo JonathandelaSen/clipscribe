@@ -128,7 +128,7 @@ test("CLI normalization requires at least one video path when not interactive", 
 
   assert.throws(
     () => normalizeCreateTimelineProjectBundleCliInput(parsed, "/repo"),
-    /At least one --video path is required unless you use --interactive/
+    /At least one --video path.*is required unless you use --interactive/
   );
 });
 

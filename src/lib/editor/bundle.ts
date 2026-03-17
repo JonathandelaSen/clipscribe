@@ -95,7 +95,7 @@ export interface MaterializedEditorProjectBundle {
 }
 
 export interface EditorProjectBundleResolvedMedia {
-  kind: "video" | "audio";
+  kind: "video" | "audio" | "image";
   filename: string;
   mimeType: string;
   sizeBytes: number;
@@ -356,15 +356,19 @@ export async function materializeEditorProjectBundle(
         throw new Error(`Bundle media file "${bundlePath}" is missing.`);
       }
       const metadata = await input.readMetadata(file);
-      if (metadata.kind === "image") {
-        throw new Error(`Bundle media file "${bundlePath}" must resolve to video or audio, not image.`);
-      }
+      // Images are treated as still-frame video clips with a default duration.
+      const DEFAULT_IMAGE_CLIP_DURATION = 5;
+      const effectiveKind = metadata.kind === "image" ? "video" : metadata.kind;
+      const effectiveDuration =
+        metadata.kind === "image"
+          ? DEFAULT_IMAGE_CLIP_DURATION
+          : metadata.durationSeconds;
       return {
-        kind: metadata.kind,
+        kind: effectiveKind,
         filename: file.name,
         mimeType: file.type,
         sizeBytes: file.size,
-        durationSeconds: metadata.durationSeconds,
+        durationSeconds: effectiveDuration,
         width: metadata.width,
         height: metadata.height,
         hasAudio: metadata.hasAudio,
@@ -401,9 +405,17 @@ export async function materializeEditorProjectBundleWithResolver(
     }
 
     const resolved = await input.resolveMedia(bundlePath);
-    if (resolved.kind !== expectedKind) {
+    // Accept image files as still-frame video clips.
+    const DEFAULT_IMAGE_CLIP_DURATION = 5;
+    const isImageAsVideoClip = expectedKind === "video" && resolved.kind === "image";
+    const effectiveKind = isImageAsVideoClip ? "video" : resolved.kind;
+    const effectiveDuration = isImageAsVideoClip
+      ? (resolved.durationSeconds > 0 ? resolved.durationSeconds : DEFAULT_IMAGE_CLIP_DURATION)
+      : resolved.durationSeconds;
+
+    if (effectiveKind !== expectedKind) {
       if (expectedKind === "video") {
-        throw new Error(`Bundle clip "${bundlePath}" must resolve to a video file.`);
+        throw new Error(`Bundle clip "${bundlePath}" must resolve to a video or image file.`);
       }
       throw new Error(`Bundle audio item "${bundlePath}" must resolve to an audio file.`);
     }
@@ -414,7 +426,7 @@ export async function materializeEditorProjectBundleWithResolver(
       filename: resolved.filename,
       mimeType: resolved.mimeType || (expectedKind === "video" ? "video/mp4" : "audio/mpeg"),
       sizeBytes: resolved.sizeBytes,
-      durationSeconds: resolved.durationSeconds,
+      durationSeconds: effectiveDuration,
       width: resolved.width,
       height: resolved.height,
       hasAudio: resolved.hasAudio,

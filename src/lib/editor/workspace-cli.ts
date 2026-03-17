@@ -1,4 +1,4 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
@@ -464,7 +464,7 @@ export async function exportTimelineProjectWorkspace(
     message: "Loading workspace",
   });
   const { workspace, workspaceDirectory, workspacePath } = await loadWorkspaceFromDisk(options.projectPath);
-  const resolvedOutputPath =
+  let resolvedOutputPath =
     options.outputPath ??
     getDefaultExportOutputPath(
       workspaceDirectory,
@@ -472,6 +472,20 @@ export async function exportTimelineProjectWorkspace(
       workspace.project.aspectRatio,
       options.resolution
     );
+
+  if (options.outputPath) {
+    try {
+      const stats = await stat(resolvedOutputPath);
+      if (stats.isDirectory()) {
+        resolvedOutputPath = path.join(
+          resolvedOutputPath,
+          buildEditorExportFilename(workspace.project.name, workspace.project.aspectRatio, options.resolution)
+        );
+      }
+    } catch {
+      // Path doesn't exist yet, which is fine for a file
+    }
+  }
   const exportProject = dependencies.exportProject ?? exportEditorProjectWithSystemFfmpeg;
 
   if (options.dryRun) {

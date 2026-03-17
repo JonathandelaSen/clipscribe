@@ -6,6 +6,11 @@ import path from "node:path";
 import type { EditorProjectBundleResolvedMedia } from "./bundle";
 import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
 
+const LIKELY_IMAGE_EXTENSIONS = new Set([
+  ".avif", ".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp",
+]);
+const DEFAULT_IMAGE_DURATION_SECONDS = 5;
+
 export interface CommandRunResult {
   code: number;
   stdout: string;
@@ -46,21 +51,30 @@ function parseDurationSeconds(...values: Array<string | number | undefined>): nu
   return parsedValues.length > 0 ? Math.max(...parsedValues) : 0;
 }
 
-function guessMimeType(filePath: string, kind: "video" | "audio"): string {
+function guessMimeType(filePath: string, kind: "video" | "audio" | "image"): string {
   const extension = path.extname(filePath).toLowerCase();
   const map: Record<string, string> = {
     ".aac": "audio/aac",
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
     ".flac": "audio/flac",
+    ".gif": "image/gif",
+    ".jpeg": "image/jpeg",
+    ".jpg": "image/jpeg",
     ".m4a": "audio/mp4",
     ".mkv": "video/x-matroska",
     ".mov": "video/quicktime",
     ".mp3": "audio/mpeg",
     ".mp4": "video/mp4",
     ".ogg": "audio/ogg",
+    ".png": "image/png",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
     ".wav": "audio/wav",
     ".webm": "video/webm",
+    ".webp": "image/webp",
   };
-  return map[extension] ?? (kind === "video" ? "video/mp4" : "audio/mpeg");
+  return map[extension] ?? (kind === "video" ? "video/mp4" : kind === "image" ? "image/png" : "audio/mpeg");
 }
 
 async function runCommand(command: string, args: readonly string[]): Promise<CommandRunResult> {
@@ -155,7 +169,8 @@ export async function probeMediaFileWithFfprobe(
     throw new Error(`ffprobe did not detect any audio or video streams for ${absolutePath}.`);
   }
 
-  const kind = videoStreams.length > 0 ? "video" : "audio";
+  const extension = path.extname(absolutePath).toLowerCase();
+  const isImageFile = LIKELY_IMAGE_EXTENSIONS.has(extension);
   const primaryVideoStream = videoStreams[0];
   const fileStats = await stat(absolutePath);
   const durationSeconds = parseDurationSeconds(
@@ -163,6 +178,23 @@ export async function probeMediaFileWithFfprobe(
     primaryVideoStream?.duration,
     audioStreams[0]?.duration
   );
+
+  // Images produce a video stream via ffprobe but with zero or negligible duration.
+  // Treat them as image assets with a default still-frame duration.
+  if (isImageFile && videoStreams.length > 0 && durationSeconds <= 0.01) {
+    return {
+      kind: "image",
+      filename: path.basename(absolutePath),
+      mimeType: guessMimeType(absolutePath, "image"),
+      sizeBytes: fileStats.size,
+      durationSeconds: DEFAULT_IMAGE_DURATION_SECONDS,
+      width: primaryVideoStream?.width,
+      height: primaryVideoStream?.height,
+      hasAudio: false,
+    };
+  }
+
+  const kind = videoStreams.length > 0 ? "video" : "audio";
 
   return {
     kind,

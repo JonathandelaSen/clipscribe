@@ -90,7 +90,7 @@ test("interactive create-and-export prompts ask export settings before create fi
             return "./exports";
           case "Project name":
             return "Interactive Flow";
-          case "Video clip 1 path or folder":
+          case "Clip 1 path or folder (video or image)":
             return "/repo/source.mp4";
           case "Label":
             return "Clip One";
@@ -123,7 +123,7 @@ test("interactive create-and-export prompts ask export settings before create fi
     "Project name",
   ]);
   assert.ok(messages.indexOf("Aspect ratio") > messages.indexOf("Project name"));
-  assert.ok(messages.indexOf("Video clip 1 path or folder") > messages.indexOf("Aspect ratio"));
+  assert.ok(messages.indexOf("Clip 1 path or folder (video or image)") > messages.indexOf("Aspect ratio"));
 });
 
 test("interactive create-and-export lets a folder input open the media browser for video selection", async (t) => {
@@ -145,7 +145,7 @@ test("interactive create-and-export lets a folder input open the media browser f
             return "./exports";
           case "Project name":
             return "Interactive Flow";
-          case "Video clip 1 path or folder":
+          case "Clip 1 path or folder (video or image)":
             return tempDir;
           case "Optional audio file or folder path (leave blank to skip)":
             return "";
@@ -372,4 +372,68 @@ test("create-and-export leaves bundle and workspace on disk when export fails", 
   const bundlePath = path.join(tempDir, "pipeline-failure.clipscribe-project");
   await access(path.join(bundlePath, "manifest.json"));
   await access(path.join(bundlePath, "project.json"));
+});
+
+test("exportTimelineProjectWorkspace appends default filename when outputPath is an existing directory", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const workspacePath = path.join(tempDir, "project.json");
+  const workspace = {
+    schemaVersion: 1,
+    project: {
+      id: "p1",
+      name: "Directory Test",
+      aspectRatio: "16:9",
+      timeline: {
+        videoClips: [],
+        audioItems: [],
+        imageItems: [],
+        playheadSeconds: 0,
+      },
+    },
+    assets: [],
+    assetPathsById: {},
+    createdAt: Date.now(),
+  };
+  await writeFile(workspacePath, JSON.stringify(workspace), "utf8");
+
+  // Mock exportProject to capture the resolved output path
+  let capturedOutputPath = "";
+  const mockExportProject = async (input: any) => {
+    capturedOutputPath = input.outputPath;
+    return {
+      outputPath: input.outputPath,
+      filename: "test.mp4",
+      width: 1920,
+      height: 1080,
+      sizeBytes: 100,
+      durationSeconds: 10,
+      warnings: [],
+      ffmpegCommandPreview: [],
+      notes: [],
+      dryRun: false,
+    };
+  };
+
+  const { exportTimelineProjectWorkspace } = await import("../../../src/lib/editor/workspace-cli.js");
+
+  await exportTimelineProjectWorkspace(
+    {
+      projectPath: tempDir,
+      outputPath: tempDir, // Use the directory as output
+      resolution: "1080p",
+      dryRun: false,
+      force: true,
+      json: true,
+    },
+    {
+      exportProject: mockExportProject as any,
+    }
+  );
+
+  assert.equal(path.basename(capturedOutputPath), "directory-test_16-9_1080p.mp4");
+  assert.equal(path.dirname(capturedOutputPath), tempDir);
 });

@@ -22,6 +22,17 @@ const LIKELY_VIDEO_EXTENSIONS = new Set([
   ".webm",
   ".wmv",
 ]);
+const LIKELY_IMAGE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".tif",
+  ".tiff",
+  ".webp",
+]);
 const LIKELY_AUDIO_EXTENSIONS = new Set([
   ".aac",
   ".aif",
@@ -106,7 +117,7 @@ async function isReadableFile(filePath: string): Promise<boolean> {
 function isLikelyMediaFilePath(filePath: string, kind: "video" | "audio"): boolean {
   const extension = path.extname(filePath).toLowerCase();
   return kind === "video"
-    ? LIKELY_VIDEO_EXTENSIONS.has(extension)
+    ? LIKELY_VIDEO_EXTENSIONS.has(extension) || LIKELY_IMAGE_EXTENSIONS.has(extension)
     : LIKELY_AUDIO_EXTENSIONS.has(extension);
 }
 
@@ -374,7 +385,7 @@ export async function promptForMediaFilePath(
   return browseForPath({
     prompt:
       kind === "video"
-        ? "Choose a video file to add to the timeline"
+        ? "Choose a video or image file to add to the timeline"
         : "Choose an audio file to use as the track",
     currentDirectoryLabel: "Browse this folder",
     startDirectory,

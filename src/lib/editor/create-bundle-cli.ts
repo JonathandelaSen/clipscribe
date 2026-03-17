@@ -403,10 +403,10 @@ async function promptVideoClips(
 
   if (clips.length === 0) {
     console.log(
-      "Add one or more video files. Paste a file path, or enter a folder path to browse its media files. Leave the path blank after the last clip."
+      "Add one or more video or image files. Paste a file path, or enter a folder path to browse its media files. Leave the path blank after the last clip."
     );
   } else {
-    console.log(`Starting with ${clips.length} video clip${clips.length === 1 ? "" : "s"} from the command line.`);
+    console.log(`Starting with ${clips.length} clip${clips.length === 1 ? "" : "s"} from the command line.`);
   }
 
   while (
@@ -417,8 +417,8 @@ async function promptVideoClips(
     }))
   ) {
     const normalizedSourcePath = await promptMediaSourcePath(promptApi, {
-      message: `Video clip ${clips.length + 1} path or folder`,
-      label: `Video clip ${clips.length + 1} path`,
+      message: `Clip ${clips.length + 1} path or folder (video or image)`,
+      label: `Clip ${clips.length + 1} path`,
       kind: "video",
       allowBlank: clips.length > 0,
       blankValidationMessage: "At least one video clip is required.",

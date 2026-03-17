@@ -165,7 +165,7 @@ export function getCreateAndExportTimelineProjectHelpText(): string {
     "  --interactive                Force the full prompt-based wizard",
     "  --name <value>               Project name",
     "  --aspect <16:9|9:16|1:1|4:5> Output aspect ratio",
-    "  --video <path>               Add a video clip in sequence order (repeatable)",
+    "  --video <path>               Add a video or image clip in sequence order (repeatable)",
     "  --audio <path>               Add one optional top-level audio track",
     "  --reverse <index>            Reverse the given 1-based video clip index (repeatable)",
     "  --video-trim <i:start:end>   Override one clip trim window (repeatable)",
@@ -345,7 +345,7 @@ export async function prepareCreateAndExportTimelineProjectOptions(
         cwd,
         normalizeCliPathInput(
           await promptApi.promptTextValue({
-            message: "Final MP4 output path",
+            message: "Final MP4 output path (include .mp4 or just a directory)",
             initial: exportOutputPath ?? "",
             validate: (value) => (value.trim() ? true : "Final MP4 output path is required."),
           }),
