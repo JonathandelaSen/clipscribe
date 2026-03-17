@@ -1,0 +1,147 @@
+{
+  "app": {
+    "name": "Clipscribe",
+    "description": "Web-based video editor and audio transcriber for social media clips and news videos, supporting automated transcription, translation, and timeline-based rendering."
+  },
+  "operations": [
+    {
+      "id": "create_news_video",
+      "goal": "Generate a YouTube-ready video from an infographic and audio track.",
+      "category": "Generator",
+      "tags": ["ffmpeg", "news", "automation"],
+      "surfaces": ["cli"],
+      "inputs": [
+        { "name": "deliver_dir", "type": "directory" },
+        { "name": "image_path", "type": "file:image" },
+        { "name": "audio_path", "type": "file:audio" }
+      ],
+      "outputs": [
+        { "name": "news_video_mp4", "type": "file:video" }
+      ],
+      "invocation": {
+        "cli": "npm run create:news-video -- --deliver-dir /path/to/deliver"
+      },
+      "kind": "public",
+      "status": "ready",
+      "steps": [
+        "parse_args",
+        "resolve_inputs",
+        "probe_audio_duration",
+        "build_filter_graph",
+        "render_ffmpeg"
+      ]
+    },
+    {
+      "id": "create_timeline_project",
+      "goal": "Initialize a portable timeline project bundle from raw video source.",
+      "category": "Project",
+      "tags": ["editor", "bundle", "import"],
+      "surfaces": ["cli"],
+      "inputs": [
+        { "name": "source_media", "type": "file:video" }
+      ],
+      "outputs": [
+        { "name": "timeline_bundle", "type": "file:zip" }
+      ],
+      "invocation": {
+        "cli": "npm run create:timeline-project -- --input /path/to/video.mp4 --output ./projects/my-project"
+      },
+      "kind": "public",
+      "status": "ready",
+      "steps": [
+        "parse_args",
+        "normalize_input",
+        "prompt_options",
+        "resolve_options",
+        "build_bundle_plan",
+        "check_source_files",
+        "copy_media_files",
+        "write_manifest"
+      ]
+    },
+    {
+      "id": "export_timeline_project",
+      "goal": "Render a timeline project into a final video file.",
+      "category": "Project",
+      "tags": ["editor", "render", "export"],
+      "surfaces": ["cli"],
+      "inputs": [
+        { "name": "timeline_bundle", "type": "file:zip" }
+      ],
+      "outputs": [
+        { "name": "exported_video", "type": "file:video" }
+      ],
+      "invocation": {
+        "cli": "npm run export:timeline-project <project-id> <output-path>"
+      },
+      "kind": "public",
+      "status": "ready"
+    },
+    {
+      "id": "import_timeline_project",
+      "goal": "Import a project bundle into the local Dexie database for browser editing.",
+      "category": "Project",
+      "tags": ["editor", "database", "import"],
+      "surfaces": ["cli"],
+      "inputs": [
+        { "name": "timeline_bundle", "type": "file:zip" }
+      ],
+      "outputs": [
+        { "name": "local_db_project", "type": "indexeddb" }
+      ],
+      "invocation": {
+        "cli": "npm run import:timeline-project /path/to/bundle.zip"
+      },
+      "kind": "public",
+      "status": "ready"
+    },
+    {
+      "id": "create_and_export_timeline_project",
+      "goal": "Create a project bundle and immediately render it to a video file in one command.",
+      "category": "Workflow",
+      "tags": ["editor", "automation", "one-shot"],
+      "surfaces": ["cli"],
+      "inputs": [
+        { "name": "source_media", "type": "file:video" }
+      ],
+      "outputs": [
+        { "name": "exported_video", "type": "file:video" },
+        { "name": "timeline_bundle", "type": "file:zip" }
+      ],
+      "invocation": {
+        "cli": "npm run create-and-export:timeline-project -- --input /path/to/video.mp4 --output ./exports/final.mp4"
+      },
+      "kind": "public",
+      "status": "ready",
+      "steps": [
+        "create_bundle",
+        "initialize_workspace",
+        "render_video"
+      ]
+    },
+    {
+      "id": "test_core",
+      "goal": "Run core logic and utility unit tests.",
+      "category": "Quality",
+      "tags": ["test", "node"],
+      "surfaces": ["cli"],
+      "invocation": {
+        "cli": "npm run test:core"
+      },
+      "kind": "public",
+      "status": "ready"
+    },
+    {
+      "id": "test_contracts",
+      "goal": "Verify export contracts and geometry logic via specialized test suite.",
+      "category": "Quality",
+      "tags": ["test", "contract"],
+      "surfaces": ["cli"],
+      "invocation": {
+        "cli": "npm run test:contracts"
+      },
+      "kind": "public",
+      "status": "ready"
+    }
+  ]
+}
