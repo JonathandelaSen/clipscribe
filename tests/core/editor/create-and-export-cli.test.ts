@@ -434,6 +434,6 @@ test("exportTimelineProjectWorkspace appends default filename when outputPath is
     }
   );
 
-  assert.equal(path.basename(capturedOutputPath), "directory-test_16-9_1080p.mp4");
+  assert.equal(path.basename(capturedOutputPath), "Directory_Test__16x9__1080p.mp4");
   assert.equal(path.dirname(capturedOutputPath), tempDir);
 });
