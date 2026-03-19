@@ -20,6 +20,7 @@ export interface ProjectRepository {
   getAssetTranscript(assetId: string): Promise<AssetTranscriptRecord | undefined>;
   listProjectTranscripts(projectId?: string): Promise<AssetTranscriptRecord[]>;
   putAssetTranscript(record: AssetTranscriptRecord): Promise<void>;
+  deleteAssetTranscript(assetId: string): Promise<void>;
   listShortProjects(projectId?: string): Promise<CreatorShortProjectRecord[]>;
   putShortProject(record: CreatorShortProjectRecord): Promise<void>;
   deleteShortProject(shortProjectId: string): Promise<void>;
@@ -110,6 +111,10 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
 
     async putAssetTranscript(record) {
       await database.assetTranscripts.put(record);
+    },
+
+    async deleteAssetTranscript(assetId) {
+      await database.assetTranscripts.delete(assetId);
     },
 
     async listShortProjects(projectId) {

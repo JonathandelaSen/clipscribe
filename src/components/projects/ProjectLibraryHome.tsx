@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FolderKanban, Film, Sparkles, Trash2 } from "lucide-react";
+import { Film, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DragDropZone } from "@/components/DragDropZone";
@@ -43,28 +43,21 @@ export function ProjectLibraryHome() {
   };
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.2),transparent_28%),radial-gradient(circle_at_top_right,rgba(251,146,60,0.16),transparent_28%),linear-gradient(180deg,#04070d,#090e18_52%,#04070d)] px-4 py-6 sm:px-8 lg:px-12">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-8">
-        <header className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[linear-gradient(135deg,rgba(255,255,255,0.07),rgba(255,255,255,0.02))] p-6 shadow-[0_28px_90px_rgba(0,0,0,0.45)] sm:p-8">
-          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(34,211,238,0.16),transparent_34%),radial-gradient(circle_at_80%_0%,rgba(251,146,60,0.18),transparent_28%)]" />
-          <div className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
-            <div className="space-y-4">
-              <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs uppercase tracking-[0.28em] text-cyan-100">
-                <FolderKanban className="h-4 w-4" />
-                Content Projects
-              </div>
-              <div className="space-y-2">
-                <h1 className="text-4xl font-semibold tracking-tight text-white sm:text-5xl">Todo tu contenido vive dentro de proyectos</h1>
-                <p className="max-w-3xl text-sm leading-6 text-white/60 sm:text-base">
-                  Sube un video o audio para crear el proyecto raíz. Desde ahí podrás gestionar assets, transcripciones, shorts, timeline y exports sin saltar entre herramientas desconectadas.
-                </p>
-              </div>
+    <main className="flex-1 w-full bg-transparent p-4 sm:p-6 lg:p-8 animate-in fade-in duration-500">
+      <div className="flex w-full flex-col gap-8">
+        <header className="relative flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between pb-4">
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <h1 className="text-3xl font-semibold tracking-tight text-white/90">Project Library</h1>
+              <p className="max-w-2xl text-sm text-white/50">
+                Sube un video o audio para crear un proyecto. Gestiona assets, transcripciones, shorts y la timeline centralizadamente.
+              </p>
             </div>
-            <div className="rounded-[1.6rem] border border-white/10 bg-black/20 px-5 py-4 text-sm text-white/65 backdrop-blur-xl">
-              <div className="text-[11px] uppercase tracking-[0.28em] text-white/40">Biblioteca</div>
-              <div className="mt-2 text-2xl font-semibold text-white">{projects.length}</div>
-              <div>proyecto{projects.length === 1 ? "" : "s"} guardado{projects.length === 1 ? "" : "s"}</div>
-            </div>
+          </div>
+          <div className="rounded-2xl border border-white/5 bg-black/20 px-5 py-3 text-sm text-white/60 shadow-sm">
+            <div className="text-[10px] uppercase tracking-[0.2em] text-white/40">Total</div>
+            <div className="mt-1 text-xl font-semibold text-white/90">{projects.length}</div>
+            <div className="text-xs">proyecto{projects.length === 1 ? "" : "s"}</div>
           </div>
         </header>
 

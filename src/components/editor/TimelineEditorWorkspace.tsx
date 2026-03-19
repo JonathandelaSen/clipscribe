@@ -43,9 +43,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { BackgroundTaskBanner } from "@/components/tasks/BackgroundTaskBanner";
+import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
 import { secondsToClock } from "@/lib/creator/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLatestSubtitleForLanguage, getLatestTranscript, type HistoryItem } from "@/lib/history";
+import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useEditorProject } from "@/hooks/useEditorLibrary";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { downloadBlob, readMediaMetadata } from "@/lib/editor/media";
@@ -56,7 +59,6 @@ import {
 import {
   EDITOR_EXPORT_ENGINE_LABELS,
   getEditorExportCapability,
-  getEditorExportOutputLabel,
 } from "@/lib/editor/export-capabilities";
 import {
   EDITOR_ASPECT_RATIO_LABELS,
@@ -143,11 +145,9 @@ import {
   createDefaultVideoClip,
   createEditorAssetRecord,
   getEditorProjectPersistenceFingerprint,
-  markEditorProjectExporting,
   markEditorProjectFailed,
   markEditorProjectSaved,
   normalizeLegacyEditorProjectRecord,
-  restoreEditorProjectAfterCanceledExport,
   serializeEditorProjectForPersistence,
 } from "@/lib/editor/storage";
 import type {
@@ -164,6 +164,7 @@ import type {
   TimelineVideoClip,
 } from "@/lib/editor/types";
 import { parseSrt } from "@/lib/srt";
+import { createDexieEditorRepository } from "@/lib/repositories/editor-repo";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -201,7 +202,6 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { ExportSettingsDialog } from "@/components/editor/ExportSettingsDialog";
-import { ExportProgressOverlay } from "@/components/editor/ExportProgressOverlay";
 
 const ASPECT_OPTIONS: EditorAspectRatio[] = ["16:9", "9:16", "1:1", "4:5"];
 const EDITOR_PANEL_CLASS =
@@ -218,6 +218,26 @@ const EDITOR_TOOLBAR_BUTTON_CLASS =
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
 const IMAGE_TRACK_MIN_ZOOM = 0.6;
 const IMAGE_TRACK_MAX_ZOOM = 6;
+
+function getRenderTaskStatus(stage: BrowserRenderStage) {
+  if (stage === "preparing") return "preparing" as const;
+  if (stage === "rendering") return "running" as const;
+  return "finalizing" as const;
+}
+
+function getExportTaskMessage(stage: BrowserRenderStage) {
+  if (stage === "preparing") return "Preparing export snapshot";
+  if (stage === "rendering") return "Rendering timeline export";
+  if (stage === "handoff") return "Saving export output";
+  return "Wrapping up export";
+}
+
+function getBakeTaskMessage(stage: BrowserRenderStage) {
+  if (stage === "preparing") return "Preparing bake workspace";
+  if (stage === "rendering") return "Baking joined clip";
+  if (stage === "handoff") return "Applying baked clip to the timeline";
+  return "Wrapping up bake";
+}
 
 type InspectorVideoTab = "edit" | "transform" | "join";
 
@@ -688,8 +708,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const renderSessionCounterRef = useRef(0);
   const exportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
   const bakeSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
-  const exportRestoreSnapshotRef = useRef<Pick<EditorProjectRecord, "status" | "latestExport" | "lastError"> | null>(null);
-  const exportProjectRef = useRef<EditorProjectRecord | null>(null);
+  const mountedRef = useRef(false);
+  const projectStateRef = useRef<EditorProjectRecord | null>(null);
+  const editorRepositoryRef = useRef(createDexieEditorRepository());
 
   const {
     project: loadedProject,
@@ -699,10 +720,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     saveProject,
     saveAssets,
     deleteAsset,
-    saveExport,
     resolveAssetFile,
   } = useEditorProject(projectId);
   const { history } = useHistoryLibrary(projectId);
+  const { startTimelineBake, startTimelineExport, getTaskForResource, cancelTask } = useBackgroundTasks();
 
   const [project, setProject] = useState<EditorProjectRecord | null>(null);
   const [assets, setAssets] = useState<EditorAssetRecord[]>([]);
@@ -717,17 +738,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [isPickingExportDestination, setIsPickingExportDestination] = useState(false);
   const [isSavePickerSupported, setIsSavePickerSupported] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportStage, setExportStage] = useState<BrowserRenderStage>("preparing");
-  const [exportProgress, setExportProgress] = useState(0);
-  const [bakeStage, setBakeStage] = useState<BrowserRenderStage>("preparing");
-  const [bakeProgress, setBakeProgress] = useState(0);
-  const [bakeProjectName, setBakeProjectName] = useState("");
   const [isPlaying, setIsPlaying] = useState(false);
   const [previewMode, setPreviewMode] = useState<PreviewMode>({ kind: "timeline" });
   const [inspectorVideoTab, setInspectorVideoTab] = useState<InspectorVideoTab>("edit");
   const [selectedVideoClipIds, setSelectedVideoClipIds] = useState<string[]>([]);
-  const [isBakingClip, setIsBakingClip] = useState(false);
   const [reversePreviewCache, setReversePreviewCache] = useState<Record<string, File>>({});
   const [reversePreviewLoadingKeys, setReversePreviewLoadingKeys] = useState<string[]>([]);
   const [reversePreviewFailedKeys, setReversePreviewFailedKeys] = useState<string[]>([]);
@@ -747,37 +761,28 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     leftPct: 24,
     rightPct: 24,
   });
+  const activeExportTask = getTaskForResource({ kind: "timeline-export", projectId });
+  const activeBakeTask = getTaskForResource({ kind: "timeline-bake", projectId });
+  const isExporting = Boolean(activeExportTask && isBackgroundTaskActive(activeExportTask));
+  const isBakingClip = Boolean(activeBakeTask && isBackgroundTaskActive(activeBakeTask));
   const isRenderBusy = isExporting || isBakingClip;
+  const isInteractionLocked = isBakingClip;
   const systemExportProgressTimerRef = useRef<number | null>(null);
 
   const beginRenderSession = useCallback(() => {
     return createActiveBrowserRenderSession(++renderSessionCounterRef.current);
   }, []);
 
-  const syncExportStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
-    const session = exportSessionRef.current;
-    if (!session || session.id !== sessionId) return;
-    session.stage = stage;
-    setExportStage(stage);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
-  const syncBakeStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
-    const session = bakeSessionRef.current;
-    if (!session || session.id !== sessionId) return;
-    session.stage = stage;
-    setBakeStage(stage);
-  }, []);
-
-  const commitCanceledExportRestore = useCallback(
-    (projectToRestore: EditorProjectRecord | null) => {
-      if (!projectToRestore) return;
-      setProject(projectToRestore);
-      void saveProject(projectToRestore).catch((error) => {
-        console.error("Failed to persist canceled export state", error);
-      });
-    },
-    [saveProject]
-  );
+  useEffect(() => {
+    projectStateRef.current = project;
+  }, [project]);
 
   useEffect(() => {
     setIsSavePickerSupported(isEditorSavePickerSupported());
@@ -818,15 +823,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     systemExportProgressTimerRef.current = null;
   }, []);
 
-  const startSystemExportProgressRamp = useCallback(() => {
+  const startSystemExportProgressRamp = useCallback((onProgress: (progress: number) => void) => {
     stopSystemExportProgressRamp();
+    let currentProgress = 18;
     systemExportProgressTimerRef.current = window.setInterval(() => {
-      setExportProgress((current) => {
-        if (current >= 92) return current;
-        const remaining = 92 - current;
-        const step = Math.max(1, Math.round(remaining * 0.12));
-        return Math.min(92, current + step);
-      });
+      if (currentProgress >= 92) return;
+      const remaining = 92 - currentProgress;
+      const step = Math.max(1, Math.round(remaining * 0.12));
+      currentProgress = Math.min(92, currentProgress + step);
+      onProgress(currentProgress);
     }, 450);
   }, [stopSystemExportProgressRamp]);
 
@@ -1043,10 +1048,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
     return reasons;
   }, [exportCapability.reasons, exportDestination, isSavePickerSupported, project, resolvedAssetsMap]);
-  const exportOutputLabel = useMemo(
-    () => getEditorExportOutputLabel(exportResolution),
-    [exportResolution]
-  );
 
   const selectedItem = project?.timeline.selectedItem;
   const clipMap = useMemo(
@@ -1459,7 +1460,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [panelVisibility.left]);
 
   useEffect(() => {
-    if (!isHistoryOpen || isRenderBusy) return;
+    if (!isHistoryOpen || isInteractionLocked) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node | null;
       if (target && (historyPanelRef.current?.contains(target) || historyButtonRef.current?.contains(target))) {
@@ -1478,13 +1479,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isHistoryOpen, isRenderBusy]);
+  }, [isHistoryOpen, isInteractionLocked]);
 
   useEffect(() => {
-    if (!isRenderBusy) return;
+    if (!isInteractionLocked) return;
     setIsHistoryOpen(false);
     setIsPlaying(false);
-  }, [isRenderBusy]);
+  }, [isInteractionLocked]);
 
   useEffect(() => {
     if (!isRenderBusy) return;
@@ -2143,50 +2144,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const handleCancelBake = useCallback(() => {
-    const session = bakeSessionRef.current;
-    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
-    session.controller.abort();
-    resetFFmpeg();
-    bakeSessionRef.current = null;
-    setIsBakingClip(false);
-    setBakeStage("preparing");
-    setBakeProgress(0);
-    setBakeProjectName("");
-    toast("Bake canceled");
-  }, []);
+    if (!activeBakeTask) return;
+    cancelTask(activeBakeTask.id);
+  }, [activeBakeTask, cancelTask]);
 
   const handleCancelExport = useCallback(() => {
-    const session = exportSessionRef.current;
-    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
-
-    session.controller.abort();
-    if (exportEngine === "browser") {
-      resetFFmpeg();
-    }
-    stopSystemExportProgressRamp();
-    exportSessionRef.current = null;
-    setIsExporting(false);
-    setExportStage("preparing");
-    setExportProgress(0);
-    setExportDestination(null);
-
-    const exportingProject = exportProjectRef.current;
-    const projectToRestore =
-      exportingProject != null
-        ? restoreEditorProjectAfterCanceledExport(
-            exportingProject,
-            exportRestoreSnapshotRef.current,
-            Date.now()
-          )
-        : null;
-
-    if (projectToRestore) {
-      exportProjectRef.current = projectToRestore;
-      commitCanceledExportRestore(projectToRestore);
-    }
-
-    toast("Export canceled");
-  }, [commitCanceledExportRestore, exportEngine, stopSystemExportProgressRamp]);
+    if (!activeExportTask) return;
+    cancelTask(activeExportTask.id);
+  }, [activeExportTask, cancelTask]);
 
   const bakeSelectedTimelineGroup = async () => {
     if (!project || !selectedVideoGroup || selectedGroupClipPlacements.length !== selectedVideoGroup.clipIds.length) {
@@ -2207,103 +2172,152 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     });
     const requiredAssetIdSet = new Set(requiredAssetIds);
     const bakeResolvedAssets = resolvedAssets.filter((resolved) => requiredAssetIdSet.has(resolved.asset.id));
-    const session = beginRenderSession();
-    bakeSessionRef.current = session;
-    setBakeProjectName(bakeProject.name);
-    setBakeProgress(1);
-    setBakeStage(session.stage);
-    setIsBakingClip(true);
-    setIsPlaying(false);
+    startTimelineBake({
+      projectId,
+      title: `Baking ${selectedVideoGroup.label}`,
+      message: `Rendering a reusable baked clip from ${selectedVideoGroup.label}`,
+      run: async (task) => {
+        const session = beginRenderSession();
+        bakeSessionRef.current = session;
+        setIsPlaying(false);
+        task.update({
+          status: "preparing",
+          progress: 1,
+          message: getBakeTaskMessage(session.stage),
+        });
+        task.setCancel(() => {
+          if (!isBrowserRenderCancelableStage(session.stage)) return;
+          session.controller.abort();
+          resetFFmpeg();
+          bakeSessionRef.current = null;
+          toast("Bake canceled");
+        });
 
-    try {
-      const result = await localEditorExportService.exportProject({
-        project: bakeProject,
-        resolvedAssets: bakeResolvedAssets,
-        historyMap,
-        resolution: exportResolution,
-        onProgress: setBakeProgress,
-        renderLifecycle: {
-          signal: session.controller.signal,
-          onStageChange: (stage) => syncBakeStage(session.id, stage),
-        },
-      });
-      if (bakeSessionRef.current?.id !== session.id) return;
-      const metadata = await readMediaMetadata(result.file);
-      if (bakeSessionRef.current?.id !== session.id) return;
-      const bakedAsset = createEditorAssetRecord({
-        projectId: project.id,
-        role: "derived",
-        origin: "timeline-export",
-        kind: "video",
-        filename: result.file.name,
-        mimeType: result.file.type || "video/mp4",
-        sizeBytes: result.file.size,
-        durationSeconds: metadata.durationSeconds || getProjectDuration(bakeProject),
-        width: metadata.width ?? result.width,
-        height: metadata.height ?? result.height,
-        hasAudio: metadata.hasAudio,
-        sourceType: "upload",
-        captionSource: { kind: "none" },
-        fileBlob: result.file,
-      });
-      const bakedClip = createDefaultVideoClip({
-        assetId: bakedAsset.id,
-        label: bakedLabel,
-        durationSeconds: bakedAsset.durationSeconds,
-      });
+        try {
+          const result = await localEditorExportService.exportProject({
+            project: bakeProject,
+            resolvedAssets: bakeResolvedAssets,
+            historyMap,
+            resolution: exportResolution,
+            onProgress: (progress) => {
+              task.update({
+                status: "running",
+                progress,
+                message: "Baking joined clip",
+              });
+            },
+            renderLifecycle: {
+              signal: session.controller.signal,
+              onStageChange: (stage) => {
+                const currentSession = bakeSessionRef.current;
+                if (!currentSession || currentSession.id !== session.id) return;
+                currentSession.stage = stage;
+                task.update({
+                  status: getRenderTaskStatus(stage),
+                  progress: stage === "handoff" ? 96 : undefined,
+                  message: getBakeTaskMessage(stage),
+                });
+              },
+            },
+          });
+          if (bakeSessionRef.current?.id !== session.id || task.isCanceled()) return;
 
-      await saveAssets([bakedAsset]);
-      if (bakeSessionRef.current?.id !== session.id) return;
-      setAssets((current) => [...current, bakedAsset]);
-      bakedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
-      setPreviewMode({ kind: "timeline" });
-      const nextTimeline = replaceTimelineClipGroupWithClip(
-        project.timeline.videoClips,
-        project.timeline.videoClipGroups,
-        selectedVideoGroup.id,
-        bakedClip
-      );
-      const bakedPlacement = getTimelineClipPlacements(nextTimeline.videoClips).find(
-        (placement) => placement.clip.id === bakedClip.id
-      );
-      updateProject((current) => {
-        return {
-          ...current,
-          assetIds: current.assetIds.includes(bakedAsset.id)
-            ? current.assetIds
-            : [...current.assetIds, bakedAsset.id],
-          timeline: {
-            ...current.timeline,
-            videoClips: nextTimeline.videoClips,
-            videoClipGroups: nextTimeline.videoClipGroups,
-            selectedItem: { kind: "video", id: bakedClip.id },
-          },
-        };
-      });
-      if (bakedPlacement) {
-        setTimelinePlayhead(bakedPlacement.startSeconds);
-      }
-      setFocusedJoinedClipId(null);
-      setSelectedVideoClipIds([bakedClip.id]);
-      setInspectorVideoTab("edit");
-      syncBakeStage(session.id, "complete");
-      toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
-    } catch (error) {
-      if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
-      console.error("Failed to bake joined clip", error);
-      toast.error(message.split("\n")[0] || "Failed to bake the joined clip.");
-    } finally {
-      if (bakeSessionRef.current?.id === session.id) {
-        bakeSessionRef.current = null;
-        setIsBakingClip(false);
-        setBakeStage("preparing");
-        setBakeProgress(0);
-        setBakeProjectName("");
-      }
-    }
+          task.update({
+            status: "finalizing",
+            progress: 96,
+            message: "Applying baked clip to the timeline",
+          });
+
+          const metadata = await readMediaMetadata(result.file);
+          if (bakeSessionRef.current?.id !== session.id || task.isCanceled()) return;
+
+          const bakedAsset = createEditorAssetRecord({
+            projectId: project.id,
+            role: "derived",
+            origin: "timeline-export",
+            kind: "video",
+            filename: result.file.name,
+            mimeType: result.file.type || "video/mp4",
+            sizeBytes: result.file.size,
+            durationSeconds: metadata.durationSeconds || getProjectDuration(bakeProject),
+            width: metadata.width ?? result.width,
+            height: metadata.height ?? result.height,
+            hasAudio: metadata.hasAudio,
+            sourceType: "upload",
+            captionSource: { kind: "none" },
+            fileBlob: result.file,
+          });
+          const bakedClip = createDefaultVideoClip({
+            assetId: bakedAsset.id,
+            label: bakedLabel,
+            durationSeconds: bakedAsset.durationSeconds,
+          });
+
+          const latestProject = projectStateRef.current ?? project;
+          if (!latestProject) return;
+
+          const nextTimeline = replaceTimelineClipGroupWithClip(
+            latestProject.timeline.videoClips,
+            latestProject.timeline.videoClipGroups,
+            selectedVideoGroup.id,
+            bakedClip
+          );
+          const bakedPlacement = getTimelineClipPlacements(nextTimeline.videoClips).find(
+            (placement) => placement.clip.id === bakedClip.id
+          );
+          const nextProject = markEditorProjectSaved(
+            serializeEditorProjectForPersistence(
+              {
+                ...latestProject,
+                assetIds: latestProject.assetIds.includes(bakedAsset.id)
+                  ? latestProject.assetIds
+                  : [...latestProject.assetIds, bakedAsset.id],
+                timeline: {
+                  ...latestProject.timeline,
+                  videoClips: nextTimeline.videoClips,
+                  videoClipGroups: nextTimeline.videoClipGroups,
+                  selectedItem: { kind: "video", id: bakedClip.id },
+                },
+              },
+              latestProject.timeline.playheadSeconds
+            ),
+            Date.now()
+          );
+
+          await editorRepositoryRef.current.bulkPutAssets([bakedAsset]);
+          await editorRepositoryRef.current.putProject(nextProject);
+          if (task.isCanceled()) return;
+
+          bakedClipIds.forEach((clipId) => invalidateReversePreviewCache(clipId));
+
+          if (mountedRef.current) {
+            setAssets((current) => [...current, bakedAsset]);
+            setProject(nextProject);
+            setPreviewMode({ kind: "timeline" });
+            if (bakedPlacement) {
+              setTimelinePlayhead(bakedPlacement.startSeconds);
+            }
+            setFocusedJoinedClipId(null);
+            setSelectedVideoClipIds([bakedClip.id]);
+            setInspectorVideoTab("edit");
+          }
+
+          toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
+        } catch (error) {
+          if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted || task.isCanceled()) {
+            return;
+          }
+          const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
+          console.error("Failed to bake joined clip", error);
+          toast.error(message.split("\n")[0] || "Failed to bake the joined clip.");
+          throw error;
+        } finally {
+          if (bakeSessionRef.current?.id === session.id) {
+            bakeSessionRef.current = null;
+          }
+        }
+      },
+    });
   };
 
   const appendAudioAssetToTimeline = (asset: EditorAssetRecord) => {
@@ -3014,190 +3028,233 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const selectedResolution = exportResolution;
     const destination = exportDestination;
     const usesSavePicker = Boolean(isSavePickerSupported && destination);
-    const exportingProject = markEditorProjectExporting(
-      serializeEditorProjectForPersistence(project, persistedPlayheadSecondsRef.current),
-      Date.now()
-    );
-    const session = beginRenderSession();
-    exportSessionRef.current = session;
-    exportRestoreSnapshotRef.current = {
-      status: project.status,
-      latestExport: project.latestExport,
-      lastError: project.lastError,
-    };
-    exportProjectRef.current = exportingProject;
     setIsExportDialogOpen(false);
-    setProject(exportingProject);
-    setIsExporting(true);
-    setExportStage(session.stage);
-    setExportProgress(1);
+    const exportSnapshot = serializeEditorProjectForPersistence(project, persistedPlayheadSecondsRef.current);
 
-    try {
-      await saveProject(exportingProject);
-      if (exportSessionRef.current?.id !== session.id) return;
-
-      const result =
-        selectedEngine === "browser"
-          ? await localEditorExportService.exportProject({
-              project: exportingProject,
-              resolvedAssets,
-              historyMap,
-              resolution: selectedResolution,
-              onProgress: setExportProgress,
-              renderLifecycle: {
-                signal: session.controller.signal,
-                onStageChange: (stage) => syncExportStage(session.id, stage),
-              },
-            })
-          : await (async () => {
-              setExportProgress(10);
-              syncExportStage(session.id, "rendering");
-              setExportProgress(18);
-              startSystemExportProgressRamp();
-              const systemResult = await requestSystemEditorExport({
-                project: exportingProject,
-                resolvedAssets,
-                resolution: selectedResolution,
-                signal: session.controller.signal,
-              });
-              stopSystemExportProgressRamp();
-              return {
-                file: systemResult.file,
-                width: systemResult.width,
-                height: systemResult.height,
-                warnings: systemResult.warnings,
-                ffmpegCommandPreview: systemResult.debugFfmpegCommand,
-                notes: systemResult.debugNotes,
-              };
-            })();
-      if (exportSessionRef.current?.id !== session.id) return;
-
-      syncExportStage(session.id, "handoff");
-      setExportProgress((current) => Math.max(current, 96));
-      if (usesSavePicker && destination) {
-        await writeBlobToEditorSaveFileHandle(destination.handle, result.file);
-      } else {
-        downloadBlob(result.file);
-      }
-      if (exportSessionRef.current?.id !== session.id) return;
-
-      const recordedFilename = usesSavePicker && destination ? destination.name : result.file.name;
-      const now = Date.now();
-      const outputAsset = createEditorAssetRecord({
-        projectId: exportingProject.id,
-        role: "derived",
-        origin: "timeline-export",
-        kind: "video",
-        filename: recordedFilename,
-        mimeType: result.file.type || "video/mp4",
-        sizeBytes: result.file.size,
-        durationSeconds: projectDuration,
-        width: result.width,
-        height: result.height,
-        hasAudio: true,
-        sourceType: "upload",
-        captionSource: { kind: "none" },
-        fileBlob: result.file,
-        now,
-      });
-      await saveAssets([outputAsset]);
-      if (exportSessionRef.current?.id !== session.id) return;
-      setAssets((current) => [...current, outputAsset]);
-
-      const exportRecord = buildEditorExportRecord({
-        projectId: exportingProject.id,
-        outputAssetId: outputAsset.id,
-        engine: selectedEngine,
-        filename: recordedFilename,
-        mimeType: result.file.type,
-        sizeBytes: result.file.size,
-        durationSeconds: projectDuration,
-        aspectRatio: exportingProject.aspectRatio,
-        resolution: selectedResolution,
-        width: result.width,
-        height: result.height,
-        warnings: result.warnings,
-        debugFfmpegCommand: result.ffmpegCommandPreview,
-        debugNotes: result.notes,
-      });
-      await saveExport(exportRecord);
-      if (exportSessionRef.current?.id !== session.id) return;
-
-      const nextProject = markEditorProjectSaved(
-        {
-          ...exportingProject,
-          assetIds: [...exportingProject.assetIds, outputAsset.id],
-          latestExport: {
-            id: exportRecord.id,
-            createdAt: exportRecord.createdAt,
-            filename: exportRecord.filename,
-            aspectRatio: exportRecord.aspectRatio,
-            resolution: exportRecord.resolution,
-            engine: exportRecord.engine,
-            status: exportRecord.status,
-          },
-          lastError: undefined,
-        },
-        now
-      );
-      await saveProject(nextProject);
-      if (exportSessionRef.current?.id !== session.id) return;
-      syncExportStage(session.id, "complete");
-      setProject(nextProject);
-      toast.success(`Exported ${recordedFilename}`);
-    } catch (err) {
-      stopSystemExportProgressRamp();
-      if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted) {
-        return;
-      }
-      if (isAbortLikeError(err)) {
-        return;
-      }
-
-      const message = err instanceof Error ? err.message : "Export failed";
-      const toastMessage = message.split("\n")[0] || "Export failed";
-      try {
-        const failedRecord = buildEditorExportRecord({
-          projectId: exportingProject.id,
-          engine: selectedEngine,
-          filename: usesSavePicker && destination
-            ? destination.name
-            : buildEditorExportFilename(exportingProject.name, exportingProject.aspectRatio, selectedResolution),
-          mimeType: "video/mp4",
-          sizeBytes: 0,
-          durationSeconds: projectDuration,
-          aspectRatio: exportingProject.aspectRatio,
-          resolution: selectedResolution,
-          width: 0,
-          height: 0,
-          error: message,
-          status: "failed",
+    startTimelineExport({
+      projectId,
+      title: `Exporting ${project.name}`,
+      message: `${selectedResolution} · ${EDITOR_EXPORT_ENGINE_LABELS[selectedEngine]}`,
+      run: async (task) => {
+        const session = beginRenderSession();
+        exportSessionRef.current = session;
+        task.update({
+          status: "preparing",
+          progress: 1,
+          message: getExportTaskMessage(session.stage),
         });
-        await saveExport(failedRecord);
-        const nextProject = markEditorProjectFailed(exportingProject, message, Date.now());
-        await saveProject(nextProject);
-        if (exportSessionRef.current?.id === session.id) {
-          setProject(nextProject);
+        task.setCancel(() => {
+          if (!isBrowserRenderCancelableStage(session.stage)) return;
+          session.controller.abort();
+          if (selectedEngine === "browser") {
+            resetFFmpeg();
+          }
+          stopSystemExportProgressRamp();
+          exportSessionRef.current = null;
+          toast("Export canceled");
+        });
+
+        try {
+          const result =
+            selectedEngine === "browser"
+              ? await localEditorExportService.exportProject({
+                  project: exportSnapshot,
+                  resolvedAssets,
+                  historyMap,
+                  resolution: selectedResolution,
+                  onProgress: (progress) => {
+                    task.update({
+                      status: "running",
+                      progress,
+                      message: "Rendering timeline export",
+                    });
+                  },
+                  renderLifecycle: {
+                    signal: session.controller.signal,
+                    onStageChange: (stage) => {
+                      const currentSession = exportSessionRef.current;
+                      if (!currentSession || currentSession.id !== session.id) return;
+                      currentSession.stage = stage;
+                      task.update({
+                        status: getRenderTaskStatus(stage),
+                        progress: stage === "handoff" ? 96 : undefined,
+                        message: getExportTaskMessage(stage),
+                      });
+                    },
+                  },
+                })
+              : await (async () => {
+                  task.update({
+                    status: "running",
+                    progress: 18,
+                    message: "Rendering timeline export",
+                  });
+                  startSystemExportProgressRamp((progress) => {
+                    task.update({
+                      status: "running",
+                      progress,
+                      message: "Rendering timeline export",
+                    });
+                  });
+                  const systemResult = await requestSystemEditorExport({
+                    project: exportSnapshot,
+                    resolvedAssets,
+                    resolution: selectedResolution,
+                    signal: session.controller.signal,
+                  });
+                  stopSystemExportProgressRamp();
+                  return {
+                    file: systemResult.file,
+                    width: systemResult.width,
+                    height: systemResult.height,
+                    warnings: systemResult.warnings,
+                    ffmpegCommandPreview: systemResult.debugFfmpegCommand,
+                    notes: systemResult.debugNotes,
+                  };
+                })();
+          if (exportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+
+          task.update({
+            status: "finalizing",
+            progress: 96,
+            message: "Saving export output",
+          });
+
+          if (usesSavePicker && destination) {
+            await writeBlobToEditorSaveFileHandle(destination.handle, result.file);
+          } else {
+            downloadBlob(result.file);
+          }
+          if (exportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+
+          const recordedFilename = usesSavePicker && destination ? destination.name : result.file.name;
+          const now = Date.now();
+          const outputAsset = createEditorAssetRecord({
+            projectId: exportSnapshot.id,
+            role: "derived",
+            origin: "timeline-export",
+            kind: "video",
+            filename: recordedFilename,
+            mimeType: result.file.type || "video/mp4",
+            sizeBytes: result.file.size,
+            durationSeconds: projectDuration,
+            width: result.width,
+            height: result.height,
+            hasAudio: true,
+            sourceType: "upload",
+            captionSource: { kind: "none" },
+            fileBlob: result.file,
+            now,
+          });
+          await editorRepositoryRef.current.bulkPutAssets([outputAsset]);
+          if (task.isCanceled()) return;
+
+          const exportRecord = buildEditorExportRecord({
+            projectId: exportSnapshot.id,
+            outputAssetId: outputAsset.id,
+            engine: selectedEngine,
+            filename: recordedFilename,
+            mimeType: result.file.type,
+            sizeBytes: result.file.size,
+            durationSeconds: projectDuration,
+            aspectRatio: exportSnapshot.aspectRatio,
+            resolution: selectedResolution,
+            width: result.width,
+            height: result.height,
+            warnings: result.warnings,
+            debugFfmpegCommand: result.ffmpegCommandPreview,
+            debugNotes: result.notes,
+          });
+          await editorRepositoryRef.current.putExport(exportRecord);
+          if (task.isCanceled()) return;
+
+          const latestProject = projectStateRef.current ?? exportSnapshot;
+          const nextProject = markEditorProjectSaved(
+            serializeEditorProjectForPersistence(
+              {
+                ...latestProject,
+                assetIds: latestProject.assetIds.includes(outputAsset.id)
+                  ? latestProject.assetIds
+                  : [...latestProject.assetIds, outputAsset.id],
+                latestExport: {
+                  id: exportRecord.id,
+                  createdAt: exportRecord.createdAt,
+                  filename: exportRecord.filename,
+                  aspectRatio: exportRecord.aspectRatio,
+                  resolution: exportRecord.resolution,
+                  engine: exportRecord.engine,
+                  status: exportRecord.status,
+                },
+                lastError: undefined,
+              },
+              latestProject.timeline.playheadSeconds
+            ),
+            now
+          );
+          await editorRepositoryRef.current.putProject(nextProject);
+          if (task.isCanceled()) return;
+
+          if (mountedRef.current) {
+            setAssets((current) => [...current, outputAsset]);
+            setProject(nextProject);
+            setExportDestination(null);
+          }
+
+          toast.success(`Exported ${recordedFilename}`);
+        } catch (err) {
+          stopSystemExportProgressRamp();
+          if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted || task.isCanceled()) {
+            return;
+          }
+          if (isAbortLikeError(err)) {
+            return;
+          }
+
+          const message = err instanceof Error ? err.message : "Export failed";
+          const toastMessage = message.split("\n")[0] || "Export failed";
+          try {
+            const failedRecord = buildEditorExportRecord({
+              projectId: exportSnapshot.id,
+              engine: selectedEngine,
+              filename: usesSavePicker && destination
+                ? destination.name
+                : buildEditorExportFilename(exportSnapshot.name, exportSnapshot.aspectRatio, selectedResolution),
+              mimeType: "video/mp4",
+              sizeBytes: 0,
+              durationSeconds: projectDuration,
+              aspectRatio: exportSnapshot.aspectRatio,
+              resolution: selectedResolution,
+              width: 0,
+              height: 0,
+              error: message,
+              status: "failed",
+            });
+            await editorRepositoryRef.current.putExport(failedRecord);
+            const latestProject = projectStateRef.current ?? exportSnapshot;
+            const nextProject = markEditorProjectFailed(latestProject, message, Date.now());
+            await editorRepositoryRef.current.putProject(nextProject);
+            if (mountedRef.current) {
+              setProject(nextProject);
+            }
+          } catch (persistError) {
+            console.error("Failed to persist export failure state", persistError);
+            if (mountedRef.current) {
+              setProject(markEditorProjectFailed(projectStateRef.current ?? exportSnapshot, message, Date.now()));
+            }
+          }
+          toast.error(toastMessage);
+          throw err;
+        } finally {
+          stopSystemExportProgressRamp();
+          if (exportSessionRef.current?.id === session.id) {
+            exportSessionRef.current = null;
+          }
+          if (mountedRef.current) {
+            setExportDestination(null);
+          }
         }
-      } catch (persistError) {
-        console.error("Failed to persist export failure state", persistError);
-        if (exportSessionRef.current?.id === session.id) {
-          setProject(markEditorProjectFailed(exportingProject, message, Date.now()));
-        }
-      }
-      toast.error(toastMessage);
-    } finally {
-      stopSystemExportProgressRamp();
-      if (exportSessionRef.current?.id === session.id) {
-        exportSessionRef.current = null;
-        exportProjectRef.current = null;
-        exportRestoreSnapshotRef.current = null;
-        setIsExporting(false);
-        setExportStage("preparing");
-        setExportProgress(0);
-        setExportDestination(null);
-      }
-    }
+      },
+    });
   }, [
     beginRenderSession,
     exportBlockingReasons,
@@ -3209,12 +3266,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     project,
     projectDuration,
     resolvedAssets,
-    saveExport,
-    saveAssets,
-    saveProject,
+    projectId,
+    startTimelineExport,
     startSystemExportProgressRamp,
     stopSystemExportProgressRamp,
-    syncExportStage,
   ]);
 
   const handleCopyLastError = useCallback(async () => {
@@ -3272,7 +3327,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   }, [assets, project, saveProject, saveState]);
 
   const handleShortcutKeyDown = useEffectEvent((event: KeyboardEvent) => {
-    if (isRenderBusy) return;
+    if (isInteractionLocked) return;
     if (isShortcutTargetEditable(event.target)) return;
 
     const usesCommand = event.metaKey || event.ctrlKey;
@@ -3400,17 +3455,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const visibleWindowLabel = `${secondsToClock(visibleStart)} - ${secondsToClock(
     Math.min(projectDuration, visibleEnd)
   )}`;
-  const overlayMode = isBakingClip ? "bake" : "export";
-  const overlayProgress = isBakingClip ? bakeProgress : exportProgress;
-  const overlayProjectName = isBakingClip ? bakeProjectName || project.name : project.name;
-  const overlayStage = isBakingClip ? bakeStage : exportStage;
-  const overlayDestinationName = isBakingClip
-    ? "Timeline Studio"
-    : exportDestination?.name ?? (isSavePickerSupported ? "Preparing destination" : "Browser download");
-  const overlayCanCancel = isBakingClip
-    ? isBrowserRenderCancelableStage(bakeStage)
-    : isBrowserRenderCancelableStage(exportStage);
-  const handleOverlayCancel = isBakingClip ? handleCancelBake : handleCancelExport;
+  const activeRenderTask = activeBakeTask ?? activeExportTask;
   const dropIndicatorPct = (() => {
     if (!draggingVideoBlockId && draggingAssetKind !== "video") return null;
     if (dropTargetIndex != null && visibleVideoBlocks[dropTargetIndex]) {
@@ -3441,7 +3486,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         onChange={(event) => void handleAttachSrt(event.target.files)}
       />
 
-      <div className={cn("mx-auto flex h-full w-full flex-col gap-[6px]", isRenderBusy && "pointer-events-none select-none")}>
+      <div className="mx-auto flex h-full w-full flex-col gap-[6px]">
         <TimelineWorkspaceHeader
           projectName={project.name}
           projectAspectRatio={project.aspectRatio}
@@ -3456,8 +3501,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           onDeleteLastError={handleDeleteLastError}
           onExport={handleOpenExportDialog}
         />
+        {activeRenderTask ? (
+          <div className="px-1.5 pt-1">
+            <BackgroundTaskBanner
+              task={activeRenderTask}
+              onCancel={activeRenderTask.canCancel ? (isBakingClip ? handleCancelBake : handleCancelExport) : undefined}
+            />
+          </div>
+        ) : null}
 
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,0.95fr)_minmax(320px,0.82fr)] gap-[6px]">
+        <div className={cn("grid min-h-0 flex-1 grid-rows-[minmax(0,0.95fr)_minmax(320px,0.82fr)] gap-[6px]", isInteractionLocked && "pointer-events-none select-none")}>
           <section ref={topPanelsRef} className="flex min-h-0 gap-[6px]">
             {panelVisibility.left ? (
               <div
@@ -5324,19 +5377,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         onEngineChange={handleExportEngineChange}
         onPickDestination={handlePickExportDestination}
         onConfirm={handleExport}
-      />
-      <ExportProgressOverlay
-        open={isRenderBusy}
-        mode={overlayMode}
-        projectName={overlayProjectName}
-        resolution={exportResolution}
-        outputLabel={exportOutputLabel}
-        engineLabel={EDITOR_EXPORT_ENGINE_LABELS[exportEngine]}
-        destinationName={overlayDestinationName}
-        progressPct={overlayProgress}
-        stage={overlayStage}
-        canCancel={overlayCanCancel}
-        onCancel={handleOverlayCancel}
       />
       <Toaster theme="dark" position="bottom-center" />
     </main>

@@ -334,6 +334,12 @@ type CreatorHubProps = {
   projectId?: string;
   initialSourceAssetId?: string;
   initialView?: HubView;
+  sourceAssetFallback?: {
+    id: string;
+    filename: string;
+    durationSeconds?: number;
+    projectId?: string;
+  };
 };
 
 export function CreatorHub({
@@ -342,6 +348,7 @@ export function CreatorHub({
   projectId,
   initialSourceAssetId,
   initialView = "start",
+  sourceAssetFallback,
 }: CreatorHubProps = {}) {
   const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary(projectId);
   const {
@@ -428,10 +435,29 @@ export function CreatorHub({
     }
   }, [activeTool, lockedTool]);
 
+  useEffect(() => {
+    if (!initialSourceAssetId) return;
+    setSelectedProjectId(initialSourceAssetId);
+  }, [initialSourceAssetId]);
+
   const selectedProject = useMemo(() => {
-    if (!history.length) return undefined;
-    return history.find((item) => item.id === selectedProjectId) ?? history[0];
-  }, [history, selectedProjectId]);
+    if (history.length) {
+      return history.find((item) => item.id === selectedProjectId) ?? history[0];
+    }
+    if (!sourceAssetFallback) return undefined;
+    if (selectedProjectId && selectedProjectId !== sourceAssetFallback.id) return undefined;
+    return {
+      id: sourceAssetFallback.id,
+      mediaId: sourceAssetFallback.id,
+      filename: sourceAssetFallback.filename,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      timestamp: Date.now(),
+      activeTranscriptVersionId: undefined,
+      transcripts: [],
+      projectId: sourceAssetFallback.projectId ?? projectId,
+    } as HistoryItem & { projectId?: string };
+  }, [history, projectId, selectedProjectId, sourceAssetFallback]);
   const selectedProjectRootId = (selectedProject as (HistoryItem & { projectId?: string }) | undefined)?.projectId ?? selectedProject?.id;
   const selectedSourceAssetId = selectedProject?.id;
 
@@ -495,17 +521,23 @@ export function CreatorHub({
   }, [effectiveSubtitleId, selectedTranscript, subtitleOptions]);
 
   const sourceDurationSeconds = useMemo(() => {
-    if (!selectedProject || !selectedTranscript) return undefined;
-    return getTranscriptDurationSeconds(selectedProject, selectedTranscript.id);
-  }, [selectedProject, selectedTranscript]);
+    if (selectedProject && selectedTranscript) {
+      return getTranscriptDurationSeconds(selectedProject, selectedTranscript.id);
+    }
+    return sourceAssetFallback?.durationSeconds;
+  }, [selectedProject, selectedTranscript, sourceAssetFallback?.durationSeconds]);
 
   const manualFallbackClip = useMemo(() => {
-    if (!selectedProject || !selectedTranscript || !selectedSubtitle) return undefined;
+    if (!selectedProject) return undefined;
     return createManualFallbackClip({
       sourceDurationSeconds,
-      subtitleLanguage: selectedSubtitle.language || selectedTranscript.detectedLanguage || selectedTranscript.requestedLanguage,
+      subtitleLanguage:
+        selectedSubtitle?.language ||
+        selectedTranscript?.detectedLanguage ||
+        selectedTranscript?.requestedLanguage ||
+        "en",
     });
-  }, [selectedProject, selectedSubtitle, selectedTranscript, sourceDurationSeconds]);
+  }, [selectedProject, selectedSubtitle?.language, selectedTranscript?.detectedLanguage, selectedTranscript?.requestedLanguage, sourceDurationSeconds]);
 
   const manualFallbackPlan = useMemo(() => {
     if (!manualFallbackClip) return undefined;
@@ -1382,7 +1414,7 @@ export function CreatorHub({
         />
       </div>
 
-      <div className="relative z-10 max-w-[100rem] mx-auto space-y-8">
+      <div className="relative z-10 w-full space-y-8">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-2">
             <div
@@ -1465,7 +1497,7 @@ export function CreatorHub({
           </div>
         </div>
 
-        <div className="max-w-4xl mx-auto w-full">
+        <div className="w-full">
           <Card className="bg-white/[0.03] border-white/10 text-white shadow-2xl backdrop-blur-xl">
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-white">
@@ -1920,7 +1952,10 @@ export function CreatorHub({
                   <Card 
                     className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
                     onClick={() => {
-                      if (!manualFallbackClip || !manualFallbackPlan) return;
+                      if (!manualFallbackClip || !manualFallbackPlan) {
+                        toast.error("Select a source asset first.");
+                        return;
+                      }
                       setActiveSavedShortProjectId("");
                       setDetachedShortSelection(null);
                       setSelectedClipId(manualFallbackClip.id);

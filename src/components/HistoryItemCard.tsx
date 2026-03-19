@@ -138,6 +138,7 @@ export interface HistoryItemCardProps {
     sourceLanguage: string,
     chunks: SubtitleChunk[]
   ) => string | null | void;
+  onDeleteTranscriptVersion?: (itemId: string, transcriptVersionId: string) => void;
 }
 
 export function HistoryItemCard({
@@ -149,6 +150,7 @@ export function HistoryItemCard({
   onRename,
   onRetranscribe,
   onSaveTranslation,
+  onDeleteTranscriptVersion,
 }: HistoryItemCardProps) {
   const sortedTranscripts = useMemo(() => sortTranscriptVersions(item.transcripts || []), [item.transcripts]);
   const latestTranscript = useMemo(() => getLatestTranscript(item), [item]);
@@ -583,6 +585,21 @@ export function HistoryItemCard({
                     ))}
                 </SelectContent>
               </Select>
+              {onDeleteTranscriptVersion && effectiveSelectedTranscriptId && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="rounded-xl text-white/60 hover:bg-red-500/10 hover:text-red-100 flex-shrink-0"
+                  title="Delete transcript version"
+                  onClick={() => {
+                    if (window.confirm("Delete this transcript version?")) {
+                      onDeleteTranscriptVersion(item.id, effectiveSelectedTranscriptId);
+                    }
+                  }}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              )}
             </div>
 
             <div className="flex flex-wrap items-center gap-2">

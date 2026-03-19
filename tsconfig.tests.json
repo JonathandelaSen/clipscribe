@@ -15,6 +15,7 @@
   "include": [
     "prompts.d.ts",
     "src/lib/creator/core/**/*.ts",
+    "src/lib/background-tasks/**/*.ts",
     "src/lib/editor/**/*.ts",
     "src/lib/transcriber/core/**/*.ts",
     "src/lib/youtube/**/*.ts",
