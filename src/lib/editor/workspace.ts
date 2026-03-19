@@ -77,6 +77,16 @@ function normalizeCaptionSource(raw: unknown, label: string): CaptionSourceRef {
       label: readRequiredString(raw.label, `${label}.label`),
     };
   }
+  if (kind === "asset-subtitle") {
+    return {
+      kind,
+      sourceAssetId: readRequiredString(raw.sourceAssetId, `${label}.sourceAssetId`),
+      transcriptId: readRequiredString(raw.transcriptId, `${label}.transcriptId`),
+      subtitleId: readRequiredString(raw.subtitleId, `${label}.subtitleId`),
+      language: readRequiredString(raw.language, `${label}.language`),
+      label: readRequiredString(raw.label, `${label}.label`),
+    };
+  }
   if (kind === "embedded-srt") {
     return {
       kind,
@@ -113,6 +123,11 @@ function normalizeWorkspaceAsset(
       typeof raw.projectId === "string" && raw.projectId.trim()
         ? raw.projectId.trim()
         : projectId,
+    role: raw.role === "source" || raw.role === "derived" || raw.role === "support" ? raw.role : "support",
+    origin:
+      raw.origin === "upload" || raw.origin === "short-export" || raw.origin === "timeline-export" || raw.origin === "manual"
+        ? raw.origin
+        : "manual",
     sourceType,
     kind,
     filename: readRequiredString(raw.filename, `assets[${index + 1}].filename`),
@@ -122,6 +137,8 @@ function normalizeWorkspaceAsset(
     width: readOptionalFiniteNumber(raw.width, `assets[${index + 1}].width`),
     height: readOptionalFiniteNumber(raw.height, `assets[${index + 1}].height`),
     hasAudio: raw.hasAudio == null ? undefined : Boolean(raw.hasAudio),
+    derivedFromAssetId: typeof raw.derivedFromAssetId === "string" && raw.derivedFromAssetId.trim() ? raw.derivedFromAssetId.trim() : undefined,
+    sourceAssetId: typeof raw.sourceAssetId === "string" && raw.sourceAssetId.trim() ? raw.sourceAssetId.trim() : undefined,
     sourceMediaId: typeof raw.sourceMediaId === "string" && raw.sourceMediaId.trim() ? raw.sourceMediaId.trim() : undefined,
     sourceProjectId: typeof raw.sourceProjectId === "string" && raw.sourceProjectId.trim() ? raw.sourceProjectId.trim() : undefined,
     createdAt: readFiniteNumber(raw.createdAt, `assets[${index + 1}].createdAt`),

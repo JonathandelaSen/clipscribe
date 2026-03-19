@@ -1,4 +1,6 @@
 import type { MediaMetadataResult } from "./media";
+import { getEditorOutputDimensions } from "./core/aspect-ratio";
+import { getEditorCanvasCoverZoom } from "./core/canvas-frame";
 import { clampAudioItemToAsset, clampVideoClipToAsset, ensureProjectSelection } from "./core/timeline";
 import {
   createDefaultAudioTrack,
@@ -22,6 +24,7 @@ export interface EditorProjectBundleVideoClipSpec {
   reverse?: boolean;
   volume?: number;
   muted?: boolean;
+  fit?: "cover" | "contain";
 }
 
 export interface EditorProjectBundleAudioItemSpec {
@@ -50,6 +53,7 @@ export interface NormalizedEditorProjectBundleVideoClipSpec {
   reverse: boolean;
   volume: number;
   muted: boolean;
+  fit: "cover" | "contain";
 }
 
 export interface NormalizedEditorProjectBundleAudioItemSpec {
@@ -193,6 +197,7 @@ function normalizeVideoClipSpec(
     reverse,
     volume,
     muted,
+    fit: raw.fit === "cover" ? "cover" : "contain",
   };
 }
 
@@ -422,6 +427,8 @@ export async function materializeEditorProjectBundleWithResolver(
 
     const asset = createEditorAssetRecord({
       projectId: project.id,
+      role: expectedKind === "video" ? "source" : "support",
+      origin: "upload",
       kind: expectedKind,
       filename: resolved.filename,
       mimeType: resolved.mimeType || (expectedKind === "video" ? "video/mp4" : "audio/mpeg"),
@@ -462,6 +469,17 @@ export async function materializeEditorProjectBundleWithResolver(
       },
       asset.durationSeconds
     );
+
+    if (clipSpec.fit === "cover" && asset.width && asset.height) {
+      const outputDim = getEditorOutputDimensions(input.manifest.aspectRatio, "1080p");
+      nextClip.canvas.zoom = getEditorCanvasCoverZoom({
+        sourceWidth: asset.width,
+        sourceHeight: asset.height,
+        outputWidth: outputDim.width,
+        outputHeight: outputDim.height,
+      });
+    }
+
     project.timeline.videoClips.push(nextClip);
   }
 

@@ -700,9 +700,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     saveAssets,
     deleteAsset,
     saveExport,
-    resolveHistoryMediaFile,
+    resolveAssetFile,
   } = useEditorProject(projectId);
-  const { history } = useHistoryLibrary();
+  const { history } = useHistoryLibrary(projectId);
 
   const [project, setProject] = useState<EditorProjectRecord | null>(null);
   const [assets, setAssets] = useState<EditorAssetRecord[]>([]);
@@ -919,8 +919,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               missing: !asset.fileBlob,
             };
           }
-          const mediaId = asset.sourceMediaId ?? asset.sourceProjectId;
-          const mediaFile = mediaId ? await resolveHistoryMediaFile(mediaId) : undefined;
+          const mediaId = asset.sourceAssetId ?? asset.sourceMediaId ?? asset.sourceProjectId;
+          const mediaFile = mediaId ? await resolveAssetFile(mediaId) : undefined;
           return {
             asset,
             file: mediaFile?.file ?? null,
@@ -934,7 +934,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [assets, resolveHistoryMediaFile]);
+  }, [assets, resolveAssetFile]);
 
   useEffect(() => {
     reversePreviewSessionRef.current += 1;
@@ -2232,6 +2232,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       if (bakeSessionRef.current?.id !== session.id) return;
       const bakedAsset = createEditorAssetRecord({
         projectId: project.id,
+        role: "derived",
+        origin: "timeline-export",
         kind: "video",
         filename: result.file.name,
         mimeType: result.file.type || "video/mp4",
@@ -2869,6 +2871,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       const metadata = await readMediaMetadata(file);
       const asset = createEditorAssetRecord({
         projectId: project.id,
+        role: "support",
+        origin: "upload",
         kind: metadata.kind,
         filename: file.name,
         mimeType:
@@ -2898,7 +2902,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const handleAddHistoryItem = async (item: HistoryItem) => {
     if (!project) return;
-    const mediaFile = await resolveHistoryMediaFile(item.id);
+    const mediaFile = await resolveAssetFile(item.id);
     if (!mediaFile?.file) {
       toast.error("The source file for this history item is not available.");
       return;
@@ -2929,14 +2933,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       width: metadata.width,
       height: metadata.height,
       hasAudio: metadata.hasAudio,
+      role: "support",
+      origin: "manual",
       sourceType: "history",
+      sourceAssetId: item.id,
       sourceMediaId: item.id,
       sourceProjectId: item.id,
       captionSource:
         metadata.kind === "video" && transcript && subtitle
           ? {
-              kind: "history-subtitle",
-              sourceProjectId: item.id,
+              kind: "asset-subtitle",
+              sourceAssetId: item.id,
               transcriptId: transcript.id,
               subtitleId: subtitle.id,
               language: subtitle.language,
@@ -3075,8 +3082,31 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       if (exportSessionRef.current?.id !== session.id) return;
 
       const recordedFilename = usesSavePicker && destination ? destination.name : result.file.name;
+      const now = Date.now();
+      const outputAsset = createEditorAssetRecord({
+        projectId: exportingProject.id,
+        role: "derived",
+        origin: "timeline-export",
+        kind: "video",
+        filename: recordedFilename,
+        mimeType: result.file.type || "video/mp4",
+        sizeBytes: result.file.size,
+        durationSeconds: projectDuration,
+        width: result.width,
+        height: result.height,
+        hasAudio: true,
+        sourceType: "upload",
+        captionSource: { kind: "none" },
+        fileBlob: result.file,
+        now,
+      });
+      await saveAssets([outputAsset]);
+      if (exportSessionRef.current?.id !== session.id) return;
+      setAssets((current) => [...current, outputAsset]);
+
       const exportRecord = buildEditorExportRecord({
         projectId: exportingProject.id,
+        outputAssetId: outputAsset.id,
         engine: selectedEngine,
         filename: recordedFilename,
         mimeType: result.file.type,
@@ -3096,6 +3126,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       const nextProject = markEditorProjectSaved(
         {
           ...exportingProject,
+          assetIds: [...exportingProject.assetIds, outputAsset.id],
           latestExport: {
             id: exportRecord.id,
             createdAt: exportRecord.createdAt,
@@ -3107,7 +3138,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           },
           lastError: undefined,
         },
-        Date.now()
+        now
       );
       await saveProject(nextProject);
       if (exportSessionRef.current?.id !== session.id) return;
@@ -3179,6 +3210,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     projectDuration,
     resolvedAssets,
     saveExport,
+    saveAssets,
     saveProject,
     startSystemExportProgressRamp,
     stopSystemExportProgressRamp,

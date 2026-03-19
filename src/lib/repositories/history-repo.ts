@@ -1,36 +1,17 @@
-import { db, type AudioTranscriberDB } from "@/lib/db";
-import { normalizeHistoryItem, sortHistoryItems, type HistoryItem } from "@/lib/history";
+import type { AudioTranscriberDB } from "@/lib/db";
+import { sortHistoryItems, type HistoryItem } from "@/lib/history";
+import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 
 export interface HistoryRepository {
-  listHistory(): Promise<HistoryItem[]>;
-  bulkPutHistory(items: HistoryItem[]): Promise<void>;
-  deleteHistoryItem(id: string): Promise<void>;
-  putMediaFile(record: { id: string; file: File }): Promise<void>;
-  deleteMediaFile(id: string): Promise<void>;
+  listHistory(projectId?: string): Promise<HistoryItem[]>;
 }
 
-export function createDexieHistoryRepository(database: AudioTranscriberDB = db): HistoryRepository {
+export function createDexieHistoryRepository(database?: AudioTranscriberDB): HistoryRepository {
+  const projectRepository = createDexieProjectRepository(database);
+
   return {
-    async listHistory() {
-      const stored = await database.history.orderBy("timestamp").reverse().toArray();
-      return sortHistoryItems((stored || []).map(normalizeHistoryItem));
-    },
-
-    async bulkPutHistory(items) {
-      await database.history.bulkPut(items);
-    },
-
-    async deleteHistoryItem(id) {
-      await database.history.delete(id);
-    },
-
-    async putMediaFile(record) {
-      await database.mediaFiles.put(record);
-    },
-
-    async deleteMediaFile(id) {
-      await database.mediaFiles.delete(id);
+    async listHistory(projectId?: string) {
+      return sortHistoryItems(await projectRepository.listProjectHistory(projectId));
     },
   };
 }
-

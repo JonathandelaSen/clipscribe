@@ -1,5 +1,8 @@
-import { db, type AudioTranscriberDB, type MediaFile } from "@/lib/db";
+import type { AudioTranscriberDB } from "@/lib/db";
 import type { EditorAssetRecord, EditorExportRecord, EditorProjectRecord } from "@/lib/editor/types";
+import { normalizeLegacyEditorExportRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
+import type { ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
+import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 
 export interface EditorRepository {
   listProjects(): Promise<EditorProjectRecord[]>;
@@ -12,7 +15,7 @@ export interface EditorRepository {
   deleteAsset(assetId: string): Promise<void>;
   putExport(record: EditorExportRecord): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
-  getHistoryMediaFile(mediaId: string): Promise<MediaFile | undefined>;
+  getAssetFile(assetId: string): Promise<{ id: string; file: File } | undefined>;
 }
 
 export function sortEditorProjects(records: EditorProjectRecord[]): EditorProjectRecord[] {
@@ -33,62 +36,94 @@ export function groupEditorExportsByProjectId(records: EditorExportRecord[]): Ma
   return result;
 }
 
-export function createDexieEditorRepository(database: AudioTranscriberDB = db): EditorRepository {
+function toProjectAssetRecord(asset: EditorAssetRecord): ProjectAssetRecord {
+  return {
+    ...asset,
+    role: (asset as ProjectAssetRecord).role ?? "support",
+    origin: (asset as ProjectAssetRecord).origin ?? (asset.sourceType === "history" ? "manual" : "upload"),
+    derivedFromAssetId: (asset as ProjectAssetRecord).derivedFromAssetId,
+  };
+}
+
+function toEditorExportRecord(record: ProjectExportRecord): EditorExportRecord {
+  return normalizeLegacyEditorExportRecord({
+    id: record.id,
+    projectId: record.projectId,
+    sourceAssetId: record.sourceAssetId,
+    outputAssetId: record.outputAssetId,
+    createdAt: record.createdAt,
+    status: record.status,
+    engine: record.engine === "system" ? "system" : "browser",
+    filename: record.filename,
+    mimeType: record.mimeType,
+    sizeBytes: record.sizeBytes,
+    durationSeconds: record.durationSeconds ?? 0,
+    aspectRatio: record.aspectRatio ?? "16:9",
+    resolution: record.resolution === "720p" || record.resolution === "4K" ? record.resolution : "1080p",
+    width: record.width ?? 0,
+    height: record.height ?? 0,
+    warnings: record.warnings,
+    error: record.error,
+    debugFfmpegCommand: record.debugFfmpegCommand,
+    debugNotes: record.debugNotes,
+  });
+}
+
+export function createDexieEditorRepository(database?: AudioTranscriberDB): EditorRepository {
+  const projectRepository = createDexieProjectRepository(database);
+
   return {
     async listProjects() {
-      const records = await database.editorProjects.toArray();
-      return sortEditorProjects(records || []);
+      const records = await projectRepository.listProjects();
+      return sortEditorProjects(records.map((project) => normalizeLegacyEditorProjectRecord(project)));
     },
 
     async getProject(projectId) {
-      return database.editorProjects.get(projectId);
+      const record = await projectRepository.getProject(projectId);
+      return record ? normalizeLegacyEditorProjectRecord(record) : undefined;
     },
 
     async listProjectAssets(projectId) {
-      return database.editorAssets.where("projectId").equals(projectId).toArray();
+      return (await projectRepository.listProjectAssets(projectId)) as EditorAssetRecord[];
     },
 
     async listProjectExports(projectId) {
-      const records = await database.editorExports.where("projectId").equals(projectId).toArray();
-      return sortEditorExports(records || []);
+      const records = await projectRepository.listProjectExports(projectId);
+      return sortEditorExports(records.filter((record) => record.kind === "timeline").map((record) => toEditorExportRecord(record)));
     },
 
     async putProject(record) {
-      await database.editorProjects.put(record);
+      await projectRepository.putProject(record);
     },
 
     async putProjectWithAssets(record, assets) {
-      await database.transaction("rw", database.editorProjects, database.editorAssets, async () => {
-        if (assets.length > 0) {
-          await database.editorAssets.bulkPut(assets);
-        }
-        await database.editorProjects.put(record);
-      });
+      await projectRepository.putProject(record);
+      await projectRepository.bulkPutAssets(assets.map((asset) => toProjectAssetRecord(asset)));
     },
 
     async bulkPutAssets(records) {
-      if (records.length === 0) return;
-      await database.editorAssets.bulkPut(records);
+      await projectRepository.bulkPutAssets(records.map((record) => toProjectAssetRecord(record)));
     },
 
     async deleteAsset(assetId) {
-      await database.editorAssets.delete(assetId);
+      await projectRepository.deleteAsset(assetId);
     },
 
     async putExport(record) {
-      await database.editorExports.put(record);
-    },
-
-    async deleteProject(projectId) {
-      await database.transaction("rw", database.editorProjects, database.editorAssets, database.editorExports, async () => {
-        await database.editorProjects.delete(projectId);
-        await database.editorAssets.where("projectId").equals(projectId).delete();
-        await database.editorExports.where("projectId").equals(projectId).delete();
+      await projectRepository.putProjectExport({
+        ...record,
+        kind: "timeline",
       });
     },
 
-    async getHistoryMediaFile(mediaId) {
-      return database.mediaFiles.get(mediaId);
+    async deleteProject(projectId) {
+      await projectRepository.deleteProject(projectId);
+    },
+
+    async getAssetFile(assetId) {
+      const asset = await projectRepository.getAsset(assetId);
+      if (!asset?.fileBlob) return undefined;
+      return { id: asset.id, file: asset.fileBlob };
     },
   };
 }

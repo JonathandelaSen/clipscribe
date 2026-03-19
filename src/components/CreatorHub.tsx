@@ -76,6 +76,7 @@ import {
   restoreShortProjectAfterCanceledExport,
 } from "@/lib/creator/core/short-lifecycle";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import { createEditorAssetRecord } from "@/lib/editor/storage";
 import { resetFFmpeg } from "@/lib/ffmpeg";
 import { exportShortVideoLocally } from "@/lib/creator/local-render";
 import {
@@ -330,10 +331,19 @@ type HubView = "start" | "ai_lab" | "editor";
 type CreatorHubProps = {
   initialTool?: CreatorToolMode;
   lockedTool?: CreatorToolMode;
+  projectId?: string;
+  initialSourceAssetId?: string;
+  initialView?: HubView;
 };
 
-export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHubProps = {}) {
-  const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary();
+export function CreatorHub({
+  initialTool = "video_info",
+  lockedTool,
+  projectId,
+  initialSourceAssetId,
+  initialView = "start",
+}: CreatorHubProps = {}) {
+  const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary(projectId);
   const {
     analysis,
     isAnalyzing,
@@ -342,8 +352,8 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setLastRender,
   } = useCreatorHub();
 
-  const [hubView, setHubView] = useState<HubView>("start");
-  const [selectedProjectId, setSelectedProjectId] = useState<string>("");
+  const [hubView, setHubView] = useState<HubView>(initialView);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialSourceAssetId ?? "");
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
 
@@ -422,6 +432,8 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     if (!history.length) return undefined;
     return history.find((item) => item.id === selectedProjectId) ?? history[0];
   }, [history, selectedProjectId]);
+  const selectedProjectRootId = (selectedProject as (HistoryItem & { projectId?: string }) | undefined)?.projectId ?? selectedProject?.id;
+  const selectedSourceAssetId = selectedProject?.id;
 
   const {
     projects: savedShortProjects,
@@ -431,7 +443,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     upsertProject,
     upsertExport,
     deleteProject,
-  } = useCreatorShortsLibrary(selectedProject?.id);
+  } = useCreatorShortsLibrary(selectedProjectRootId);
 
   const beginShortExportSession = useCallback(() => {
     return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
@@ -514,20 +526,20 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       }
 
       try {
-        const record = await db.mediaFiles.get(selectedProject.mediaId || selectedProject.id);
+        const record = selectedSourceAssetId ? await db.projectAssets.get(selectedSourceAssetId) : undefined;
         if (cancelled) return;
-        if (!record?.file) {
+        if (!record?.fileBlob) {
           setMediaUrl(null);
           setMediaFilename(null);
           setMediaFile(null);
           setIsVideoMedia(false);
           return;
         }
-        objectUrl = URL.createObjectURL(record.file);
+        objectUrl = URL.createObjectURL(record.fileBlob);
         setMediaUrl(objectUrl);
-        setMediaFilename(record.file.name);
-        setMediaFile(record.file);
-        setIsVideoMedia(record.file.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.file.name));
+        setMediaFilename(record.fileBlob.name);
+        setMediaFile(record.fileBlob);
+        setIsVideoMedia(record.fileBlob.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.fileBlob.name));
       } catch (error) {
         console.error("Failed to load media preview", error);
         if (!cancelled) {
@@ -545,7 +557,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [selectedProject]);
+  }, [selectedProject, selectedSourceAssetId]);
 
   useEffect(() => {
     setActiveSavedShortProjectId("");
@@ -840,8 +852,8 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
         status,
         now: Date.now(),
         newId: makeId("shortproj"),
-        sourceProjectId: selectedProject.id,
-        sourceMediaId: selectedProject.mediaId || selectedProject.id,
+        projectId: selectedProjectRootId || selectedProject.id,
+        sourceAssetId: selectedSourceAssetId || selectedProject.id,
         sourceFilename: mediaFilename || selectedProject.filename,
         transcriptId: selectedTranscript.id,
         subtitleId: selectedSubtitle.id,
@@ -863,6 +875,8 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       savedShortProjects,
       selectedPlan,
       selectedProject,
+      selectedProjectRootId,
+      selectedSourceAssetId,
       shortProjectNameDraft,
       selectedSubtitle,
       selectedTranscript,
@@ -935,7 +949,7 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
     setActiveTool("clip_lab");
     setActiveSavedShortProjectId(project.id);
     setDetachedShortSelection({ clip: project.clip, plan: project.plan });
-    setSelectedProjectId(project.sourceProjectId);
+    setSelectedProjectId(project.sourceAssetId);
     setSelectedTranscriptId(project.transcriptId);
     setSelectedSubtitleId(project.subtitleId);
     setSelectedClipId(project.clipId);
@@ -1161,15 +1175,53 @@ export function CreatorHub({ initialTool = "video_info", lockedTool }: CreatorHu
       if (shortExportSessionRef.current?.id !== session.id) return;
       bumpExportProgress(97);
 
+      const exportedVideoMetadata = await readVideoMetadata(localExport.file);
+      if (shortExportSessionRef.current?.id !== session.id) return;
+      const now = Date.now();
+      const outputAsset = createEditorAssetRecord({
+        projectId: selectedProjectRootId || selectedProject.id,
+        role: "derived",
+        origin: "short-export",
+        derivedFromAssetId: selectedSourceAssetId || selectedProject.id,
+        kind: "video",
+        filename: localExport.file.name,
+        mimeType: localExport.file.type || "video/mp4",
+        sizeBytes: localExport.file.size,
+        durationSeconds: exportedVideoMetadata.durationSeconds ?? exportClip.durationSeconds,
+        width: exportedVideoMetadata.width,
+        height: exportedVideoMetadata.height,
+        hasAudio: true,
+        sourceType: "upload",
+        captionSource: { kind: "none" },
+        fileBlob: localExport.file,
+        now,
+      });
+
+      await db.transaction("rw", db.projects, db.projectAssets, async () => {
+        await db.projectAssets.put(outputAsset);
+        const rootProject = await db.projects.get(selectedProjectRootId || selectedProject.id);
+        if (rootProject) {
+          await db.projects.put({
+            ...rootProject,
+            assetIds: [...rootProject.assetIds, outputAsset.id],
+            updatedAt: now,
+            lastOpenedAt: now,
+          });
+        }
+      });
+      if (shortExportSessionRef.current?.id !== session.id) return;
+
       const exportRecord = buildCompletedShortExportRecord({
         id: makeId("shortexport"),
         shortProjectId: shortProjectRecord.id,
-        sourceProjectId: selectedProject.id,
+        projectId: selectedProjectRootId || selectedProject.id,
+        sourceAssetId: selectedSourceAssetId || selectedProject.id,
+        outputAssetId: outputAsset.id,
         sourceFilename: mediaFilename || selectedProject.filename,
         plan: selectedPlan,
         clip: exportClip,
         editor: currentEditorState,
-        createdAt: Date.now(),
+        createdAt: now,
         filename: localExport.file.name,
         mimeType: localExport.file.type || "video/mp4",
         sizeBytes: localExport.file.size,

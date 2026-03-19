@@ -237,13 +237,13 @@ export function HistoryItemCard({
   useEffect(() => {
     let activeUrl: string | null = null;
 
-    db.mediaFiles
+    db.projectAssets
       .get(item.mediaId || item.id)
       .then((record) => {
-        if (record?.file) {
-          activeUrl = URL.createObjectURL(record.file);
+        if (record?.fileBlob) {
+          activeUrl = URL.createObjectURL(record.fileBlob);
           setMediaUrl(activeUrl);
-          setIsVideo(record.file.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.file.name));
+          setIsVideo(record.fileBlob.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.fileBlob.name));
         } else {
           setMediaUrl(null);
           setIsVideo(false);

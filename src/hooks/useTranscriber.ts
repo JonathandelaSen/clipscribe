@@ -10,13 +10,15 @@ import {
   type SubtitleVersion,
   type TranscriptVersion,
 } from "@/lib/history";
-import { createDexieHistoryRepository } from "@/lib/repositories/history-repo";
+import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import {
   markInterruptedTranscriptsAsErrored,
   updateTranscriptInHistoryItems,
   upsertTranscribingTranscriptProject,
 } from "@/lib/transcriber/core/history-updates";
 import { upsertProgressItem } from "@/lib/transcriber/core/progress";
+import { createEditorAssetRecord, createEmptyEditorProject } from "@/lib/editor/storage";
+import type { AssetTranscriptRecord, ContentProjectRecord, ProjectAssetRecord } from "@/lib/projects/types";
 
 export type { HistoryItem } from "@/lib/history";
 
@@ -29,15 +31,34 @@ export interface TranscriberProgress {
 
 type ActiveTask = {
   projectId: string;
+  assetId: string;
   transcriptVersionId: string;
 };
 
 type TranscribeOptions = {
   projectId?: string;
+  assetId?: string;
 };
 
+function inferAssetKind(file: File): ProjectAssetRecord["kind"] {
+  if (file.type.startsWith("video/") || /\.(mp4|webm|mov|mkv)$/i.test(file.name)) return "video";
+  return "audio";
+}
+
+function historyItemToTranscriptRecord(item: HistoryItem, projectId: string): AssetTranscriptRecord {
+  return {
+    assetId: item.id,
+    projectId,
+    createdAt: item.createdAt,
+    updatedAt: item.updatedAt,
+    timestamp: item.timestamp,
+    activeTranscriptVersionId: item.activeTranscriptVersionId,
+    transcripts: item.transcripts,
+  };
+}
+
 export function useTranscriber() {
-  const historyRepository = useRef(createDexieHistoryRepository());
+  const projectRepository = useRef(createDexieProjectRepository());
   const [transcript, setTranscript] = useState<string>("");
   const [chunks, setChunks] = useState<SubtitleChunk[]>([]);
   const [isBusy, setIsBusy] = useState(false);
@@ -50,19 +71,53 @@ export function useTranscriber() {
   const worker = useRef<Worker | null>(null);
   const initializedStorage = useRef(false);
 
-  const mutateHistory = useCallback((updater: (prev: HistoryItem[]) => HistoryItem[]) => {
-    setHistory((prev) => sortHistoryItems(updater(prev)));
+  const refreshHistory = useCallback(async () => {
+    const stored = await projectRepository.current.listProjectHistory();
+    const normalized = markInterruptedTranscriptsAsErrored(sortHistoryItems(stored || []), {
+      now: Date.now(),
+    });
+    setHistory(normalized);
+    return normalized;
   }, []);
 
+  const persistHistoryItem = useCallback(async (item: HistoryItem, projectId: string) => {
+    await projectRepository.current.putAssetTranscript(historyItemToTranscriptRecord(item, projectId));
+  }, []);
+
+  const mutateHistory = useCallback(
+    async (updater: (prev: HistoryItem[]) => HistoryItem[], options?: { projectId?: string; assetId?: string }) => {
+      let nextItems: HistoryItem[] = [];
+      setHistory((prev) => {
+        nextItems = sortHistoryItems(updater(prev));
+        return nextItems;
+      });
+
+      if (options?.assetId) {
+        const nextItem = nextItems.find((item) => item.id === options.assetId);
+        if (nextItem && options.projectId) {
+          await persistHistoryItem(nextItem, options.projectId);
+        }
+      }
+    },
+    [persistHistoryItem]
+  );
+
   const updateTranscriptInHistory = useCallback(
-    (projectId: string, transcriptVersionId: string, updater: (transcript: TranscriptVersion) => TranscriptVersion) => {
-      mutateHistory((prev) =>
-        updateTranscriptInHistoryItems(prev, {
-          projectId,
-          transcriptVersionId,
-          now: Date.now(),
-          updater,
-        })
+    async (
+      assetId: string,
+      projectId: string,
+      transcriptVersionId: string,
+      updater: (transcript: TranscriptVersion) => TranscriptVersion
+    ) => {
+      await mutateHistory(
+        (prev) =>
+          updateTranscriptInHistoryItems(prev, {
+            projectId: assetId,
+            transcriptVersionId,
+            now: Date.now(),
+            updater,
+          }),
+        { projectId, assetId }
       );
     },
     [mutateHistory]
@@ -77,28 +132,81 @@ export function useTranscriber() {
   useEffect(() => {
     if (initializedStorage.current) return;
 
-    historyRepository.current
-      .listHistory()
+    let cancelled = false;
+
+    projectRepository.current
+      .listProjectHistory()
       .then((stored) => {
+        if (cancelled) return;
         const normalized = markInterruptedTranscriptsAsErrored(sortHistoryItems(stored || []), {
           now: Date.now(),
         });
-
-        initializedStorage.current = true;
         setHistory(normalized);
+        initializedStorage.current = true;
       })
       .catch((e) => {
-        console.error("Failed to load history from DB", e);
+        console.error("Failed to load transcripts from DB", e);
         initializedStorage.current = true;
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  useEffect(() => {
-    if (!initializedStorage.current || history.length === 0) return;
-    historyRepository.current.bulkPutHistory(history).catch((e) => {
-      console.error("Failed to save history to DB", e);
-    });
-  }, [history]);
+  const ensureProjectAsset = useCallback(
+    async (file: File, options: TranscribeOptions, durationSeconds: number) => {
+      if (options.projectId && options.assetId) {
+        const existingAsset = await projectRepository.current.getAsset(options.assetId);
+        if (!existingAsset) {
+          throw new Error("Selected source asset no longer exists.");
+        }
+
+        const updatedAsset: ProjectAssetRecord = {
+          ...existingAsset,
+          filename: file.name,
+          mimeType: file.type || existingAsset.mimeType,
+          sizeBytes: file.size,
+          durationSeconds: Number.isFinite(durationSeconds) ? durationSeconds : existingAsset.durationSeconds,
+          fileBlob: file,
+          updatedAt: Date.now(),
+        };
+        await projectRepository.current.bulkPutAssets([updatedAsset]);
+        return { projectId: existingAsset.projectId, assetId: existingAsset.id };
+      }
+
+      const now = Date.now();
+      const project = createEmptyEditorProject({
+        id: options.projectId,
+        now,
+        name: file.name.replace(/\.[^.]+$/, "") || "Untitled Project",
+      }) as ContentProjectRecord;
+      const asset = createEditorAssetRecord({
+        id: options.assetId,
+        projectId: project.id,
+        role: "source",
+        origin: "upload",
+        kind: inferAssetKind(file),
+        filename: file.name,
+        mimeType: file.type || (file.name.toLowerCase().endsWith(".mp4") ? "video/mp4" : "audio/mpeg"),
+        sizeBytes: file.size,
+        durationSeconds,
+        hasAudio: true,
+        sourceType: "upload",
+        captionSource: { kind: "none" },
+        fileBlob: file,
+        now,
+      });
+
+      project.activeSourceAssetId = asset.id;
+      project.assetIds = [asset.id];
+
+      await projectRepository.current.putProject(project);
+      await projectRepository.current.bulkPutAssets([asset]);
+      return { projectId: project.id, assetId: asset.id };
+    },
+    []
+  );
 
   const initWorker = useCallback(() => {
     if (worker.current) return;
@@ -111,9 +219,9 @@ export function useTranscriber() {
       const { status, data, output, error, duration } = e.data;
       const task = currentTaskRef.current;
 
-      const updateCurrentTranscript = (updater: (tx: TranscriptVersion) => TranscriptVersion) => {
+      const updateCurrentTranscript = async (updater: (tx: TranscriptVersion) => TranscriptVersion) => {
         if (!task) return;
-        updateTranscriptInHistory(task.projectId, task.transcriptVersionId, updater);
+        await updateTranscriptInHistory(task.assetId, task.projectId, task.transcriptVersionId, updater);
       };
 
       switch (status) {
@@ -143,7 +251,7 @@ export function useTranscriber() {
             setTranscript(nextText);
             setChunks(nextChunks);
 
-            updateCurrentTranscript((tx) => {
+            void updateCurrentTranscript((tx) => {
               const now = Date.now();
               let updated: TranscriptVersion = {
                 ...tx,
@@ -182,7 +290,7 @@ export function useTranscriber() {
           if (finalText) setTranscript(finalText);
           if (finalChunks) setChunks(finalChunks);
 
-          updateCurrentTranscript((tx) => {
+          void updateCurrentTranscript((tx) => {
             const now = Date.now();
             let updated: TranscriptVersion = {
               ...tx,
@@ -199,6 +307,8 @@ export function useTranscriber() {
               now,
             });
             return updated;
+          }).finally(() => {
+            void refreshHistory();
           });
 
           currentTaskRef.current = null;
@@ -208,17 +318,21 @@ export function useTranscriber() {
           appendLog(`ERROR: ${error}`);
           setIsBusy(false);
           console.error("Worker error:", error);
-          updateCurrentTranscript((tx) => ({
-            ...tx,
-            status: "error",
-            error: String(error),
-            updatedAt: Date.now(),
-          }));
+          if (task) {
+            void updateTranscriptInHistory(task.assetId, task.projectId, task.transcriptVersionId, (tx) => ({
+              ...tx,
+              status: "error",
+              error: String(error),
+              updatedAt: Date.now(),
+            })).finally(() => {
+              void refreshHistory();
+            });
+          }
           currentTaskRef.current = null;
           break;
       }
     });
-  }, [appendLog, updateTranscriptInHistory]);
+  }, [appendLog, refreshHistory, updateTranscriptInHistory]);
 
   useEffect(() => {
     initWorker();
@@ -228,7 +342,7 @@ export function useTranscriber() {
   }, [initWorker]);
 
   const transcribe = useCallback(
-    (audioData: Float32Array, file: File, language: string = "", options: TranscribeOptions = {}) => {
+    async (audioData: Float32Array, file: File, language: string = "", options: TranscribeOptions = {}) => {
       if (!language) {
         throw new Error("Please select the media language before transcribing.");
       }
@@ -242,24 +356,26 @@ export function useTranscriber() {
       setDebugLog("");
       appendLog("Starting...");
 
-      const now = Date.now();
-      const projectId = options.projectId || makeId("proj");
-      const transcriptVersionId = makeId("tx");
-      currentTaskRef.current = { projectId, transcriptVersionId };
-
-      historyRepository.current.putMediaFile({ id: projectId, file }).catch((e) => console.error("Failed to save media file", e));
-
-      mutateHistory((prev) =>
-        upsertTranscribingTranscriptProject(prev, {
-          now,
-          projectId,
-          transcriptVersionId,
-          fileName: file.name,
-          requestedLanguage: language,
-        })
-      );
-
       const duration = audioData.length / 16000;
+      const { projectId, assetId } = await ensureProjectAsset(file, options, duration);
+      const transcriptVersionId = makeId("tx");
+      currentTaskRef.current = { projectId, assetId, transcriptVersionId };
+
+      const now = Date.now();
+      const nextHistory = upsertTranscribingTranscriptProject(history, {
+        now,
+        projectId: assetId,
+        transcriptVersionId,
+        fileName: file.name,
+        requestedLanguage: language,
+      });
+
+      setHistory(sortHistoryItems(nextHistory));
+      const nextItem = nextHistory.find((item) => item.id === assetId);
+      if (nextItem) {
+        await persistHistoryItem(nextItem, projectId);
+      }
+
       worker.current?.postMessage({
         type: "transcribe",
         audio: audioData,
@@ -267,7 +383,7 @@ export function useTranscriber() {
         language,
       });
     },
-    [appendLog, initWorker, mutateHistory]
+    [appendLog, ensureProjectAsset, history, initWorker, persistHistoryItem]
   );
 
   const stopTranscription = useCallback(() => {
@@ -282,24 +398,25 @@ export function useTranscriber() {
     appendLog("STOPPED by user.");
 
     if (task) {
-      updateTranscriptInHistory(task.projectId, task.transcriptVersionId, (tx) => ({
+      void updateTranscriptInHistory(task.assetId, task.projectId, task.transcriptVersionId, (tx) => ({
         ...tx,
         status: "stopped",
         updatedAt: Date.now(),
-      }));
+      })).finally(() => {
+        void refreshHistory();
+      });
     }
 
     currentTaskRef.current = null;
-  }, [appendLog, updateTranscriptInHistory]);
+  }, [appendLog, refreshHistory, updateTranscriptInHistory]);
 
   const deleteHistoryItem = useCallback((id: string) => {
     setHistory((prev) => prev.filter((item) => item.id !== id));
-    historyRepository.current.deleteHistoryItem(id).catch(console.error);
-    historyRepository.current.deleteMediaFile(id).catch(console.error);
+    projectRepository.current.deleteAsset(id).catch(console.error);
   }, []);
 
   const renameHistoryItem = useCallback((id: string, newFilename: string) => {
-    mutateHistory((prev) =>
+    setHistory((prev) =>
       prev.map((item) =>
         item.id === id
           ? {
@@ -311,13 +428,30 @@ export function useTranscriber() {
           : item
       )
     );
-  }, [mutateHistory]);
+
+    projectRepository.current
+      .getAsset(id)
+      .then((asset) => {
+        if (!asset) return;
+        return projectRepository.current.bulkPutAssets([
+          {
+            ...asset,
+            filename: newFilename,
+            updatedAt: Date.now(),
+          },
+        ]);
+      })
+      .catch(console.error);
+  }, []);
 
   const createShiftedSubtitleVersion = useCallback(
-    (projectId: string, transcriptVersionId: string, subtitleVersionId: string, shiftSeconds: number) => {
+    (assetId: string, transcriptVersionId: string, subtitleVersionId: string, shiftSeconds: number) => {
+      const currentItem = history.find((item) => item.id === assetId);
       let createdId: string | null = null;
+      const projectId = (currentItem as HistoryItem & { projectId?: string })?.projectId;
+      if (!projectId) return null;
 
-      updateTranscriptInHistory(projectId, transcriptVersionId, (tx) => {
+      void updateTranscriptInHistory(assetId, projectId, transcriptVersionId, (tx) => {
         const source = tx.subtitles.find((sub) => sub.id === subtitleVersionId);
         if (!source) return tx;
 
@@ -344,25 +478,30 @@ export function useTranscriber() {
           subtitles: sortSubtitleVersions([...tx.subtitles, shifted]),
           updatedAt: now,
         };
+      }).finally(() => {
+        void refreshHistory();
       });
 
       return createdId;
     },
-    [updateTranscriptInHistory]
+    [history, refreshHistory, updateTranscriptInHistory]
   );
 
   const saveTranslation = useCallback(
     (
-      projectId: string,
+      assetId: string,
       transcriptVersionId: string,
       sourceSubtitleVersionId: string,
       targetLanguage: string,
       sourceLanguage: string,
       translatedChunks: SubtitleChunk[]
     ) => {
+      const currentItem = history.find((item) => item.id === assetId);
       let createdId: string | null = null;
+      const projectId = (currentItem as HistoryItem & { projectId?: string })?.projectId;
+      if (!projectId) return null;
 
-      updateTranscriptInHistory(projectId, transcriptVersionId, (tx) => {
+      void updateTranscriptInHistory(assetId, projectId, transcriptVersionId, (tx) => {
         const source = tx.subtitles.find((sub) => sub.id === sourceSubtitleVersionId);
         const now = Date.now();
         const nextVersionNumber = tx.subtitles.reduce((max, sub) => Math.max(max, sub.versionNumber || 0), 0) + 1;
@@ -389,11 +528,13 @@ export function useTranscriber() {
           subtitles: sortSubtitleVersions([...tx.subtitles, translation]),
           updatedAt: now,
         };
+      }).finally(() => {
+        void refreshHistory();
       });
 
       return createdId;
     },
-    [updateTranscriptInHistory]
+    [history, refreshHistory, updateTranscriptInHistory]
   );
 
   return {

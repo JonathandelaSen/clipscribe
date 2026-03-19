@@ -1,10 +1,10 @@
-"use client";
+import { redirect } from "next/navigation";
 
-import { useParams } from "next/navigation";
-
-import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorkspace";
-
-export default function CreatorEditorProjectPage() {
-  const params = useParams<{ projectId: string }>();
-  return <TimelineEditorWorkspace projectId={params.projectId} />;
+export default function CreatorEditorProjectPage({
+  params,
+}: {
+  params: { projectId: string };
+}) {
+  const { projectId } = params;
+  redirect(`/projects/${projectId}?tab=timeline`);
 }

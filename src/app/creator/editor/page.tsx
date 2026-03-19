@@ -1,5 +1,5 @@
-import { EditorProjectLibrary } from "@/components/editor/EditorProjectLibrary";
+import { redirect } from "next/navigation";
 
 export default function CreatorEditorPage() {
-  return <EditorProjectLibrary />;
+  redirect("/");
 }

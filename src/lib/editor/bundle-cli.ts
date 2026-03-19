@@ -29,6 +29,7 @@ export interface ParsedCreateTimelineProjectBundleCliInput {
   audioStartSeconds?: number;
   audioVolume?: number;
   audioMuted: boolean;
+  videoFitSpecs: Array<{ index: number; fit: "cover" | "contain" }>;
 }
 
 export interface CreateTimelineProjectBundleVideoInput {
@@ -39,6 +40,7 @@ export interface CreateTimelineProjectBundleVideoInput {
   reverse: boolean;
   volume: number;
   muted: boolean;
+  fit?: "cover" | "contain";
 }
 
 export interface CreateTimelineProjectBundleAudioInput {
@@ -152,6 +154,18 @@ function parseVideoVolumeSpec(value: string): { index: number; volume: number } 
   };
 }
 
+function parseVideoFitSpec(value: string): { index: number; fit: "cover" | "contain" } {
+  const [rawIndex, rawFit] = value.split(":");
+  if (rawIndex == null || rawFit == null || !["cover", "contain"].includes(rawFit)) {
+    throw new Error("--video-fit must use index:cover or index:contain (e.g. 1:cover).");
+  }
+
+  return {
+    index: readPositiveIndex(rawIndex, "--video-fit index"),
+    fit: rawFit as "cover" | "contain",
+  };
+}
+
 function parseAudioTrimSpec(value: string): { startSeconds: number; endSeconds: number } {
   const [rawStart, rawEnd] = value.split(":");
   if (rawStart == null || rawEnd == null) {
@@ -221,6 +235,7 @@ export function getCreateTimelineProjectBundleHelpText(): string {
     "  --video-trim <i:start:end>   Override one clip trim window (repeatable)",
     "  --video-volume <i:volume>    Override one clip volume from 0 to 1 (repeatable)",
     "  --video-muted <index>        Mute the given 1-based video clip index (repeatable)",
+    "  --video-fit <i:cover|contain> Make one clip cover or contain the canvas (repeatable)",
     "  --video-clone-to-fill <i>    Clone one clip until the video track reaches the audio length",
     "  --video-trim-final-to-audio  Trim the last video clip so video matches audio length",
     "  --audio-trim <start:end>     Trim the optional audio item",
@@ -246,6 +261,7 @@ export function parseCreateTimelineProjectBundleArgs(
     mutedVideoIndexes: [],
     videoTrimSpecs: [],
     videoVolumeSpecs: [],
+    videoFitSpecs: [],
     audioMuted: false,
   };
 
@@ -304,6 +320,10 @@ export function parseCreateTimelineProjectBundleArgs(
         parsed.videoVolumeSpecs.push(parseVideoVolumeSpec(readRequiredValue(args, index, token)));
         index += 1;
         break;
+      case "--video-fit":
+        parsed.videoFitSpecs.push(parseVideoFitSpec(readRequiredValue(args, index, token)));
+        index += 1;
+        break;
       case "--audio-trim":
         parsed.audioTrimSpec = parseAudioTrimSpec(readRequiredValue(args, index, token));
         index += 1;
@@ -354,6 +374,7 @@ export function normalizeCreateTimelineProjectBundleCliInput(
       reverse: false,
       volume: 1,
       muted: false,
+      fit: "contain",
     };
   });
 
@@ -376,6 +397,11 @@ export function normalizeCreateTimelineProjectBundleCliInput(
   for (const spec of parsed.videoVolumeSpecs) {
     assertVideoIndexInRange(spec.index, videoClips.length, "--video-volume");
     videoClips[spec.index - 1].volume = spec.volume;
+  }
+
+  for (const spec of parsed.videoFitSpecs) {
+    assertVideoIndexInRange(spec.index, videoClips.length, "--video-fit");
+    videoClips[spec.index - 1].fit = spec.fit;
   }
 
   if (parsed.videoCloneToFillIndex != null) {
@@ -444,6 +470,7 @@ export function buildEditorProjectBundleFromCliOptions(
     reverse: clip.reverse,
     volume: clip.volume,
     muted: clip.muted,
+    fit: clip.fit ?? "contain",
   }));
 
   const audioItem: EditorProjectBundleAudioItemSpec | undefined = options.audioItem

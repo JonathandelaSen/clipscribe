@@ -10,8 +10,8 @@ export type CreatorShortExportStatus = "completed" | "failed";
 
 export interface CreatorShortProjectRecord {
   id: string;
-  sourceProjectId: string;
-  sourceMediaId: string;
+  projectId: string;
+  sourceAssetId: string;
   sourceFilename: string;
   transcriptId: string;
   subtitleId: string;
@@ -32,7 +32,9 @@ export interface CreatorShortProjectRecord {
 export interface CreatorShortExportRecord {
   id: string;
   shortProjectId: string;
-  sourceProjectId: string;
+  projectId: string;
+  sourceAssetId?: string;
+  outputAssetId?: string;
   sourceFilename: string;
   platform: ShortsPlatform;
   createdAt: number;

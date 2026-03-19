@@ -435,6 +435,7 @@ async function promptVideoClips(
       reverse: false,
       volume: 1,
       muted: false,
+      fit: "contain",
     });
   }
 

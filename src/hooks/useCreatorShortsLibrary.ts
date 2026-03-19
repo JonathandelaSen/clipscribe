@@ -9,7 +9,7 @@ import {
 
 const creatorShortsRepository = createDexieCreatorShortsRepository();
 
-export function useCreatorShortsLibrary(sourceProjectId?: string) {
+export function useCreatorShortsLibrary(projectId?: string) {
   const [projects, setProjects] = useState<CreatorShortProjectRecord[]>([]);
   const [exports, setExports] = useState<CreatorShortExportRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -20,8 +20,8 @@ export function useCreatorShortsLibrary(sourceProjectId?: string) {
     setError(null);
     try {
       const [allProjects, allExports] = await Promise.all([
-        creatorShortsRepository.listProjects(sourceProjectId),
-        creatorShortsRepository.listExports(sourceProjectId),
+        creatorShortsRepository.listProjects(projectId),
+        creatorShortsRepository.listExports(projectId),
       ]);
       setProjects(allProjects);
       setExports(allExports);
@@ -31,7 +31,7 @@ export function useCreatorShortsLibrary(sourceProjectId?: string) {
     } finally {
       setIsLoading(false);
     }
-  }, [sourceProjectId]);
+  }, [projectId]);
 
   useEffect(() => {
     void refresh();

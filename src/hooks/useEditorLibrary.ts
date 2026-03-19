@@ -153,8 +153,8 @@ export function useEditorProject(projectId: string | undefined) {
     });
   }, []);
 
-  const resolveHistoryMediaFile = useCallback(async (mediaId: string) => {
-    return editorRepository.getHistoryMediaFile(mediaId);
+  const resolveAssetFile = useCallback(async (assetId: string) => {
+    return editorRepository.getAssetFile(assetId);
   }, []);
 
   return {
@@ -168,6 +168,6 @@ export function useEditorProject(projectId: string | undefined) {
     saveAssets,
     deleteAsset,
     saveExport,
-    resolveHistoryMediaFile,
+    resolveAssetFile,
   };
 }

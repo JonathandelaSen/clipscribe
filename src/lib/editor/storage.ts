@@ -144,6 +144,7 @@ export function createEmptyEditorProject(input?: {
   now?: number;
   name?: string;
   aspectRatio?: EditorAspectRatio;
+  activeSourceAssetId?: string;
 }): EditorProjectRecord {
   const now = input?.now ?? Date.now();
   const id = input?.id ?? makeId("editor_project");
@@ -155,6 +156,7 @@ export function createEmptyEditorProject(input?: {
     lastOpenedAt: now,
     status: "draft",
     aspectRatio: input?.aspectRatio ?? "16:9",
+    activeSourceAssetId: input?.activeSourceAssetId,
     assetIds: [],
     timeline: {
       playheadSeconds: 0,
@@ -226,6 +228,8 @@ export function normalizeLegacyEditorExportRecord(
 
 export function createEditorAssetRecord(input: {
   projectId: string;
+  role?: EditorAssetRecord["role"];
+  origin?: EditorAssetRecord["origin"];
   kind: EditorAssetKind;
   filename: string;
   mimeType: string;
@@ -234,6 +238,8 @@ export function createEditorAssetRecord(input: {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  derivedFromAssetId?: string;
+  sourceAssetId?: string;
   sourceType: EditorAssetRecord["sourceType"];
   sourceMediaId?: string;
   sourceProjectId?: string;
@@ -246,6 +252,8 @@ export function createEditorAssetRecord(input: {
   return {
     id: input.id ?? makeId("editor_asset"),
     projectId: input.projectId,
+    role: input.role ?? "support",
+    origin: input.origin ?? (input.sourceType === "history" ? "manual" : "upload"),
     sourceType: input.sourceType,
     kind: input.kind,
     filename: input.filename,
@@ -255,6 +263,8 @@ export function createEditorAssetRecord(input: {
     width: input.width,
     height: input.height,
     hasAudio: input.hasAudio,
+    derivedFromAssetId: input.derivedFromAssetId,
+    sourceAssetId: input.sourceAssetId,
     sourceMediaId: input.sourceMediaId,
     sourceProjectId: input.sourceProjectId,
     createdAt: now,
@@ -340,6 +350,8 @@ export function getEditorProjectPersistenceFingerprint(
 export function buildEditorExportRecord(input: {
   id?: string;
   projectId: string;
+  sourceAssetId?: string;
+  outputAssetId?: string;
   engine: EditorExportEngine;
   filename: string;
   mimeType: string;
@@ -359,6 +371,8 @@ export function buildEditorExportRecord(input: {
   return {
     id: input.id ?? makeId("editor_export"),
     projectId: input.projectId,
+    sourceAssetId: input.sourceAssetId,
+    outputAssetId: input.outputAssetId,
     createdAt: input.createdAt ?? Date.now(),
     status: input.status ?? (input.error ? "failed" : "completed"),
     engine: input.engine,

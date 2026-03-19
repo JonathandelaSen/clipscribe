@@ -8,6 +8,8 @@ export type EditorExportStatus = "completed" | "failed";
 export type EditorExportEngine = "browser" | "system";
 export type EditorAssetSource = "history" | "upload";
 export type EditorAssetKind = "video" | "audio" | "image";
+export type EditorAssetRole = "source" | "derived" | "support";
+export type EditorAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual";
 
 export type EditorSubtitlePreset = CreatorVerticalEditorPreset["subtitleStyle"];
 
@@ -18,6 +20,14 @@ export type CaptionSourceRef =
   | {
       kind: "history-subtitle";
       sourceProjectId: string;
+      transcriptId: string;
+      subtitleId: string;
+      language: string;
+      label: string;
+    }
+  | {
+      kind: "asset-subtitle";
+      sourceAssetId: string;
       transcriptId: string;
       subtitleId: string;
       language: string;
@@ -120,6 +130,7 @@ export interface EditorProjectRecord {
   lastOpenedAt: number;
   status: EditorProjectStatus;
   aspectRatio: EditorAspectRatio;
+  activeSourceAssetId?: string;
   assetIds: string[];
   timeline: EditorProjectTimelineState;
   subtitles: EditorSubtitleTrackSettings;
@@ -130,6 +141,8 @@ export interface EditorProjectRecord {
 export interface EditorAssetRecord {
   id: string;
   projectId: string;
+  role: EditorAssetRole;
+  origin: EditorAssetOrigin;
   sourceType: EditorAssetSource;
   kind: EditorAssetKind;
   filename: string;
@@ -139,6 +152,8 @@ export interface EditorAssetRecord {
   width?: number;
   height?: number;
   hasAudio?: boolean;
+  derivedFromAssetId?: string;
+  sourceAssetId?: string;
   sourceMediaId?: string;
   sourceProjectId?: string;
   createdAt: number;
@@ -150,6 +165,8 @@ export interface EditorAssetRecord {
 export interface EditorExportRecord {
   id: string;
   projectId: string;
+  sourceAssetId?: string;
+  outputAssetId?: string;
   createdAt: number;
   status: EditorExportStatus;
   engine: EditorExportEngine;

@@ -15,7 +15,7 @@ export function findExistingShortProjectRecord(
   records: CreatorShortProjectRecord[],
   options: {
     explicitId?: string;
-    sourceProjectId: string;
+    projectId: string;
     transcriptId: string;
     subtitleId: string;
     clipId: string;
@@ -29,7 +29,7 @@ export function findExistingShortProjectRecord(
 
   return records.find(
     (record) =>
-      record.sourceProjectId === options.sourceProjectId &&
+      record.projectId === options.projectId &&
       record.transcriptId === options.transcriptId &&
       record.subtitleId === options.subtitleId &&
       record.clipId === options.clipId &&
@@ -41,8 +41,8 @@ export function buildShortProjectRecord(input: {
   status: CreatorShortProjectRecord["status"];
   now: number;
   newId: string;
-  sourceProjectId: string;
-  sourceMediaId: string;
+  projectId: string;
+  sourceAssetId: string;
   sourceFilename: string;
   transcriptId: string;
   subtitleId: string;
@@ -58,7 +58,7 @@ export function buildShortProjectRecord(input: {
 }): CreatorShortProjectRecord {
   const existing = findExistingShortProjectRecord(input.savedRecords, {
     explicitId: input.explicitId,
-    sourceProjectId: input.sourceProjectId,
+    projectId: input.projectId,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
     clipId: input.clip.id,
@@ -67,8 +67,8 @@ export function buildShortProjectRecord(input: {
 
   return {
     id: existing?.id ?? input.newId,
-    sourceProjectId: input.sourceProjectId,
-    sourceMediaId: input.sourceMediaId,
+    projectId: input.projectId,
+    sourceAssetId: input.sourceAssetId,
     sourceFilename: input.sourceFilename,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
@@ -135,7 +135,9 @@ export function restoreShortProjectAfterCanceledExport(
 export function buildCompletedShortExportRecord(input: {
   id: string;
   shortProjectId: string;
-  sourceProjectId: string;
+  projectId: string;
+  sourceAssetId?: string;
+  outputAssetId?: string;
   sourceFilename: string;
   plan: CreatorShortPlan;
   clip: CreatorViralClip;
@@ -151,7 +153,9 @@ export function buildCompletedShortExportRecord(input: {
   return {
     id: input.id,
     shortProjectId: input.shortProjectId,
-    sourceProjectId: input.sourceProjectId,
+    projectId: input.projectId,
+    sourceAssetId: input.sourceAssetId,
+    outputAssetId: input.outputAssetId,
     sourceFilename: input.sourceFilename,
     platform: input.plan.platform,
     createdAt: input.createdAt,

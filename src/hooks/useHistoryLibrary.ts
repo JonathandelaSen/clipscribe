@@ -4,7 +4,7 @@ import { createDexieHistoryRepository } from "@/lib/repositories/history-repo";
 
 const historyRepository = createDexieHistoryRepository();
 
-export function useHistoryLibrary() {
+export function useHistoryLibrary(projectId?: string) {
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,14 +13,14 @@ export function useHistoryLibrary() {
     setIsLoading(true);
     setError(null);
     try {
-      setHistory(await historyRepository.listHistory());
+      setHistory(await historyRepository.listHistory(projectId));
     } catch (err) {
       console.error("Failed to load history", err);
       setError(err instanceof Error ? err.message : "Failed to load history");
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [projectId]);
 
   useEffect(() => {
     void refresh();

@@ -22,6 +22,13 @@ export function resolveCaptionSourceChunks(
 ): SubtitleChunk[] {
   if (captionSource.kind === "embedded-srt") return captionSource.chunks;
   if (captionSource.kind === "none") return [];
+  if (captionSource.kind === "asset-subtitle") {
+    const item = historyMap.get(captionSource.sourceAssetId);
+    if (!item) return [];
+    const transcript = getTranscriptById(item, captionSource.transcriptId);
+    if (!transcript) return [];
+    return getSubtitleById(transcript, captionSource.subtitleId)?.chunks ?? [];
+  }
 
   const item = historyMap.get(captionSource.sourceProjectId);
   if (!item) return [];
