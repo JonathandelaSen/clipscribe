@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import type { CreatorViralClip } from "../../../src/lib/creator/types";
 import {
+  buildAiSuggestionInputSummary,
+  buildAiSuggestionProjectRecords,
+  buildAiSuggestionSourceSignature,
   buildCompletedShortExportRecord,
   buildLocalBrowserRenderResponse,
   buildShortProjectRecord,
@@ -10,6 +13,7 @@ import {
   markShortProjectExported,
   markShortProjectFailed,
   restoreShortProjectAfterCanceledExport,
+  shouldReuseShortProjectId,
 } from "../../../src/lib/creator/core/short-lifecycle";
 
 const sampleClip: CreatorViralClip = {
@@ -24,7 +28,6 @@ const sampleClip: CreatorViralClip = {
   punchline: "Punchline",
   sourceChunkIndexes: [],
   suggestedSubtitleLanguage: "en",
-  platforms: ["youtube_shorts", "instagram_reels", "tiktok"],
 };
 
 const samplePlan = {
@@ -33,7 +36,6 @@ const samplePlan = {
   platform: "youtube_shorts" as const,
   title: "Plan",
   caption: "Caption",
-  subtitleStyle: "clean_caption" as const,
   openingText: "Open",
   endCardText: "End",
   editorPreset: {
@@ -80,6 +82,7 @@ test("buildShortProjectRecord reuses explicit-id project and preserves createdAt
     createdAt: 1000,
     updatedAt: 1000,
     status: "draft" as const,
+    origin: "manual" as const,
     lastExportId: "exp_old",
   };
 
@@ -130,6 +133,115 @@ test("buildShortProjectRecord generates default name for new record", () => {
   assert.equal(record.name, "YouTube Shorts • clock-clock");
   assert.equal(record.createdAt, 5000);
   assert.equal(record.lastExportId, undefined);
+  assert.equal(record.origin, "manual");
+});
+
+test("AI suggestion helpers build normalized signatures and records", () => {
+  const signatureA = buildAiSuggestionSourceSignature({
+    projectId: "proj_1",
+    sourceAssetId: "media_1",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    niche: "  Productivity ",
+    audience: "Founders",
+    tone: " DIRECT ",
+  });
+
+  const signatureB = buildAiSuggestionSourceSignature({
+    projectId: "proj_1",
+    sourceAssetId: "media_1",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    niche: "productivity",
+    audience: "founders",
+    tone: "direct",
+  });
+
+  assert.equal(signatureA, signatureB);
+
+  const inputSummary = buildAiSuggestionInputSummary({
+    request: {
+      niche: "Productivity",
+      audience: "Founders",
+      tone: "Direct",
+      transcriptVersionLabel: "Transcript v2",
+      subtitleVersionLabel: "English Subs",
+    },
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    model: "gpt-test",
+  });
+
+  assert.deepEqual(inputSummary, {
+    niche: "Productivity",
+    audience: "Founders",
+    tone: "Direct",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    transcriptVersionLabel: "Transcript v2",
+    subtitleVersionLabel: "English Subs",
+    model: "gpt-test",
+  });
+
+  const analysis = {
+    ok: true as const,
+    providerMode: "openai" as const,
+    model: "gpt-test",
+    generatedAt: 123,
+    runtimeSeconds: 45,
+    youtube: {
+      titleIdeas: [],
+      description: "",
+      pinnedComment: "",
+      hashtags: [],
+      seoKeywords: [],
+      thumbnailHooks: [],
+      chapterText: "",
+    },
+    content: {
+      videoSummary: "",
+      keyMoments: [],
+      hookIdeas: [],
+      ctaIdeas: [],
+      repurposeIdeas: [],
+    },
+    chapters: [],
+    viralClips: [sampleClip],
+    shortsPlans: [samplePlan],
+    editorPresets: [samplePlan.editorPreset],
+  };
+
+  const records = buildAiSuggestionProjectRecords({
+    analysis,
+    now: 999,
+    generationId: "gen_1",
+    projectId: "proj_1",
+    sourceAssetId: "media_1",
+    sourceFilename: "source.mp4",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    sourceSignature: signatureA,
+    inputSummary,
+    editor: sampleEditor,
+    savedRecords: [],
+    newId: () => "shortproj_ai_1",
+    secondsToClock: (value) => `${value}s`,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].id, "shortproj_ai_1");
+  assert.equal(records[0].origin, "ai_suggestion");
+  assert.equal(records[0].suggestionGenerationId, "gen_1");
+  assert.equal(records[0].suggestionGeneratedAt, 999);
+  assert.equal(records[0].suggestionSourceSignature, signatureA);
+  assert.deepEqual(records[0].suggestionInputSummary, inputSummary);
+  assert.equal(records[0].name, "AI Suggestion • YouTube Shorts • 12.5s-34.5s");
+});
+
+test("shouldReuseShortProjectId only reuses manual records", () => {
+  assert.equal(shouldReuseShortProjectId(null), undefined);
+  assert.equal(shouldReuseShortProjectId({ id: "manual_1", origin: "manual" }), "manual_1");
+  assert.equal(shouldReuseShortProjectId({ id: "ai_1", origin: "ai_suggestion" }), undefined);
 });
 
 test("markShortProjectExported and markShortProjectFailed update status metadata", () => {

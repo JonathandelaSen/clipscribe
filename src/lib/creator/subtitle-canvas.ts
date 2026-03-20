@@ -201,7 +201,7 @@ export async function renderSubtitlesToPngs(
     console.warn("subtitle-canvas: Inter font failed to load — PNGs will use fallback font");
   }
 
-  const style = resolveCreatorSubtitleStyle(plan.subtitleStyle, editor.subtitleStyle);
+  const style = resolveCreatorSubtitleStyle(plan.editorPreset.subtitleStyle, editor.subtitleStyle);
   const fontSize = Math.round(Math.min(96, Math.max(36, 56 * editor.subtitleScale)));
   const maxCharsPerLine = getSubtitleMaxCharsPerLine(
     fontSize,

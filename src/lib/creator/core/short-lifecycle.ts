@@ -1,5 +1,17 @@
-import type { CreatorShortRenderResponse, CreatorShortPlan, CreatorViralClip, CreatorShortEditorState } from "@/lib/creator/types";
-import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import type {
+  CreatorShortRenderResponse,
+  CreatorShortPlan,
+  CreatorShortsGenerateRequest,
+  CreatorShortsGenerateResponse,
+  CreatorViralClip,
+  CreatorShortEditorState,
+} from "@/lib/creator/types";
+import type {
+  CreatorAISuggestionInputSummary,
+  CreatorShortExportRecord,
+  CreatorShortProjectOrigin,
+  CreatorShortProjectRecord,
+} from "@/lib/creator/storage";
 
 function platformLabel(platform: CreatorShortPlan["platform"]): string {
   if (platform === "youtube_shorts") return "YouTube Shorts";
@@ -7,14 +19,28 @@ function platformLabel(platform: CreatorShortPlan["platform"]): string {
   return "TikTok";
 }
 
-export function deriveDefaultShortProjectName(plan: CreatorShortPlan, clip: CreatorViralClip, secondsToClock: (seconds: number) => string): string {
+export function deriveDefaultShortProjectName(
+  plan: CreatorShortPlan,
+  clip: CreatorViralClip,
+  secondsToClock: (seconds: number) => string
+): string {
   return `${platformLabel(plan.platform)} • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
+}
+
+export function deriveDefaultAiSuggestionName(
+  plan: CreatorShortPlan,
+  clip: CreatorViralClip,
+  secondsToClock: (seconds: number) => string
+): string {
+  return `AI Suggestion • ${platformLabel(plan.platform)} • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
 }
 
 export function findExistingShortProjectRecord(
   records: CreatorShortProjectRecord[],
   options: {
     explicitId?: string;
+    origin?: CreatorShortProjectOrigin;
+    suggestionGenerationId?: string;
     projectId: string;
     transcriptId: string;
     subtitleId: string;
@@ -29,6 +55,8 @@ export function findExistingShortProjectRecord(
 
   return records.find(
     (record) =>
+      (options.origin == null || record.origin === options.origin) &&
+      (options.suggestionGenerationId == null || record.suggestionGenerationId === options.suggestionGenerationId) &&
       record.projectId === options.projectId &&
       record.transcriptId === options.transcriptId &&
       record.subtitleId === options.subtitleId &&
@@ -54,10 +82,18 @@ export function buildShortProjectRecord(input: {
   explicitName?: string;
   lastExportId?: string;
   lastError?: string;
+  origin?: CreatorShortProjectOrigin;
+  suggestionGenerationId?: string;
+  suggestionGeneratedAt?: number;
+  suggestionSourceSignature?: string;
+  suggestionInputSummary?: CreatorAISuggestionInputSummary;
   secondsToClock: (seconds: number) => string;
 }): CreatorShortProjectRecord {
+  const origin = input.origin ?? "manual";
   const existing = findExistingShortProjectRecord(input.savedRecords, {
     explicitId: input.explicitId,
+    origin,
+    suggestionGenerationId: input.suggestionGenerationId,
     projectId: input.projectId,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
@@ -78,16 +114,123 @@ export function buildShortProjectRecord(input: {
     name:
       (input.explicitName || "").trim() ||
       existing?.name ||
-      deriveDefaultShortProjectName(input.plan, input.clip, input.secondsToClock),
+      (origin === "ai_suggestion"
+        ? deriveDefaultAiSuggestionName(input.plan, input.clip, input.secondsToClock)
+        : deriveDefaultShortProjectName(input.plan, input.clip, input.secondsToClock)),
     clip: input.clip,
     plan: input.plan,
     editor: input.editor,
     createdAt: existing?.createdAt ?? input.now,
     updatedAt: input.now,
     status: input.status,
+    origin,
     lastExportId: input.lastExportId ?? existing?.lastExportId,
     lastError: input.lastError,
+    suggestionGenerationId: origin === "ai_suggestion" ? input.suggestionGenerationId : undefined,
+    suggestionGeneratedAt: origin === "ai_suggestion" ? input.suggestionGeneratedAt ?? input.now : undefined,
+    suggestionSourceSignature: origin === "ai_suggestion" ? input.suggestionSourceSignature : undefined,
+    suggestionInputSummary: origin === "ai_suggestion" ? input.suggestionInputSummary : undefined,
   };
+}
+
+export function shouldReuseShortProjectId(
+  project?: Pick<CreatorShortProjectRecord, "origin" | "id"> | null
+): string | undefined {
+  if (!project || project.origin !== "manual") return undefined;
+  return project.id;
+}
+
+function normalizeSuggestionField(value: string | undefined): string {
+  return (value || "").trim().toLowerCase();
+}
+
+export function buildAiSuggestionSourceSignature(input: {
+  projectId: string;
+  sourceAssetId: string;
+  transcriptId: string;
+  subtitleId: string;
+  niche?: string;
+  audience?: string;
+  tone?: string;
+}): string {
+  return JSON.stringify({
+    projectId: input.projectId,
+    sourceAssetId: input.sourceAssetId,
+    transcriptId: input.transcriptId,
+    subtitleId: input.subtitleId,
+    niche: normalizeSuggestionField(input.niche),
+    audience: normalizeSuggestionField(input.audience),
+    tone: normalizeSuggestionField(input.tone),
+  });
+}
+
+export function buildAiSuggestionInputSummary(input: {
+  request: Pick<
+    CreatorShortsGenerateRequest,
+    "niche" | "audience" | "tone" | "transcriptVersionLabel" | "subtitleVersionLabel"
+  >;
+  transcriptId: string;
+  subtitleId: string;
+  model?: string;
+}): CreatorAISuggestionInputSummary {
+  return {
+    niche: (input.request.niche || "").trim(),
+    audience: (input.request.audience || "").trim(),
+    tone: (input.request.tone || "").trim(),
+    transcriptId: input.transcriptId,
+    subtitleId: input.subtitleId,
+    transcriptVersionLabel: input.request.transcriptVersionLabel,
+    subtitleVersionLabel: input.request.subtitleVersionLabel,
+    model: input.model,
+  };
+}
+
+export function buildAiSuggestionProjectRecords(input: {
+  analysis: CreatorShortsGenerateResponse;
+  now: number;
+  generationId: string;
+  projectId: string;
+  sourceAssetId: string;
+  sourceFilename: string;
+  transcriptId: string;
+  subtitleId: string;
+  sourceSignature: string;
+  inputSummary: CreatorAISuggestionInputSummary;
+  editor: CreatorShortEditorState;
+  savedRecords: CreatorShortProjectRecord[];
+  newId: () => string;
+  secondsToClock: (seconds: number) => string;
+}): CreatorShortProjectRecord[] {
+  const clipsById = new Map(input.analysis.viralClips.map((clip) => [clip.id, clip]));
+
+  return input.analysis.shortsPlans.flatMap((plan) => {
+    const clip = clipsById.get(plan.clipId);
+    if (!clip) return [];
+
+    return [
+      buildShortProjectRecord({
+        status: "draft",
+        now: input.now,
+        newId: input.newId(),
+        projectId: input.projectId,
+        sourceAssetId: input.sourceAssetId,
+        sourceFilename: input.sourceFilename,
+        transcriptId: input.transcriptId,
+        subtitleId: input.subtitleId,
+        clip,
+        plan,
+        editor: input.editor,
+        savedRecords: input.savedRecords,
+        explicitName: deriveDefaultAiSuggestionName(plan, clip, input.secondsToClock),
+        origin: "ai_suggestion",
+        suggestionGenerationId: input.generationId,
+        suggestionGeneratedAt: input.now,
+        suggestionSourceSignature: input.sourceSignature,
+        suggestionInputSummary: input.inputSummary,
+        secondsToClock: input.secondsToClock,
+      }),
+    ];
+  });
 }
 
 export function markShortProjectExported(

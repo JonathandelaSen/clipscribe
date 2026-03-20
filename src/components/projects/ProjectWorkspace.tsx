@@ -35,21 +35,34 @@ function formatDeleteBlockers(blockers: string[]) {
   return blockers.join(", ");
 }
 
-function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: BackgroundTaskRecord) {
+function formatTaskPercent(progress?: number | null) {
+  return `${Math.round(progress ?? 0)}%`;
+}
+
+function transcriptionProgressLabel(progressTask?: BackgroundTaskRecord) {
   if (!progressTask || !isBackgroundTaskActive(progressTask)) {
-    return isRetranscribe ? "Retranscribe Active Source" : "Transcribe Active Source";
+    return undefined;
   }
 
+  const percent = formatTaskPercent(progressTask.progress);
   if (progressTask.status === "queued" || progressTask.status === "preparing") {
-    return "Preparing...";
+    return `Preparing ${percent}`;
   }
   if (progressTask.status === "finalizing") {
-    return "Finalizing...";
+    return `Finalizing ${percent}`;
   }
   if (progressTask.status === "running") {
-    return `Transcribing ${Math.round(progressTask.progress ?? 0)}%`;
+    return `Transcribing ${percent}`;
   }
   return "Transcribing...";
+}
+
+function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: BackgroundTaskRecord) {
+  const progressLabel = transcriptionProgressLabel(progressTask);
+  if (!progressLabel) {
+    return isRetranscribe ? "Retranscribe Active Source" : "Transcribe Active Source";
+  }
+  return progressLabel;
 }
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
@@ -104,6 +117,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     [activeSourceAsset, getTaskForResource, projectId]
   );
   const isActiveSourceTranscribing = Boolean(activeTranscriptionTask && isBackgroundTaskActive(activeTranscriptionTask));
+  const activeTranscriptionLabel = useMemo(
+    () => transcriptionProgressLabel(activeTranscriptionTask),
+    [activeTranscriptionTask]
+  );
   const assetDeleteBlockersById = useMemo(() => {
     return new Map(
       assets.map((asset) => {
@@ -351,7 +368,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 <HistoryItemCard
                   item={activeHistoryItem}
                   audioProgress={isActiveSourceTranscribing ? activeTranscriptionTask?.progress ?? undefined : undefined}
+                  audioProgressLabel={isActiveSourceTranscribing ? activeTranscriptionLabel : undefined}
                   autoExpand
+                  isRetranscribing={isActiveSourceTranscribing}
+                  retranscribeStatusLabel={activeTranscriptionLabel}
                   onRetranscribe={(assetId, language) => {
                     void handleRetranscribe(assetId, language);
                   }}

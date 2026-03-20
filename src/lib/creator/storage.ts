@@ -7,6 +7,18 @@ import type {
 
 export type CreatorShortProjectStatus = "draft" | "exporting" | "exported" | "error";
 export type CreatorShortExportStatus = "completed" | "failed";
+export type CreatorShortProjectOrigin = "manual" | "ai_suggestion";
+
+export interface CreatorAISuggestionInputSummary {
+  niche: string;
+  audience: string;
+  tone: string;
+  transcriptId: string;
+  subtitleId: string;
+  transcriptVersionLabel?: string;
+  subtitleVersionLabel?: string;
+  model?: string;
+}
 
 export interface CreatorShortProjectRecord {
   id: string;
@@ -25,8 +37,13 @@ export interface CreatorShortProjectRecord {
   createdAt: number;
   updatedAt: number;
   status: CreatorShortProjectStatus;
+  origin: CreatorShortProjectOrigin;
   lastExportId?: string;
   lastError?: string;
+  suggestionGenerationId?: string;
+  suggestionGeneratedAt?: number;
+  suggestionSourceSignature?: string;
+  suggestionInputSummary?: CreatorAISuggestionInputSummary;
 }
 
 export interface CreatorShortExportRecord {

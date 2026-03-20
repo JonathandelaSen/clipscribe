@@ -24,6 +24,8 @@ export interface ProjectRepository {
   listShortProjects(projectId?: string): Promise<CreatorShortProjectRecord[]>;
   putShortProject(record: CreatorShortProjectRecord): Promise<void>;
   deleteShortProject(shortProjectId: string): Promise<void>;
+  deleteShortProjects(shortProjectIds: string[]): Promise<void>;
+  deleteShortProjectsBySuggestionGenerationId(generationId: string): Promise<void>;
   listProjectExports(projectId?: string): Promise<ProjectExportRecord[]>;
   putProjectExport(record: ProjectExportRecord): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
@@ -132,6 +134,35 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
       await database.transaction("rw", database.projectShorts, database.projectExports, async () => {
         await database.projectShorts.delete(shortProjectId);
         const relatedExports = await database.projectExports.where("shortProjectId").equals(shortProjectId).toArray();
+        await database.projectExports.bulkDelete(relatedExports.map((record) => record.id));
+      });
+    },
+
+    async deleteShortProjects(shortProjectIds) {
+      if (shortProjectIds.length === 0) return;
+
+      await database.transaction("rw", database.projectShorts, database.projectExports, async () => {
+        await database.projectShorts.bulkDelete(shortProjectIds);
+        const relatedExports = await database.projectExports
+          .filter((record) => !!record.shortProjectId && shortProjectIds.includes(record.shortProjectId))
+          .toArray();
+        await database.projectExports.bulkDelete(relatedExports.map((record) => record.id));
+      });
+    },
+
+    async deleteShortProjectsBySuggestionGenerationId(generationId) {
+      if (!generationId) return;
+
+      await database.transaction("rw", database.projectShorts, database.projectExports, async () => {
+        const projects = await database.projectShorts.where("suggestionGenerationId").equals(generationId).toArray();
+        if (projects.length === 0) return;
+
+        const projectIds = projects.map((record) => record.id);
+        await database.projectShorts.bulkDelete(projectIds);
+
+        const relatedExports = await database.projectExports
+          .filter((record) => !!record.shortProjectId && projectIds.includes(record.shortProjectId))
+          .toArray();
         await database.projectExports.bulkDelete(relatedExports.map((record) => record.id));
       });
     },

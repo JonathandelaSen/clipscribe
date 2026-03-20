@@ -13,6 +13,7 @@ import {
   Flame,
   FolderOpen,
   HardDriveDownload,
+  KeyRound,
   Layers,
   Lightbulb,
   Loader2,
@@ -51,10 +52,12 @@ import {
 } from "@/lib/history";
 import {
   secondsToClock,
-  type CreatorAnalyzeRequest,
+  type CreatorGenerationSourceInput,
   type CreatorShortEditorState,
   type CreatorShortPlan,
+  type CreatorShortsGenerateRequest,
   type CreatorSubtitleStyleSettings,
+  type CreatorVideoInfoGenerateRequest,
   type CreatorViralClip,
   type CreatorVideoInfoBlock,
 } from "@/lib/creator/types";
@@ -68,12 +71,16 @@ import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
 import {
+  buildAiSuggestionInputSummary,
+  buildAiSuggestionProjectRecords,
+  buildAiSuggestionSourceSignature,
   buildCompletedShortExportRecord,
   buildLocalBrowserRenderResponse,
   buildShortProjectRecord,
   markShortProjectExported,
   markShortProjectFailed,
   restoreShortProjectAfterCanceledExport,
+  shouldReuseShortProjectId,
 } from "@/lib/creator/core/short-lifecycle";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { createEditorAssetRecord } from "@/lib/editor/storage";
@@ -89,11 +96,15 @@ import {
   resolveCreatorSubtitleStyle,
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
-import { useCreatorHub } from "@/hooks/useCreatorHub";
+import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
+import { useCreatorShortRenderer } from "@/hooks/useCreatorShortRenderer";
+import { useCreatorShortsGenerator } from "@/hooks/useCreatorShortsGenerator";
 import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
+import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { cn } from "@/lib/utils";
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -103,6 +114,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -111,6 +132,7 @@ import {
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 function copyText(text: string, label: string) {
   navigator.clipboard.writeText(text);
@@ -167,6 +189,56 @@ function formatBytes(bytes: number): string {
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function getAnalyzeErrorDetails(message: string | null): { title: string; body: string } | null {
+  if (!message) return null;
+  if (message.startsWith("OpenAI API Error: ")) {
+    return {
+      title: "Error en la API de OpenAI",
+      body: message.replace("OpenAI API Error: ", ""),
+    };
+  }
+  if (/authentication failed|api key/i.test(message)) {
+    return {
+      title: "OpenAI authentication failed",
+      body: "La key configurada no ha sido aceptada por OpenAI. Revísala o pega una nueva.",
+    };
+  }
+  if (/quota|rate limit/i.test(message)) {
+    return {
+      title: "OpenAI rechazó la petición",
+      body: "La cuenta asociada a la key ha llegado a cuota o límite de velocidad. Reintenta más tarde o usa otra key.",
+    };
+  }
+  return {
+    title: "No se pudo generar",
+    body: message,
+  };
+}
+
+function formatSuggestionField(value?: string): string {
+  return value?.trim() || "Any";
+}
+
+function formatAiSuggestionInputSummary(summary?: {
+  niche?: string;
+  audience?: string;
+  tone?: string;
+  transcriptVersionLabel?: string;
+  subtitleVersionLabel?: string;
+}): string {
+  if (!summary) return "No input summary";
+
+  return [
+    `Niche: ${formatSuggestionField(summary.niche)}`,
+    `Audience: ${formatSuggestionField(summary.audience)}`,
+    `Tone: ${formatSuggestionField(summary.tone)}`,
+    summary.transcriptVersionLabel ? `Transcript: ${summary.transcriptVersionLabel}` : "",
+    summary.subtitleVersionLabel ? `Subtitles: ${summary.subtitleVersionLabel}` : "",
+  ]
+    .filter(Boolean)
+    .join(" • ");
 }
 
 function SubtitlePreviewText({
@@ -352,21 +424,39 @@ export function CreatorHub({
 }: CreatorHubProps = {}) {
   const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary(projectId);
   const {
-    analysis,
-    isAnalyzing,
-    analyzeError,
-    analyze,
+    shortsAnalysis,
+    isGeneratingShorts,
+    shortsError,
+    generateShorts,
+  } = useCreatorShortsGenerator();
+  const {
+    videoInfoAnalysis,
+    isGeneratingVideoInfo,
+    videoInfoError,
+    generateVideoInfo,
+  } = useCreatorVideoInfoGenerator();
+  const {
     setLastRender,
-  } = useCreatorHub();
+  } = useCreatorShortRenderer();
+  const {
+    openAIApiKey,
+    hasOpenAIApiKey,
+    maskedOpenAIApiKey,
+    saveOpenAIApiKey,
+    clearOpenAIApiKey,
+  } = useCreatorAiSettings();
 
   const [hubView, setHubView] = useState<HubView>(initialView);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialSourceAssetId ?? "");
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
+  const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
+  const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
+  const [isRegenerateAiSuggestionsDialogOpen, setIsRegenerateAiSuggestionsDialogOpen] = useState(false);
 
-  const [niche, setNiche] = useState("creator tools / workflow");
-  const [audience, setAudience] = useState("content creators and social media teams");
-  const [tone, setTone] = useState("sharp, practical, growth-oriented");
+  const [niche, setNiche] = useState("");
+  const [audience, setAudience] = useState("");
+  const [tone, setTone] = useState("");
   const [activeTool, setActiveTool] = useState<CreatorToolMode>(lockedTool ?? initialTool);
   const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>([
     "titleIdeas",
@@ -462,13 +552,17 @@ export function CreatorHub({
   const selectedSourceAssetId = selectedProject?.id;
 
   const {
-    projects: savedShortProjects,
+    projects: shortProjects,
+    manualProjects: savedShortProjects,
+    aiSuggestionsByGeneration,
     exportsByProjectId,
     isLoading: isLoadingShortsLibrary,
     error: shortsLibraryError,
     upsertProject,
     upsertExport,
     deleteProject,
+    deleteSuggestionGeneration,
+    hasAiSuggestionsForSignature,
   } = useCreatorShortsLibrary(selectedProjectRootId);
 
   const beginShortExportSession = useCallback(() => {
@@ -617,12 +711,12 @@ export function CreatorHub({
   const handleVideoEnded = useCallback(() => setIsPlaying(false), []);
 
   const activeSavedShortProject = useMemo(() => {
-    if (!savedShortProjects.length) return undefined;
-    return savedShortProjects.find((item) => item.id === activeSavedShortProjectId) ?? undefined;
-  }, [activeSavedShortProjectId, savedShortProjects]);
+    if (!shortProjects.length) return undefined;
+    return shortProjects.find((item) => item.id === activeSavedShortProjectId) ?? undefined;
+  }, [activeSavedShortProjectId, shortProjects]);
 
   const selectedClip = useMemo(() => {
-    const analysisClips = analysis?.viralClips ?? [];
+    const analysisClips = shortsAnalysis?.viralClips ?? [];
     if (selectedClipId) {
       if (activeSavedShortProject?.clipId === selectedClipId) return activeSavedShortProject.clip;
       if (detachedShortSelection?.clip.id === selectedClipId) return detachedShortSelection.clip;
@@ -631,7 +725,7 @@ export function CreatorHub({
       if (manualFallbackClip?.id === selectedClipId) return manualFallbackClip;
     }
     return activeSavedShortProject?.clip ?? detachedShortSelection?.clip ?? analysisClips[0] ?? manualFallbackClip;
-  }, [activeSavedShortProject, analysis, detachedShortSelection, manualFallbackClip, selectedClipId]);
+  }, [activeSavedShortProject, detachedShortSelection, manualFallbackClip, selectedClipId, shortsAnalysis]);
 
   const plansForSelectedClip = useMemo(() => {
     if (activeSavedShortProject?.plan && activeSavedShortProject.plan.clipId === selectedClip?.id) {
@@ -640,15 +734,15 @@ export function CreatorHub({
     if (detachedShortSelection?.plan && detachedShortSelection.plan.clipId === selectedClip?.id) {
       return [detachedShortSelection.plan];
     }
-    if (analysis?.shortsPlans?.length && selectedClip) {
-      const fromAnalysis = analysis.shortsPlans.filter((plan) => plan.clipId === selectedClip.id);
+    if (shortsAnalysis?.shortsPlans?.length && selectedClip) {
+      const fromAnalysis = shortsAnalysis.shortsPlans.filter((plan) => plan.clipId === selectedClip.id);
       if (fromAnalysis.length) return fromAnalysis;
     }
     if (manualFallbackPlan && selectedClip?.id === manualFallbackPlan.clipId) {
       return [manualFallbackPlan];
     }
     return [];
-  }, [activeSavedShortProject?.plan, analysis, detachedShortSelection, manualFallbackPlan, selectedClip]);
+  }, [activeSavedShortProject?.plan, detachedShortSelection, manualFallbackPlan, selectedClip, shortsAnalysis]);
 
   const selectedPlan = useMemo(() => {
     if (plansForSelectedClip.length) {
@@ -733,9 +827,9 @@ export function CreatorHub({
   );
 
   const resolvedSubtitleStyle = useMemo(() => {
-    const fallback = selectedPlan?.subtitleStyle ?? "clean_caption";
+    const fallback = selectedPlan?.editorPreset.subtitleStyle ?? "clean_caption";
     return resolveCreatorSubtitleStyle(fallback, subtitleStyleOverrides);
-  }, [selectedPlan?.subtitleStyle, subtitleStyleOverrides]);
+  }, [selectedPlan?.editorPreset.subtitleStyle, subtitleStyleOverrides]);
 
   const currentEditorState = useMemo<CreatorShortEditorState>(
     () => ({
@@ -754,7 +848,7 @@ export function CreatorHub({
 
   useEffect(() => {
     if (!activeSavedShortProject) return;
-    setShortProjectNameDraft(activeSavedShortProject.name || "");
+    setShortProjectNameDraft(activeSavedShortProject.origin === "ai_suggestion" ? "" : activeSavedShortProject.name || "");
   }, [activeSavedShortProject]);
 
   const autoGeneratedShortProjectName = useMemo(() => {
@@ -810,30 +904,118 @@ export function CreatorHub({
   const showInsights = selectedVideoInfoBlocks.has("insights");
 
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
+  const canAnalyzeWithAI = canAnalyze && hasOpenAIApiKey;
   const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
   const canExportVideo = canRender && !!mediaFile && isVideoMedia;
   const canCancelShortExport = isExportingShort && isBrowserRenderCancelableStage(shortExportStage);
+  const activeAnalysisMeta = activeTool === "video_info" ? videoInfoAnalysis : shortsAnalysis;
+  const isAnalyzing = activeTool === "video_info" ? isGeneratingVideoInfo : isGeneratingShorts;
+  const analyzeError = activeTool === "video_info" ? videoInfoError : shortsError;
+  const analyzeErrorDetails = getAnalyzeErrorDetails(analyzeError);
+  const activeEditableShortProjectId = shouldReuseShortProjectId(activeSavedShortProject);
 
-  const creatorRequestPayload = useMemo<CreatorAnalyzeRequest | null>(() => {
+  const creatorSourcePayload = useMemo<CreatorGenerationSourceInput | null>(() => {
     if (!selectedProject || !selectedTranscript || !selectedSubtitle || !selectedTranscript.transcript) return null;
 
     return {
-      filename: selectedProject.filename,
       transcriptText: selectedTranscript.transcript,
       transcriptChunks: selectedTranscript.chunks ?? [],
       subtitleChunks: selectedSubtitle.chunks,
-      transcriptLanguage: selectedTranscript.detectedLanguage || selectedTranscript.requestedLanguage,
       transcriptVersionLabel: selectedTranscript.label,
       subtitleVersionLabel: selectedSubtitle.label,
-      durationSeconds: getTranscriptDurationSeconds(selectedProject, selectedTranscript.id),
+    };
+  }, [selectedProject, selectedSubtitle, selectedTranscript]);
+
+  const shortsRequestPayload = useMemo<CreatorShortsGenerateRequest | null>(() => {
+    if (!creatorSourcePayload) return null;
+    return {
+      ...creatorSourcePayload,
       niche,
       audience,
       tone,
     };
-  }, [audience, niche, selectedProject, selectedSubtitle, selectedTranscript, tone]);
+  }, [audience, creatorSourcePayload, niche, tone]);
+
+  const videoInfoRequestPayload = useMemo<CreatorVideoInfoGenerateRequest | null>(() => {
+    if (!creatorSourcePayload) return null;
+    return {
+      ...creatorSourcePayload,
+      videoInfoBlocks,
+    };
+  }, [creatorSourcePayload, videoInfoBlocks]);
+
+  const aiSuggestionSourceSignature = useMemo(() => {
+    if (!selectedProject || !selectedTranscript || !selectedSubtitle) return "";
+
+    return buildAiSuggestionSourceSignature({
+      projectId: selectedProjectRootId || selectedProject.id,
+      sourceAssetId: selectedSourceAssetId || selectedProject.id,
+      transcriptId: selectedTranscript.id,
+      subtitleId: selectedSubtitle.id,
+      niche,
+      audience,
+      tone,
+    });
+  }, [audience, niche, selectedProject, selectedProjectRootId, selectedSourceAssetId, selectedSubtitle, selectedTranscript, tone]);
+
+  const matchingAiSuggestionGenerations = useMemo(() => {
+    if (!aiSuggestionSourceSignature) return [];
+    return aiSuggestionsByGeneration.filter((group) => group.sourceSignature === aiSuggestionSourceSignature);
+  }, [aiSuggestionSourceSignature, aiSuggestionsByGeneration]);
+
+  const defaultAiSuggestionEditorState = useMemo<CreatorShortEditorState>(
+    () => ({
+      zoom: 1.15,
+      panX: 0,
+      panY: 0,
+      subtitleScale: 1,
+      subtitleXPositionPct: 50,
+      subtitleYOffsetPct: 78,
+      showSubtitles: true,
+      subtitleStyle: {},
+      showSafeZones: true,
+    }),
+    []
+  );
+
+  const openAiSettingsDialog = useCallback(() => {
+    setOpenAIApiKeyDraft(openAIApiKey);
+    setIsAiSettingsOpen(true);
+  }, [openAIApiKey]);
+
+  const handleSaveOpenAIApiKey = useCallback(() => {
+    const trimmed = openAIApiKeyDraft.trim();
+    if (!trimmed) {
+      toast.error("Paste an OpenAI API key first.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
+
+    saveOpenAIApiKey(trimmed);
+    setIsAiSettingsOpen(false);
+    toast.success("OpenAI key saved in this browser.", {
+      className: "bg-green-500/20 border-green-500/50 text-green-100",
+    });
+  }, [openAIApiKeyDraft, saveOpenAIApiKey]);
+
+  const handleClearOpenAIApiKey = useCallback(() => {
+    clearOpenAIApiKey();
+    setOpenAIApiKeyDraft("");
+    toast.success("OpenAI key removed from this browser.", {
+      className: "bg-green-500/20 border-green-500/50 text-green-100",
+    });
+  }, [clearOpenAIApiKey]);
 
   const handleGenerateVideoInfo = async () => {
-    if (!creatorRequestPayload) return;
+    if (!videoInfoRequestPayload) return;
+    if (!hasOpenAIApiKey) {
+      openAiSettingsDialog();
+      toast.error("Add your OpenAI API key to generate video info.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
     if (videoInfoBlocks.length === 0) {
       toast.error("Select at least one video info block to generate.", {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
@@ -841,13 +1023,7 @@ export function CreatorHub({
       return;
     }
     try {
-      const result = await analyze({
-        ...creatorRequestPayload,
-        generation: {
-          tool: "video_info",
-          videoInfoBlocks,
-        },
-      });
+      const result = await generateVideoInfo(videoInfoRequestPayload, { openAIApiKey });
       toast.success(`Video info generated (${result.providerMode})`, {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
@@ -856,21 +1032,80 @@ export function CreatorHub({
     }
   };
 
-  const handleGenerateClipLab = async () => {
-    if (!creatorRequestPayload) return;
-    try {
-      const result = await analyze({
-        ...creatorRequestPayload,
-        generation: {
-          tool: "clip_lab",
-        },
+  const persistAiSuggestionGeneration = useCallback(
+    async (result: Awaited<ReturnType<typeof generateShorts>>) => {
+      if (!shortsRequestPayload || !selectedProject || !selectedTranscript || !selectedSubtitle) return 0;
+
+      const now = Date.now();
+      const records = buildAiSuggestionProjectRecords({
+        analysis: result,
+        now,
+        generationId: makeId("aisuggeng"),
+        projectId: selectedProjectRootId || selectedProject.id,
+        sourceAssetId: selectedSourceAssetId || selectedProject.id,
+        sourceFilename: mediaFilename || selectedProject.filename,
+        transcriptId: selectedTranscript.id,
+        subtitleId: selectedSubtitle.id,
+        sourceSignature: aiSuggestionSourceSignature,
+        inputSummary: buildAiSuggestionInputSummary({
+          request: shortsRequestPayload,
+          transcriptId: selectedTranscript.id,
+          subtitleId: selectedSubtitle.id,
+          model: result.model,
+        }),
+        editor: defaultAiSuggestionEditorState,
+        savedRecords: shortProjects,
+        newId: () => makeId("shortproj"),
+        secondsToClock,
       });
+
+      if (!records.length) return 0;
+      await Promise.all(records.map((record) => upsertProject(record)));
+      return records.length;
+    },
+    [
+      aiSuggestionSourceSignature,
+      defaultAiSuggestionEditorState,
+      mediaFilename,
+      selectedProject,
+      selectedProjectRootId,
+      selectedSourceAssetId,
+      selectedSubtitle,
+      selectedTranscript,
+      shortsRequestPayload,
+      shortProjects,
+      upsertProject,
+    ]
+  );
+
+  const runClipLabGeneration = useCallback(async () => {
+    if (!shortsRequestPayload) return;
+    if (!hasOpenAIApiKey) {
+      openAiSettingsDialog();
+      toast.error("Add your OpenAI API key to generate shorts.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
+    try {
+      const result = await generateShorts(shortsRequestPayload, { openAIApiKey });
+      const savedCount = await persistAiSuggestionGeneration(result);
       toast.success(`Clip lab generated (${result.providerMode})`, {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
+        description: savedCount > 0 ? `${savedCount} AI suggestion${savedCount === 1 ? "" : "s"} saved locally.` : undefined,
       });
     } catch (error) {
       console.error(error);
     }
+  }, [generateShorts, hasOpenAIApiKey, openAIApiKey, openAiSettingsDialog, persistAiSuggestionGeneration, shortsRequestPayload]);
+
+  const handleGenerateClipLab = async () => {
+    if (matchingAiSuggestionGenerations.length > 0 || hasAiSuggestionsForSignature(aiSuggestionSourceSignature)) {
+      setIsRegenerateAiSuggestionsDialogOpen(true);
+      return;
+    }
+
+    await runClipLabGeneration();
   };
 
   const buildCurrentShortProjectRecord = useCallback(
@@ -892,7 +1127,7 @@ export function CreatorHub({
         clip: effectiveClip,
         plan: selectedPlan,
         editor: currentEditorState,
-        savedRecords: savedShortProjects,
+        savedRecords: shortProjects,
         explicitId: options?.id,
         explicitName: shortProjectNameDraft,
         lastExportId: options?.lastExportId,
@@ -904,7 +1139,7 @@ export function CreatorHub({
       currentEditorState,
       editedClip,
       mediaFilename,
-      savedShortProjects,
+      shortProjects,
       selectedPlan,
       selectedProject,
       selectedProjectRootId,
@@ -917,7 +1152,7 @@ export function CreatorHub({
 
   const persistCanceledShortExportRestore = useCallback(() => {
     const nextProject = buildCurrentShortProjectRecord("draft", {
-      id: activeSavedShortProjectId || undefined,
+      id: activeEditableShortProjectId,
       lastExportId: shortExportRestoreSnapshotRef.current?.lastExportId,
       lastError: shortExportRestoreSnapshotRef.current?.lastError,
     });
@@ -934,7 +1169,7 @@ export function CreatorHub({
     void upsertProject(restoredProject).catch((error) => {
       console.error("Failed to persist canceled short export state", error);
     });
-  }, [activeSavedShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
+  }, [activeEditableShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
   const handleCancelShortExport = useCallback(() => {
     const session = shortExportSessionRef.current;
@@ -952,7 +1187,7 @@ export function CreatorHub({
 
   const handleSaveShortProject = useCallback(async () => {
     const record = buildCurrentShortProjectRecord("draft", {
-      id: activeSavedShortProjectId || undefined,
+      id: activeEditableShortProjectId,
     });
     if (!record) {
       toast.error("Select a source with transcript + subtitles to save a short config.", {
@@ -975,7 +1210,7 @@ export function CreatorHub({
         className: "bg-red-500/20 border-red-500/50 text-red-100",
       });
     }
-  }, [activeSavedShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
+  }, [activeEditableShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
   const applySavedShortProject = useCallback((project: CreatorShortProjectRecord) => {
     setActiveTool("clip_lab");
@@ -986,7 +1221,7 @@ export function CreatorHub({
     setSelectedSubtitleId(project.subtitleId);
     setSelectedClipId(project.clipId);
     setSelectedPlanId(project.planId);
-    setShortProjectNameDraft(project.name || "");
+    setShortProjectNameDraft(project.origin === "ai_suggestion" ? "" : project.name || "");
 
     setTrimStartNudge(0);
     setTrimEndNudge(0);
@@ -996,7 +1231,7 @@ export function CreatorHub({
     setSubtitleScale(project.editor.subtitleScale);
     setSubtitleXPositionPct(project.editor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(project.editor.subtitleYOffsetPct);
-    setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.subtitleStyle, project.editor.subtitleStyle));
+    setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.editorPreset.subtitleStyle, project.editor.subtitleStyle));
     setShowSubtitles(project.editor.showSubtitles ?? true);
     setShowSafeZones(project.editor.showSafeZones ?? true);
   }, []);
@@ -1007,7 +1242,9 @@ export function CreatorHub({
       const confirmMessage =
         exportCount > 0
           ? `Delete "${project.name}" and its ${exportCount} saved export${exportCount === 1 ? "" : "s"}?`
-          : `Delete "${project.name}"?`;
+          : project.origin === "ai_suggestion"
+            ? `Delete AI suggestion "${project.name}"?`
+            : `Delete "${project.name}"?`;
 
       if (!window.confirm(confirmMessage)) return;
 
@@ -1021,17 +1258,42 @@ export function CreatorHub({
           setSelectedPlanId(project.planId);
         }
 
-        toast.success("Saved short deleted", {
+        toast.success(project.origin === "ai_suggestion" ? "AI suggestion deleted" : "Saved short deleted", {
           className: "bg-green-500/20 border-green-500/50 text-green-100",
         });
       } catch (error) {
         console.error(error);
-        toast.error("Failed to delete saved short", {
+        toast.error(project.origin === "ai_suggestion" ? "Failed to delete AI suggestion" : "Failed to delete saved short", {
           className: "bg-red-500/20 border-red-500/50 text-red-100",
         });
       }
     },
     [activeSavedShortProjectId, deleteProject, exportsByProjectId]
+  );
+
+  const handleDeleteAiSuggestionGeneration = useCallback(
+    async (generationId: string, generationLabel: string) => {
+      if (!window.confirm(`Delete AI suggestion batch "${generationLabel}"?`)) return;
+
+      try {
+        await deleteSuggestionGeneration(generationId);
+        if (activeSavedShortProject?.suggestionGenerationId === generationId) {
+          setActiveSavedShortProjectId("");
+          setDetachedShortSelection({ clip: activeSavedShortProject.clip, plan: activeSavedShortProject.plan });
+          setSelectedClipId(activeSavedShortProject.clipId);
+          setSelectedPlanId(activeSavedShortProject.planId);
+        }
+        toast.success("AI suggestion batch deleted", {
+          className: "bg-green-500/20 border-green-500/50 text-green-100",
+        });
+      } catch (error) {
+        console.error(error);
+        toast.error("Failed to delete AI suggestion batch", {
+          className: "bg-red-500/20 border-red-500/50 text-red-100",
+        });
+      }
+    },
+    [activeSavedShortProject, deleteSuggestionGeneration]
   );
 
   const handleDownloadSavedExport = useCallback((record: CreatorShortExportRecord) => {
@@ -1156,7 +1418,7 @@ export function CreatorHub({
     }
 
     let shortProjectRecord = buildCurrentShortProjectRecord("exporting", {
-      id: activeSavedShortProjectId || undefined,
+      id: activeEditableShortProjectId,
       clipOverride: exportClip,
     });
     if (!shortProjectRecord) {
@@ -1513,6 +1775,39 @@ export function CreatorHub({
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid grid-cols-1 gap-4">
+                <div className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div className="space-y-1">
+                      <div className="text-xs uppercase tracking-wider text-white/50">AI Provider</div>
+                      <div className="flex flex-wrap items-center gap-2 text-sm">
+                        <span className="inline-flex items-center rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-cyan-100">
+                          OpenAI
+                        </span>
+                        <span
+                          className={cn(
+                            "inline-flex items-center rounded-full border px-2.5 py-1",
+                            hasOpenAIApiKey
+                              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
+                              : "border-amber-400/20 bg-amber-400/10 text-amber-100"
+                          )}
+                        >
+                          {hasOpenAIApiKey ? `Key ${maskedOpenAIApiKey}` : "Key missing"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-white/45">Se guarda solo en este navegador y se envía por request al backend.</div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="bg-white/5 text-white/85 hover:bg-white/10"
+                      onClick={openAiSettingsDialog}
+                    >
+                      <KeyRound className="mr-2 h-4 w-4" />
+                      {hasOpenAIApiKey ? "Update API Key" : "Add API Key"}
+                    </Button>
+                  </div>
+                </div>
+
                 <div>
                   <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Project</label>
                   <Select
@@ -1580,25 +1875,28 @@ export function CreatorHub({
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Niche</label>
+                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Niche (Optional)</label>
                     <input
                       value={niche}
+                      placeholder="e.g. Creator tools / workflow"
                       onChange={(e) => setNiche(e.target.value)}
                       className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/50"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Audience</label>
+                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Audience (Optional)</label>
                     <input
                       value={audience}
+                      placeholder="e.g. Content creators..."
                       onChange={(e) => setAudience(e.target.value)}
                       className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/50"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Tone</label>
+                    <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Tone (Optional)</label>
                     <input
                       value={tone}
+                      placeholder="e.g. Sharp, practical..."
                       onChange={(e) => setTone(e.target.value)}
                       className="w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white outline-none focus:border-cyan-400/50"
                     />
@@ -1684,32 +1982,52 @@ export function CreatorHub({
 
                   <div className="flex flex-wrap items-center gap-3">
                     {activeTool === "video_info" && (
-                      <Button
-                        onClick={handleGenerateVideoInfo}
-                        disabled={!canAnalyze || isAnalyzing || videoInfoBlocks.length === 0}
-                        className="text-black font-semibold bg-gradient-to-r from-cyan-500 to-emerald-400 hover:from-cyan-400 hover:to-emerald-300"
-                      >
-                        {isAnalyzing ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <WandSparkles className="w-4 h-4 mr-2" />
-                        )}
-                        Generate Video Info
-                      </Button>
+                      <TooltipProvider delayDuration={0}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-block cursor-not-allowed">
+                              <Button
+                                onClick={handleGenerateVideoInfo}
+                                disabled={!canAnalyzeWithAI || isAnalyzing || videoInfoBlocks.length === 0}
+                                className="text-black font-semibold bg-gradient-to-r from-cyan-500 to-emerald-400 hover:from-cyan-400 hover:to-emerald-300"
+                                style={{ pointerEvents: (!canAnalyzeWithAI || isAnalyzing || videoInfoBlocks.length === 0) ? 'none' : 'auto' }}
+                              >
+                                {isAnalyzing ? (
+                                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                ) : (
+                                  <WandSparkles className="w-4 h-4 mr-2" />
+                                )}
+                                Generate Video Info
+                              </Button>
+                            </span>
+                          </TooltipTrigger>
+                          {(!canAnalyzeWithAI || isAnalyzing || videoInfoBlocks.length === 0) && (
+                            <TooltipContent>
+                              {!canAnalyzeWithAI ? "Please configure your OpenAI API key in settings" : videoInfoBlocks.length === 0 ? "Select at least one info block" : "Generating..."}
+                            </TooltipContent>
+                          )}
+                        </Tooltip>
+                      </TooltipProvider>
                     )}
                     <Button variant="ghost" onClick={() => void refresh()} className="bg-white/5 hover:bg-white/10 text-white/80">
                       Refresh Media Library
                     </Button>
-                    {analysis && (
+                    {activeAnalysisMeta && (
                       <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-white/5 border border-white/10 text-xs text-white/70">
-                        Provider: {analysis.providerMode} · {analysis.model}
+                        Provider: {activeAnalysisMeta.providerMode} · {activeAnalysisMeta.model}
                       </span>
                     )}
                   </div>
                 </div>
 
                 {historyError && <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3">{historyError}</div>}
-                {analyzeError && <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3">{analyzeError}</div>}
+                {analyzeErrorDetails && (
+                  <Alert className="border-red-500/20 bg-red-500/10 text-red-100">
+                    <TriangleAlert className="h-4 w-4" />
+                    <AlertTitle className="text-red-100">{analyzeErrorDetails.title}</AlertTitle>
+                    <AlertDescription className="text-red-100/85">{analyzeErrorDetails.body}</AlertDescription>
+                  </Alert>
+                )}
                 {!historyError && !isLoadingHistory && history.length === 0 && (
                   <div className="text-sm text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
                     No transcription projects found yet. Transcribe a file first, then come back to build creator assets.
@@ -1722,9 +2040,9 @@ export function CreatorHub({
 
         </div>
 
-        {(analysis || activeTool === "clip_lab") && (
+        {(videoInfoAnalysis || activeTool === "clip_lab") && (
           <>
-            {activeTool === "video_info" && analysis && (
+            {activeTool === "video_info" && videoInfoAnalysis && (
             <div className="grid grid-cols-1 xl:grid-cols-[1.25fr_0.95fr] gap-6 items-start">
               <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                 <CardHeader>
@@ -1748,13 +2066,13 @@ export function CreatorHub({
                           size="sm"
                           variant="ghost"
                           className="text-white/70 hover:bg-white/10"
-                          onClick={() => copyText(analysis.youtube.titleIdeas.join("\n"), "Title ideas")}
+                          onClick={() => copyText(videoInfoAnalysis.youtube.titleIdeas.join("\n"), "Title ideas")}
                         >
                           <Copy className="w-4 h-4 mr-2" /> Copy
                         </Button>
                       </div>
                       <div className="space-y-2">
-                        {analysis.youtube.titleIdeas.map((title, index) => (
+                        {videoInfoAnalysis.youtube.titleIdeas.map((title, index) => (
                           <button
                             key={`${index}-${title}`}
                             onClick={() => copyText(title, `Title #${index + 1}`)}
@@ -1776,14 +2094,14 @@ export function CreatorHub({
                           size="sm"
                           variant="ghost"
                           className="text-white/70 hover:bg-white/10"
-                          onClick={() => copyText(analysis.youtube.description, "Description")}
+                          onClick={() => copyText(videoInfoAnalysis.youtube.description, "Description")}
                         >
                           <Copy className="w-4 h-4 mr-2" /> Copy
                         </Button>
                       </div>
                       <textarea
                         readOnly
-                        value={analysis.youtube.description}
+                        value={videoInfoAnalysis.youtube.description}
                         className="w-full h-56 rounded-xl border border-white/10 bg-black/25 p-3 text-sm text-white/85 leading-relaxed"
                       />
                     </div>
@@ -1795,7 +2113,7 @@ export function CreatorHub({
                         <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
                           <div className="text-xs uppercase tracking-wider text-white/50">Hashtags + SEO</div>
                           <div className="flex flex-wrap gap-2">
-                            {analysis.youtube.hashtags.map((tag) => (
+                            {videoInfoAnalysis.youtube.hashtags.map((tag) => (
                               <button
                                 key={tag}
                                 onClick={() => copyText(tag, "Hashtag")}
@@ -1806,7 +2124,7 @@ export function CreatorHub({
                             ))}
                           </div>
                           <div className="text-xs text-white/60 leading-relaxed">
-                            Keywords: {analysis.youtube.seoKeywords.join(", ")}
+                            Keywords: {videoInfoAnalysis.youtube.seoKeywords.join(", ")}
                           </div>
                         </div>
                       )}
@@ -1822,15 +2140,15 @@ export function CreatorHub({
                           </div>
                           {showPinnedComment && (
                             <button
-                              onClick={() => copyText(analysis.youtube.pinnedComment, "Pinned comment")}
+                              onClick={() => copyText(videoInfoAnalysis.youtube.pinnedComment, "Pinned comment")}
                               className="w-full text-left rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 p-3 text-sm text-white/85"
                             >
-                              {analysis.youtube.pinnedComment}
+                              {videoInfoAnalysis.youtube.pinnedComment}
                             </button>
                           )}
                           {showThumbnailHooks && (
                             <div className="grid grid-cols-1 gap-2">
-                              {analysis.youtube.thumbnailHooks.map((hook) => (
+                              {videoInfoAnalysis.youtube.thumbnailHooks.map((hook) => (
                                 <button
                                   key={hook}
                                   onClick={() => copyText(hook, "Thumbnail hook")}
@@ -1870,7 +2188,7 @@ export function CreatorHub({
                           size="sm"
                           variant="ghost"
                           className="bg-white/5 hover:bg-white/10 text-white/80"
-                          onClick={() => copyText(buildYouTubeTimestamps(analysis.chapters), "YouTube timestamps")}
+                          onClick={() => copyText(buildYouTubeTimestamps(videoInfoAnalysis.chapters), "YouTube timestamps")}
                         >
                           <Copy className="w-4 h-4 mr-2" /> Copy timestamps
                         </Button>
@@ -1878,13 +2196,13 @@ export function CreatorHub({
                           size="sm"
                           variant="ghost"
                           className="bg-white/5 hover:bg-white/10 text-white/80"
-                          onClick={() => copyText(analysis.youtube.chapterText, "Chapter block")}
+                          onClick={() => copyText(videoInfoAnalysis.youtube.chapterText, "Chapter block")}
                         >
                           <Copy className="w-4 h-4 mr-2" /> Copy chapter block
                         </Button>
                       </div>
                       <div className="space-y-2 max-h-80 overflow-auto pr-1">
-                        {analysis.chapters.map((chapter) => (
+                        {videoInfoAnalysis.chapters.map((chapter) => (
                           <div key={chapter.id} className="rounded-lg border border-white/10 bg-black/20 p-3">
                             <div className="text-sm font-medium text-white/90">{secondsToClock(chapter.timeSeconds)} {chapter.label}</div>
                             <div className="text-xs text-white/50 mt-1">{chapter.reason}</div>
@@ -1911,12 +2229,12 @@ export function CreatorHub({
                       {showContentPack && (
                         <>
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-white/80 leading-relaxed">
-                            {analysis.content.videoSummary}
+                            {videoInfoAnalysis.content.videoSummary}
                           </div>
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                             <div className="text-xs uppercase tracking-wider text-white/50 mb-2">Hook Ideas</div>
                             <ul className="space-y-2 text-white/80">
-                              {analysis.content.hookIdeas.map((hook) => (
+                              {videoInfoAnalysis.content.hookIdeas.map((hook) => (
                                 <li key={hook} className="text-sm">• {hook}</li>
                               ))}
                             </ul>
@@ -1924,7 +2242,7 @@ export function CreatorHub({
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                             <div className="text-xs uppercase tracking-wider text-white/50 mb-2">Repurpose Ideas</div>
                             <ul className="space-y-2 text-white/80">
-                              {analysis.content.repurposeIdeas.map((idea) => (
+                              {videoInfoAnalysis.content.repurposeIdeas.map((idea) => (
                                 <li key={idea} className="text-sm">• {idea}</li>
                               ))}
                             </ul>
@@ -1934,9 +2252,9 @@ export function CreatorHub({
 
                       {showInsights && (
                         <div className="grid grid-cols-2 gap-3 text-xs">
-                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">Words: <span className="text-cyan-200">{analysis.insights.transcriptWordCount}</span></div>
-                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">WPM: <span className="text-cyan-200">{analysis.insights.estimatedSpeakingRateWpm}</span></div>
-                          <div className="rounded-lg border border-white/10 bg-black/20 p-3 col-span-2">Theme: <span className="text-white/90">{analysis.insights.detectedTheme}</span></div>
+                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">Words: <span className="text-cyan-200">{videoInfoAnalysis.insights.transcriptWordCount}</span></div>
+                          <div className="rounded-lg border border-white/10 bg-black/20 p-3">WPM: <span className="text-cyan-200">{videoInfoAnalysis.insights.estimatedSpeakingRateWpm}</span></div>
+                          <div className="rounded-lg border border-white/10 bg-black/20 p-3 col-span-2">Theme: <span className="text-white/90">{videoInfoAnalysis.insights.detectedTheme}</span></div>
                         </div>
                       )}
                     </CardContent>
@@ -2039,6 +2357,99 @@ export function CreatorHub({
                     </div>
                   </div>
                 )}
+
+                {!isLoadingShortsLibrary && aiSuggestionsByGeneration.length > 0 && (
+                  <div className="space-y-4 mt-8">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xl font-bold text-white/90">AI Suggestions</h3>
+                      <span className="text-xs text-white/50">
+                        {aiSuggestionsByGeneration.reduce((total, group) => total + group.projects.length, 0)} suggestion
+                        {aiSuggestionsByGeneration.reduce((total, group) => total + group.projects.length, 0) === 1 ? "" : "s"} in{" "}
+                        {aiSuggestionsByGeneration.length} batch{aiSuggestionsByGeneration.length === 1 ? "" : "es"}
+                      </span>
+                    </div>
+
+                    <div className="space-y-4">
+                      {aiSuggestionsByGeneration.map((group) => (
+                        <div key={group.generationId} className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                          <div className="mb-4 flex items-start justify-between gap-3">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-fuchsia-100">
+                                  AI
+                                </span>
+                                <span className="text-sm font-semibold text-white/90">
+                                  {new Date(group.generatedAt).toLocaleString()}
+                                </span>
+                                <span className="text-xs text-white/45">
+                                  {group.projects.length} suggestion{group.projects.length === 1 ? "" : "s"}
+                                </span>
+                              </div>
+                              <div className="text-xs leading-relaxed text-white/55">
+                                {formatAiSuggestionInputSummary(group.inputSummary)}
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
+                              onClick={() =>
+                                void handleDeleteAiSuggestionGeneration(
+                                  group.generationId,
+                                  new Date(group.generatedAt).toLocaleString()
+                                )
+                              }
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Delete batch
+                            </Button>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                            {group.projects.map((project) => (
+                              <div
+                                key={project.id}
+                                onClick={() => {
+                                  applySavedShortProject(project);
+                                  setHubView("editor");
+                                }}
+                                className="rounded-xl border border-white/10 bg-white/[0.03] p-4 transition-colors hover:bg-white/5 cursor-pointer"
+                              >
+                                <div className="mb-2 flex items-start justify-between gap-3">
+                                  <div className="text-sm font-semibold leading-snug text-white/90">{project.plan.title}</div>
+                                  <div className="rounded-full border border-orange-400/20 bg-orange-400/10 px-2 py-1 text-[10px] uppercase tracking-wide text-orange-100">
+                                    {platformLabel(project.platform)}
+                                  </div>
+                                </div>
+                                <div className="mb-2 text-xs font-medium text-white/50">
+                                  {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                                </div>
+                                <div className="mb-3 line-clamp-3 text-xs leading-relaxed text-white/60">{project.clip.reason}</div>
+                                <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
+                                  <div className="text-[11px] text-white/40">Score {project.clip.score}</div>
+                                  <Button
+                                    type="button"
+                                    size="icon-xs"
+                                    variant="ghost"
+                                    className="shrink-0 bg-white/5 hover:bg-red-500/15 text-white/50 hover:text-red-200"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void handleDeleteShortProject(project);
+                                    }}
+                                    title={`Delete ${project.name}`}
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </Button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2048,58 +2459,136 @@ export function CreatorHub({
                   <Button variant="ghost" className="text-white/70 hover:text-white hover:bg-white/10 -ml-3" onClick={() => setHubView("start")}>
                     <ArrowLeft className="w-4 h-4 mr-2" /> Back
                   </Button>
-                  <Button
-                    onClick={handleGenerateClipLab}
-                    disabled={!canAnalyze || isAnalyzing}
-                    className="text-black font-semibold bg-gradient-to-r from-orange-500 to-fuchsia-400 hover:from-orange-400 hover:to-fuchsia-300 shadow-lg"
-                  >
-                    {isAnalyzing ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
-                      <Flame className="w-4 h-4 mr-2" />
-                    )}
-                    {analysis?.viralClips?.length ? "Regenerate Clips" : "Generate Clips"}
-                  </Button>
+                  <TooltipProvider delayDuration={0}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-block cursor-not-allowed">
+                          <Button
+                            onClick={handleGenerateClipLab}
+                            disabled={!canAnalyzeWithAI || isAnalyzing}
+                            className="text-black font-semibold bg-gradient-to-r from-orange-500 to-fuchsia-400 hover:from-orange-400 hover:to-fuchsia-300 shadow-lg"
+                            style={{ pointerEvents: (!canAnalyzeWithAI || isAnalyzing) ? 'none' : 'auto' }}
+                          >
+                            {isAnalyzing ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <Flame className="w-4 h-4 mr-2" />
+                            )}
+                            {matchingAiSuggestionGenerations.length > 0 || aiSuggestionsByGeneration.length > 0
+                              ? "Generate More Clips"
+                              : "Generate Clips"}
+                          </Button>
+                        </span>
+                      </TooltipTrigger>
+                      {!canAnalyzeWithAI && (
+                        <TooltipContent>
+                          <p>Please configure your OpenAI API key in settings</p>
+                        </TooltipContent>
+                      )}
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-2xl"><Flame className="w-6 h-6 text-orange-300" /> AI Magic Clips</CardTitle>
-                    <CardDescription className="text-white/50 text-base">Review AI-suggested viral moments. Click any clip to start editing.</CardDescription>
+                    <CardDescription className="text-white/50 text-base">
+                      Review saved AI suggestion batches. Each generation keeps the inputs used so you can compare recommendations over time.
+                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 max-h-[42rem] overflow-auto pr-1">
-                    {analysis?.viralClips?.length ? (
-                      analysis.viralClips.map((clip) => {
-                        const textPreview = selectedSubtitle ? summarizeClipText(clip, selectedSubtitle.chunks, 200) : clip.hook;
-                        return (
-                          <button
-                            key={clip.id}
-                            onClick={() => {
-                              setActiveSavedShortProjectId("");
-                              setDetachedShortSelection(null);
-                              setSelectedClipId(clip.id);
-                              setShortProjectNameDraft("");
-                              setTrimStartNudge(0);
-                              setTrimEndNudge(0);
-                              setHubView("editor");
-                            }}
-                            className="w-full text-left rounded-2xl border border-white/10 bg-black/20 hover:bg-black/40 hover:border-orange-300/30 transition-all p-5 group"
-                          >
-                            <div className="flex items-center justify-between gap-3 mb-3">
-                              <div className="text-base font-semibold text-white/90 group-hover:text-orange-200 transition-colors">{clip.title}</div>
-                              <div className="text-xs px-2.5 py-1 rounded-full bg-orange-400/10 border border-orange-400/20 text-orange-100/90 font-medium tracking-wide">Score {clip.score}</div>
+                    {matchingAiSuggestionGenerations.length > 0 ? (
+                      matchingAiSuggestionGenerations.map((group) => (
+                        <div key={group.generationId} className="rounded-2xl border border-white/10 bg-black/20 p-5">
+                          <div className="mb-4 flex items-start justify-between gap-3">
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-fuchsia-100">
+                                  AI Batch
+                                </span>
+                                <span className="text-sm font-semibold text-white/90">
+                                  {new Date(group.generatedAt).toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="text-xs leading-relaxed text-white/55">
+                                {formatAiSuggestionInputSummary(group.inputSummary)}
+                              </div>
                             </div>
-                            <div className="text-xs text-white/50 mb-3 font-medium">
-                              {secondsToClock(clip.startSeconds)} → {secondsToClock(clip.endSeconds)} ({Math.round(clip.durationSeconds)}s)
-                            </div>
-                            <div className="text-sm text-white/80 leading-relaxed italic border-l-2 border-white/10 pl-3 py-1 mb-3">{textPreview}</div>
-                            <div className="text-xs text-white/55 bg-white/5 rounded-lg p-3 leading-relaxed">{clip.reason}</div>
-                          </button>
-                        );
-                      })
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
+                              onClick={() =>
+                                void handleDeleteAiSuggestionGeneration(
+                                  group.generationId,
+                                  new Date(group.generatedAt).toLocaleString()
+                                )
+                              }
+                            >
+                              <Trash2 className="mr-2 h-4 w-4" />
+                              Delete batch
+                            </Button>
+                          </div>
+
+                          <div className="space-y-3">
+                            {group.projects.map((project) => {
+                              const textPreview = selectedSubtitle
+                                ? summarizeClipText(project.clip, selectedSubtitle.chunks, 200)
+                                : project.clip.hook;
+                              return (
+                                <button
+                                  key={project.id}
+                                  onClick={() => {
+                                    applySavedShortProject(project);
+                                    setHubView("editor");
+                                  }}
+                                  className="w-full text-left rounded-2xl border border-white/10 bg-black/20 hover:bg-black/40 hover:border-orange-300/30 transition-all p-5 group"
+                                >
+                                  <div className="mb-3 flex items-center justify-between gap-3">
+                                    <div className="text-base font-semibold text-white/90 group-hover:text-orange-200 transition-colors">
+                                      {project.plan.title}
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <div className="text-xs px-2.5 py-1 rounded-full bg-fuchsia-400/10 border border-fuchsia-400/20 text-fuchsia-100/90 font-medium tracking-wide">
+                                        AI
+                                      </div>
+                                      <div className="text-xs px-2.5 py-1 rounded-full bg-orange-400/10 border border-orange-400/20 text-orange-100/90 font-medium tracking-wide">
+                                        {platformLabel(project.platform)}
+                                      </div>
+                                    </div>
+                                  </div>
+                                  <div className="text-xs text-white/50 mb-3 font-medium">
+                                    {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)} ({Math.round(project.clip.durationSeconds)}s)
+                                  </div>
+                                  <div className="text-sm text-white/80 leading-relaxed italic border-l-2 border-white/10 pl-3 py-1 mb-3">
+                                    {textPreview}
+                                  </div>
+                                  <div className="flex items-start justify-between gap-3 rounded-lg bg-white/5 p-3">
+                                    <div className="text-xs text-white/55 leading-relaxed">{project.clip.reason}</div>
+                                    <Button
+                                      type="button"
+                                      size="icon-xs"
+                                      variant="ghost"
+                                      className="shrink-0 bg-white/5 hover:bg-red-500/15 text-white/50 hover:text-red-200"
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleDeleteShortProject(project);
+                                      }}
+                                      title={`Delete ${project.name}`}
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </Button>
+                                  </div>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))
                     ) : (
                       <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-8 text-center text-sm text-white/60">
                         <Flame className="w-8 h-8 mx-auto text-white/20 mb-3" />
-                        Run <span className="text-white font-semibold">Generate Clip Lab</span> up top to populate viral clip candidates!
+                        Run <span className="text-white font-semibold">Generate Clip Lab</span> to save your first AI suggestion batch.
                       </div>
                     )}
                   </CardContent>
@@ -2326,7 +2815,11 @@ export function CreatorHub({
                             <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
                             {activeSavedShortProject && (
-                              <div className="text-emerald-200/90">Loaded saved short: {activeSavedShortProject.name}</div>
+                              <div className={cn("font-medium", activeSavedShortProject.origin === "ai_suggestion" ? "text-fuchsia-200/90" : "text-emerald-200/90")}>
+                                {activeSavedShortProject.origin === "ai_suggestion"
+                                  ? `Loaded AI suggestion: ${activeSavedShortProject.name}`
+                                  : `Loaded saved short: ${activeSavedShortProject.name}`}
+                              </div>
                             )}
                           </div>
                         )}
@@ -2818,7 +3311,7 @@ export function CreatorHub({
                                 className="bg-white/5 hover:bg-white/10 text-white/90"
                               >
                                 <Save className="w-4 h-4 mr-2" />
-                                Save Short Config
+                                {activeSavedShortProject?.origin === "ai_suggestion" ? "Save As Manual Short" : "Save Short Config"}
                               </Button>
                               <Button
                                 onClick={handleRenderShort}
@@ -2851,7 +3344,7 @@ export function CreatorHub({
                                   disabled={isExportingShort}
                                 >
                                   <Trash2 className="w-4 h-4 mr-2" />
-                                  Delete Loaded Short
+                                  {activeSavedShortProject.origin === "ai_suggestion" ? "Delete Loaded Suggestion" : "Delete Loaded Short"}
                                 </Button>
                               )}
                               <Button
@@ -2983,6 +3476,136 @@ export function CreatorHub({
           </>
         )}
       </div>
+
+      <Dialog open={isAiSettingsOpen} onOpenChange={setIsAiSettingsOpen}>
+        <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>OpenAI API Key</DialogTitle>
+            <DialogDescription className="text-white/55">
+              Stored only in this browser. The backend uses it per request and does not persist it.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="creator-openai-key" className="text-white/80">
+                API key
+              </Label>
+              <Input
+                id="creator-openai-key"
+                type="password"
+                value={openAIApiKeyDraft}
+                onChange={(event) => setOpenAIApiKeyDraft(event.target.value)}
+                placeholder="sk-proj-..."
+                autoComplete="off"
+              />
+            </div>
+
+            {hasOpenAIApiKey && (
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
+                Current key: {maskedOpenAIApiKey}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="sm:justify-between">
+            <div className="flex gap-2">
+              {hasOpenAIApiKey && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="bg-white/5 text-white/80 hover:bg-white/10"
+                  onClick={handleClearOpenAIApiKey}
+                >
+                  Remove key
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="ghost"
+                className="bg-white/5 text-white/80 hover:bg-white/10"
+                onClick={() => setIsAiSettingsOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                className="bg-gradient-to-r from-cyan-500 to-emerald-400 font-semibold text-black hover:from-cyan-400 hover:to-emerald-300"
+                onClick={handleSaveOpenAIApiKey}
+              >
+                Save key
+              </Button>
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isRegenerateAiSuggestionsDialogOpen} onOpenChange={setIsRegenerateAiSuggestionsDialogOpen}>
+        <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Existing AI suggestions found</DialogTitle>
+            <DialogDescription className="text-white/55">
+              There are already saved AI suggestions for the current source, transcript, subtitle, and niche/audience/tone inputs.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/75">
+              <div className="font-medium text-white/90">
+                {matchingAiSuggestionGenerations.length} existing batch{matchingAiSuggestionGenerations.length === 1 ? "" : "es"}
+              </div>
+              <div className="mt-2 text-xs leading-relaxed text-white/55">
+                {shortsRequestPayload
+                  ? formatAiSuggestionInputSummary({
+                      niche: shortsRequestPayload.niche,
+                      audience: shortsRequestPayload.audience,
+                      tone: shortsRequestPayload.tone,
+                      transcriptVersionLabel: shortsRequestPayload.transcriptVersionLabel,
+                      subtitleVersionLabel: shortsRequestPayload.subtitleVersionLabel,
+                    })
+                  : "No active input summary"}
+              </div>
+            </div>
+
+            <div className="max-h-56 space-y-3 overflow-auto pr-1">
+              {matchingAiSuggestionGenerations.map((group) => (
+                <div key={group.generationId} className="rounded-xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-sm font-semibold text-white/90">{new Date(group.generatedAt).toLocaleString()}</div>
+                  <div className="mt-1 text-xs text-white/50">
+                    {group.projects.length} suggestion{group.projects.length === 1 ? "" : "s"}
+                  </div>
+                  <div className="mt-2 text-xs leading-relaxed text-white/55">
+                    {formatAiSuggestionInputSummary(group.inputSummary)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="ghost"
+              className="bg-white/5 text-white/80 hover:bg-white/10"
+              onClick={() => setIsRegenerateAiSuggestionsDialogOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              className="bg-gradient-to-r from-orange-500 to-fuchsia-400 font-semibold text-black hover:from-orange-400 hover:to-fuchsia-300"
+              onClick={() => {
+                setIsRegenerateAiSuggestionsDialogOpen(false);
+                void runClipLabGeneration();
+              }}
+            >
+              Generate another batch
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Toaster theme="dark" position="bottom-center" />
     </main>

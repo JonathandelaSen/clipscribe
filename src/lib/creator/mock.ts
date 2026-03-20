@@ -1,15 +1,17 @@
 import { makeId, type SubtitleChunk } from "@/lib/history";
+import { EDITOR_PRESETS } from "@/lib/creator/editor-presets";
 import {
   clamp,
   secondsToClock,
-  type CreatorAnalyzeRequest,
-  type CreatorAnalysisResponse,
   type CreatorChapter,
   type CreatorShortPlan,
   type CreatorShortRenderRequest,
   type CreatorShortRenderResponse,
+  type CreatorShortsGenerateRequest,
+  type CreatorShortsGenerateResponse,
+  type CreatorVideoInfoGenerateRequest,
+  type CreatorVideoInfoGenerateResponse,
   type CreatorViralClip,
-  type CreatorVerticalEditorPreset,
   type ShortsPlatform,
 } from "@/lib/creator/types";
 
@@ -25,42 +27,11 @@ const HOOK_TERMS = [
   "don\"t", "stop", "look", "crazy", "important", "actually", "truth", "strategy", "algorithm", "growth",
 ];
 
-const EDITOR_PRESETS: CreatorVerticalEditorPreset[] = [
-  {
-    platform: "youtube_shorts",
-    aspectRatio: "9:16",
-    resolution: "1080x1920",
-    subtitleStyle: "bold_pop",
-    safeTopPct: 10,
-    safeBottomPct: 16,
-    targetDurationRange: [20, 55],
-  },
-  {
-    platform: "tiktok",
-    aspectRatio: "9:16",
-    resolution: "1080x1920",
-    subtitleStyle: "creator_neon",
-    safeTopPct: 8,
-    safeBottomPct: 20,
-    targetDurationRange: [15, 45],
-  },
-  {
-    platform: "instagram_reels",
-    aspectRatio: "9:16",
-    resolution: "1080x1920",
-    subtitleStyle: "clean_caption",
-    safeTopPct: 9,
-    safeBottomPct: 18,
-    targetDurationRange: [15, 60],
-  },
-];
-
 function normalizeText(input: string): string {
   return input.replace(/\s+/g, " ").trim();
 }
 
-function getRuntimeSeconds(chunks: SubtitleChunk[], explicit?: number): number {
-  if (Number.isFinite(explicit) && (explicit ?? 0) > 0) return Number(explicit);
+function getRuntimeSeconds(chunks: SubtitleChunk[]): number {
   if (!chunks.length) return 0;
   const lastWithTime = [...chunks].reverse().find((chunk) => chunk.timestamp?.[1] != null || chunk.timestamp?.[0] != null);
   if (!lastWithTime) return 0;
@@ -180,7 +151,7 @@ function overlap(a: CreatorViralClip, b: CreatorViralClip): boolean {
   return a.startSeconds < b.endSeconds && b.startSeconds < a.endSeconds;
 }
 
-function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: string[], transcriptLanguage?: string): CreatorViralClip[] {
+function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: string[]): CreatorViralClip[] {
   if (!chunks.length) return [];
 
   const candidates: CreatorViralClip[] = [];
@@ -218,8 +189,7 @@ function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: str
             reason: `High hook density and compact narrative window (${sourceChunkIndexes.length} subtitle chunks).`,
             punchline,
             sourceChunkIndexes,
-            suggestedSubtitleLanguage: transcriptLanguage || "en",
-            platforms: ["youtube_shorts", "tiktok", "instagram_reels"],
+            suggestedSubtitleLanguage: "en",
           });
         }
         break;
@@ -249,8 +219,7 @@ function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: str
       reason: "Fallback clip from the opening chunk.",
       punchline: normalizeText(String(firstChunk.text ?? "")),
       sourceChunkIndexes: [0],
-      suggestedSubtitleLanguage: transcriptLanguage || "en",
-      platforms: ["youtube_shorts", "tiktok", "instagram_reels"],
+      suggestedSubtitleLanguage: "en",
     });
   }
 
@@ -286,7 +255,6 @@ function buildShortPlans(clips: CreatorViralClip[], topTerms: string[]): Creator
         platform: preset.platform,
         title: `${platformLabel(preset.platform)} cut: ${clip.title.replace(/^Clip angle:\s*/i, "")}`,
         caption: `${clip.hook.slice(0, 90)}${clip.hook.length > 90 ? "…" : ""}\n\n#${keyword.replace(/[^a-z0-9]/gi, "")}${preset.platform === "youtube_shorts" ? " #shorts" : ""}`,
-        subtitleStyle: preset.subtitleStyle,
         openingText: clip.hook.slice(0, 60),
         endCardText: `Want more ${keyword}? Follow for part 2`,
         editorPreset: preset,
@@ -301,14 +269,14 @@ function deduceTheme(topTerms: string[]): string {
   return `Content focused on ${topTerms.slice(0, 3).join(", ")}`;
 }
 
-export function generateMockCreatorAnalysis(request: CreatorAnalyzeRequest): CreatorAnalysisResponse {
+function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVideoInfoGenerateRequest) {
   const transcriptText = normalizeText(request.transcriptText || request.transcriptChunks.map((c) => String(c.text ?? "")).join(" "));
   const chunks = request.transcriptChunks ?? [];
-  const runtimeSeconds = Math.max(1, Math.round(getRuntimeSeconds(chunks, request.durationSeconds) || 1));
+  const runtimeSeconds = Math.max(1, Math.round(getRuntimeSeconds(chunks) || 1));
   const topTerms = extractTopTerms(transcriptText, 12);
   const chapters = buildChapters(chunks, runtimeSeconds, topTerms);
   const chapterText = buildChapterText(chapters);
-  const viralClips = buildViralClips(chunks, runtimeSeconds, topTerms, request.transcriptLanguage);
+  const viralClips = buildViralClips(chunks, runtimeSeconds, topTerms);
   const shortsPlans = buildShortPlans(viralClips, topTerms);
   const wordCount = transcriptText.split(/\s+/).filter(Boolean).length;
   const speakingRate = runtimeSeconds > 0 ? Math.round((wordCount / runtimeSeconds) * 60) : 0;
@@ -319,7 +287,7 @@ export function generateMockCreatorAnalysis(request: CreatorAnalyzeRequest): Cre
 
   const videoSummary = summarizeTranscript(transcriptText, topTerms);
   const titleIdeas = [
-    `${request.filename.replace(/\.[^/.]+$/, "")} Breakdown: ${primaryKeyword} + ${secondaryKeyword}`,
+    `Content Breakdown: ${primaryKeyword} + ${secondaryKeyword}`,
     `The ${primaryKeyword} System Nobody Explains Clearly (${secondaryKeyword} + ${tertiaryKeyword})`,
     `How to Improve ${primaryKeyword} Fast: Real Workflow, Mistakes, and Wins`,
     `${primaryKeyword} vs ${secondaryKeyword}: What Actually Matters in Practice`,
@@ -349,11 +317,12 @@ export function generateMockCreatorAnalysis(request: CreatorAnalyzeRequest): Cre
   ];
 
   return {
-    ok: true,
-    providerMode: "mock",
-    model: "mock-chatgpt-creator-v1",
-    generatedAt: Date.now(),
     runtimeSeconds,
+    wordCount,
+    speakingRate,
+    repeatedTerms,
+    recommendedPrimaryPlatform,
+    detectedTheme: deduceTheme(topTerms),
     youtube: {
       titleIdeas,
       description: descriptionLines.join("\n"),
@@ -391,13 +360,40 @@ export function generateMockCreatorAnalysis(request: CreatorAnalyzeRequest): Cre
     chapters,
     viralClips,
     shortsPlans,
+  };
+}
+
+export function generateMockCreatorShorts(request: CreatorShortsGenerateRequest): CreatorShortsGenerateResponse {
+  const mock = buildMockAnalysisData(request);
+  return {
+    ok: true,
+    providerMode: "mock",
+    model: "mock-chatgpt-creator-v1",
+    generatedAt: Date.now(),
+    runtimeSeconds: mock.runtimeSeconds,
+    viralClips: mock.viralClips,
+    shortsPlans: mock.shortsPlans,
     editorPresets: EDITOR_PRESETS,
+  };
+}
+
+export function generateMockCreatorVideoInfo(request: CreatorVideoInfoGenerateRequest): CreatorVideoInfoGenerateResponse {
+  const mock = buildMockAnalysisData(request);
+  return {
+    ok: true,
+    providerMode: "mock",
+    model: "mock-chatgpt-creator-v1",
+    generatedAt: Date.now(),
+    runtimeSeconds: mock.runtimeSeconds,
+    youtube: mock.youtube,
+    content: mock.content,
+    chapters: mock.chapters,
     insights: {
-      transcriptWordCount: wordCount,
-      estimatedSpeakingRateWpm: speakingRate,
-      repeatedTerms,
-      detectedTheme: deduceTheme(topTerms),
-      recommendedPrimaryPlatform,
+      transcriptWordCount: mock.wordCount,
+      estimatedSpeakingRateWpm: mock.speakingRate,
+      repeatedTerms: mock.repeatedTerms,
+      detectedTheme: mock.detectedTheme,
+      recommendedPrimaryPlatform: mock.recommendedPrimaryPlatform,
     },
   };
 }
@@ -447,7 +443,7 @@ export function generateMockShortRender(request: CreatorShortRenderRequest): Cre
       ffmpegCommandPreview,
       notes: [
         "Mock render response (no real video file generated yet).",
-        `Clip duration ${clip.durationSeconds}s, subtitle style ${plan.subtitleStyle}.`,
+        `Clip duration ${clip.durationSeconds}s, subtitle style ${plan.editorPreset.subtitleStyle}.`,
         subtitleText ? `Subtitle preview text: ${subtitleText}${subtitleText.length >= 80 ? "…" : ""}` : "No subtitle chunks provided.",
       ],
     },

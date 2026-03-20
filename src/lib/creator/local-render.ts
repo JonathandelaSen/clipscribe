@@ -410,7 +410,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             outputFilename,
           ];
 
-    const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(input.plan.subtitleStyle, input.editor.subtitleStyle);
+    const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(input.plan.editorPreset.subtitleStyle, input.editor.subtitleStyle);
 
     const notes = [
       `Local browser render via ffmpeg.wasm (${input.plan.platform})`,

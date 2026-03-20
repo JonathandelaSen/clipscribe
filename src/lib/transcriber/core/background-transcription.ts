@@ -115,6 +115,32 @@ async function updateTranscriptVersion(
   await repository.putAssetTranscript(historyItemToTranscriptRecord(nextItem, task.projectId));
 }
 
+async function createTranscribingTranscriptVersion(
+  repository: ProjectRepository,
+  options: {
+    projectId: string;
+    assetId: string;
+    transcriptVersionId: string;
+    fileName: string;
+    requestedLanguage: string;
+  }
+) {
+  const now = Date.now();
+  const history = await repository.listProjectHistory(options.projectId);
+  const nextHistory = upsertTranscribingTranscriptProject(history, {
+    now,
+    projectId: options.assetId,
+    transcriptVersionId: options.transcriptVersionId,
+    fileName: options.fileName,
+    requestedLanguage: options.requestedLanguage,
+  });
+  const nextItem = nextHistory.find((item) => item.id === options.assetId);
+  if (!nextItem) {
+    throw new Error("Failed to create the transcription history entry.");
+  }
+  await repository.putAssetTranscript(historyItemToTranscriptRecord(nextItem, options.projectId));
+}
+
 export function startBackgroundTranscriptionTask(
   options: BackgroundTranscriptionTaskOptions,
   dependencies: BackgroundTranscriptionDependencies,
@@ -153,146 +179,173 @@ export function startBackgroundTranscriptionTask(
   };
 
   const promise = (async () => {
-    callbacks.onTaskUpdate({
-      status: "preparing",
-      progress: 2,
-      message: "Preparing audio",
-    });
-
-    const audioData = await dependencies.decodeAudio(options.file);
-    if (isCanceled) return;
-
-    const duration = audioData.length / 16000;
-    const { projectId, assetId } = await ensureProjectAssetForTranscription(
-      dependencies.repository,
-      options.file,
-      options,
-      duration
-    );
-    if (isCanceled) return;
-
-    const transcriptVersionId = makeId("tx");
-    activeTask = { projectId, assetId, transcriptVersionId };
-
-    const now = Date.now();
-    const history = await dependencies.repository.listProjectHistory(projectId);
-    const nextHistory = upsertTranscribingTranscriptProject(history, {
-      now,
-      projectId: assetId,
-      transcriptVersionId,
-      fileName: options.file.name,
-      requestedLanguage: options.language,
-    });
-    const nextItem = nextHistory.find((item) => item.id === assetId);
-    if (!nextItem) {
-      throw new Error("Failed to create the transcription history entry.");
-    }
-    await dependencies.repository.putAssetTranscript(historyItemToTranscriptRecord(nextItem, projectId));
-
-    callbacks.onTaskUpdate({
-      status: "preparing",
-      progress: 5,
-      message: "Loading transcription model",
-    });
-
-    worker = dependencies.createWorker();
-
-    await new Promise<void>((resolve, reject) => {
-      resolveWorkerRun = resolve;
-      messageListener = (event: MessageEvent<WorkerEventPayload>) => {
-        if (hasSettled || isCanceled) return;
-        const payload = event.data;
-
-        if (payload.status === "progress") {
-          callbacks.onTaskUpdate({
-            status: "preparing",
-            progress: typeof payload.data?.progress === "number" ? Math.round(payload.data.progress) : null,
-            message: payload.data?.name ? `Loading ${payload.data.name}` : "Loading transcription model",
-          });
-          return;
+    try {
+      if (options.projectId && options.assetId) {
+        const existingAsset = await dependencies.repository.getAsset(options.assetId);
+        if (!existingAsset) {
+          throw new Error("Selected source asset no longer exists.");
         }
 
-        if (payload.status === "ready") {
-          callbacks.onTaskUpdate({
-            status: "running",
-            progress: 0,
-            message: "Transcribing audio",
-          });
-          return;
-        }
+        const transcriptVersionId = makeId("tx");
+        activeTask = {
+          projectId: options.projectId,
+          assetId: options.assetId,
+          transcriptVersionId,
+        };
+        await createTranscribingTranscriptVersion(dependencies.repository, {
+          projectId: options.projectId,
+          assetId: options.assetId,
+          transcriptVersionId,
+          fileName: options.file.name,
+          requestedLanguage: options.language,
+        });
+      }
 
-        if (payload.status === "chunk_progress") {
-          callbacks.onTaskUpdate({
-            status: "running",
-            progress: typeof payload.progress === "number" ? payload.progress : 0,
-            message: "Transcribing audio",
-          });
-          return;
-        }
-
-        if (payload.status === "complete") {
-          hasSettled = true;
-          if (worker && messageListener && worker.removeEventListener) {
-            worker.removeEventListener("message", messageListener);
-            messageListener = null;
-          }
-          callbacks.onTaskUpdate({
-            status: "finalizing",
-            progress: 96,
-            message: "Saving transcript",
-          });
-
-          void updateTranscriptVersion(dependencies.repository, activeTask!, (transcript) => {
-            const now = Date.now();
-            const textOutput = getTextOutput(payload.output);
-            const chunkOutput = getChunkOutput(payload.output);
-            const detectedLanguage = getDetectedLanguage(payload.output, options.language);
-            let updated: TranscriptVersion = {
-              ...transcript,
-              status: "completed",
-              transcript: textOutput ?? transcript.transcript,
-              chunks: chunkOutput ?? transcript.chunks,
-              detectedLanguage,
-              error: undefined,
-              updatedAt: now,
-            };
-            updated = syncOriginalSubtitleVersion(updated, {
-              chunks: (chunkOutput ?? transcript.chunks ?? []) as SubtitleChunk[],
-              language: detectedLanguage,
-              now,
-            });
-            return updated;
-          })
-            .then(() => resolve())
-            .catch(reject);
-          return;
-        }
-
-        if (payload.status === "error") {
-          hasSettled = true;
-          if (worker && messageListener && worker.removeEventListener) {
-            worker.removeEventListener("message", messageListener);
-            messageListener = null;
-          }
-          void updateTranscriptVersion(dependencies.repository, activeTask!, (transcript) => ({
-            ...transcript,
-            status: "error",
-            error: payload.error || "Transcription failed.",
-            updatedAt: Date.now(),
-          }))
-            .then(() => reject(new Error(payload.error || "Transcription failed.")))
-            .catch(reject);
-        }
-      };
-
-      worker!.addEventListener("message", messageListener);
-      worker!.postMessage({
-        type: "transcribe",
-        audio: audioData,
-        duration,
-        language: options.language,
+      callbacks.onTaskUpdate({
+        status: "preparing",
+        progress: 2,
+        message: "Preparing audio",
       });
-    });
+
+      const audioData = await dependencies.decodeAudio(options.file);
+      if (isCanceled) return;
+
+      const duration = audioData.length / 16000;
+      const { projectId, assetId } = await ensureProjectAssetForTranscription(
+        dependencies.repository,
+        options.file,
+        options,
+        duration
+      );
+      if (isCanceled) return;
+
+      if (!activeTask) {
+        const transcriptVersionId = makeId("tx");
+        activeTask = { projectId, assetId, transcriptVersionId };
+        await createTranscribingTranscriptVersion(dependencies.repository, {
+          projectId,
+          assetId,
+          transcriptVersionId,
+          fileName: options.file.name,
+          requestedLanguage: options.language,
+        });
+      }
+
+      callbacks.onTaskUpdate({
+        status: "preparing",
+        progress: 5,
+        message: "Loading transcription model",
+      });
+
+      worker = dependencies.createWorker();
+
+      await new Promise<void>((resolve, reject) => {
+        resolveWorkerRun = resolve;
+        messageListener = (event: MessageEvent<WorkerEventPayload>) => {
+          if (hasSettled || isCanceled) return;
+          const payload = event.data;
+
+          if (payload.status === "progress") {
+            callbacks.onTaskUpdate({
+              status: "preparing",
+              progress: typeof payload.data?.progress === "number" ? Math.round(payload.data.progress) : null,
+              message: payload.data?.name ? `Loading ${payload.data.name}` : "Loading transcription model",
+            });
+            return;
+          }
+
+          if (payload.status === "ready") {
+            callbacks.onTaskUpdate({
+              status: "running",
+              progress: 0,
+              message: "Transcribing audio",
+            });
+            return;
+          }
+
+          if (payload.status === "chunk_progress") {
+            callbacks.onTaskUpdate({
+              status: "running",
+              progress: typeof payload.progress === "number" ? payload.progress : 0,
+              message: "Transcribing audio",
+            });
+            return;
+          }
+
+          if (payload.status === "complete") {
+            hasSettled = true;
+            if (worker && messageListener && worker.removeEventListener) {
+              worker.removeEventListener("message", messageListener);
+              messageListener = null;
+            }
+            callbacks.onTaskUpdate({
+              status: "finalizing",
+              progress: 96,
+              message: "Saving transcript",
+            });
+
+            void updateTranscriptVersion(dependencies.repository, activeTask!, (transcript) => {
+              const now = Date.now();
+              const textOutput = getTextOutput(payload.output);
+              const chunkOutput = getChunkOutput(payload.output);
+              const detectedLanguage = getDetectedLanguage(payload.output, options.language);
+              let updated: TranscriptVersion = {
+                ...transcript,
+                status: "completed",
+                transcript: textOutput ?? transcript.transcript,
+                chunks: chunkOutput ?? transcript.chunks,
+                detectedLanguage,
+                error: undefined,
+                updatedAt: now,
+              };
+              updated = syncOriginalSubtitleVersion(updated, {
+                chunks: (chunkOutput ?? transcript.chunks ?? []) as SubtitleChunk[],
+                language: detectedLanguage,
+                now,
+              });
+              return updated;
+            })
+              .then(() => resolve())
+              .catch(reject);
+            return;
+          }
+
+          if (payload.status === "error") {
+            hasSettled = true;
+            if (worker && messageListener && worker.removeEventListener) {
+              worker.removeEventListener("message", messageListener);
+              messageListener = null;
+            }
+            void updateTranscriptVersion(dependencies.repository, activeTask!, (transcript) => ({
+              ...transcript,
+              status: "error",
+              error: payload.error || "Transcription failed.",
+              updatedAt: Date.now(),
+            }))
+              .then(() => reject(new Error(payload.error || "Transcription failed.")))
+              .catch(reject);
+          }
+        };
+
+        worker!.addEventListener("message", messageListener);
+        worker!.postMessage({
+          type: "transcribe",
+          audio: audioData,
+          duration,
+          language: options.language,
+        });
+      });
+    } catch (error) {
+      if (activeTask && !isCanceled && !hasSettled) {
+        await updateTranscriptVersion(dependencies.repository, activeTask, (transcript) => ({
+          ...transcript,
+          status: "error",
+          error: error instanceof Error ? error.message : "Transcription failed.",
+          updatedAt: Date.now(),
+        }));
+      }
+      throw error;
+    }
   })().finally(() => {
     if (worker) {
       worker.terminate();

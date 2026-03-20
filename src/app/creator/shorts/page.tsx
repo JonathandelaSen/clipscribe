@@ -1,5 +1,5 @@
-import { redirect } from "next/navigation";
+import { CreatorHub } from "@/components/CreatorHub";
 
 export default function CreatorShortsPage() {
-  redirect("/");
+  return <CreatorHub lockedTool="clip_lab" />;
 }

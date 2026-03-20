@@ -14,24 +14,22 @@ export type CreatorVideoInfoBlock =
   | "contentPack"
   | "insights";
 
-export interface CreatorAnalyzeGenerationConfig {
-  tool?: "full" | "video_info" | "clip_lab";
-  videoInfoBlocks?: CreatorVideoInfoBlock[];
-}
-
-export interface CreatorAnalyzeRequest {
-  filename: string;
+export interface CreatorGenerationSourceInput {
   transcriptText: string;
   transcriptChunks: SubtitleChunk[];
   subtitleChunks?: SubtitleChunk[];
-  transcriptLanguage?: string;
   transcriptVersionLabel?: string;
   subtitleVersionLabel?: string;
-  durationSeconds?: number;
+}
+
+export interface CreatorShortsGenerateRequest extends CreatorGenerationSourceInput {
   niche?: string;
   audience?: string;
   tone?: string;
-  generation?: CreatorAnalyzeGenerationConfig;
+}
+
+export interface CreatorVideoInfoGenerateRequest extends CreatorGenerationSourceInput {
+  videoInfoBlocks?: CreatorVideoInfoBlock[];
 }
 
 export interface CreatorChapter {
@@ -53,7 +51,6 @@ export interface CreatorViralClip {
   punchline: string;
   sourceChunkIndexes: number[];
   suggestedSubtitleLanguage: string;
-  platforms: ShortsPlatform[];
 }
 
 export interface CreatorYouTubePack {
@@ -90,7 +87,6 @@ export interface CreatorShortPlan {
   platform: ShortsPlatform;
   title: string;
   caption: string;
-  subtitleStyle: CreatorVerticalEditorPreset["subtitleStyle"];
   openingText: string;
   endCardText: string;
   editorPreset: CreatorVerticalEditorPreset;
@@ -104,18 +100,24 @@ export interface CreatorInsights {
   recommendedPrimaryPlatform: ShortsPlatform;
 }
 
-export interface CreatorAnalysisResponse {
+export interface CreatorGenerationResponseMeta {
   ok: true;
   providerMode: CreatorAIProviderMode;
   model: string;
   generatedAt: number;
   runtimeSeconds: number;
-  youtube: CreatorYouTubePack;
-  content: CreatorLongFormContentPack;
-  chapters: CreatorChapter[];
+}
+
+export interface CreatorShortsGenerateResponse extends CreatorGenerationResponseMeta {
   viralClips: CreatorViralClip[];
   shortsPlans: CreatorShortPlan[];
   editorPresets: CreatorVerticalEditorPreset[];
+}
+
+export interface CreatorVideoInfoGenerateResponse extends CreatorGenerationResponseMeta {
+  youtube: CreatorYouTubePack;
+  content: CreatorLongFormContentPack;
+  chapters: CreatorChapter[];
   insights: CreatorInsights;
 }
 

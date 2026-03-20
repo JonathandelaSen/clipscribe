@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import {
-  createDexieCreatorShortsRepository,
+  getAiSuggestionCreatorShortProjects,
+  getManualCreatorShortProjects,
+  groupCreatorShortProjectsBySuggestionGeneration,
   groupCreatorShortExportsByProjectId,
   sortCreatorShortExports,
   sortCreatorShortProjects,
-} from "@/lib/repositories/creator-shorts-repo";
+} from "@/lib/creator/core/short-library";
+import { createDexieCreatorShortsRepository } from "@/lib/repositories/creator-shorts-repo";
 
 const creatorShortsRepository = createDexieCreatorShortsRepository();
 
@@ -61,12 +64,49 @@ export function useCreatorShortsLibrary(projectId?: string) {
     setExports((prev) => prev.filter((item) => item.shortProjectId !== projectId));
   }, []);
 
+  const deleteProjects = useCallback(async (projectIds: string[]) => {
+    if (projectIds.length === 0) return;
+    await creatorShortsRepository.deleteProjects(projectIds);
+    setProjects((prev) => prev.filter((item) => !projectIds.includes(item.id)));
+    setExports((prev) => prev.filter((item) => !item.shortProjectId || !projectIds.includes(item.shortProjectId)));
+  }, []);
+
+  const deleteSuggestionGeneration = useCallback(async (generationId: string) => {
+    if (!generationId) return;
+    const projectIds = projects
+      .filter((item) => item.suggestionGenerationId === generationId)
+      .map((item) => item.id);
+    await creatorShortsRepository.deleteSuggestionGeneration(generationId);
+    setProjects((prev) => prev.filter((item) => item.suggestionGenerationId !== generationId));
+    setExports((prev) => prev.filter((item) => !item.shortProjectId || !projectIds.includes(item.shortProjectId)));
+  }, [projects]);
+
   const exportsByProjectId = useMemo(() => {
     return groupCreatorShortExportsByProjectId(exports);
   }, [exports]);
 
+  const manualProjects = useMemo(() => {
+    return getManualCreatorShortProjects(projects);
+  }, [projects]);
+
+  const aiSuggestionProjects = useMemo(() => {
+    return getAiSuggestionCreatorShortProjects(projects);
+  }, [projects]);
+
+  const aiSuggestionsByGeneration = useMemo(() => {
+    return groupCreatorShortProjectsBySuggestionGeneration(projects);
+  }, [projects]);
+
+  const hasAiSuggestionsForSignature = useCallback(
+    (signature: string) => aiSuggestionProjects.some((record) => record.suggestionSourceSignature === signature),
+    [aiSuggestionProjects]
+  );
+
   return {
     projects,
+    manualProjects,
+    aiSuggestionProjects,
+    aiSuggestionsByGeneration,
     exports,
     exportsByProjectId,
     isLoading,
@@ -75,5 +115,8 @@ export function useCreatorShortsLibrary(projectId?: string) {
     upsertProject,
     upsertExport,
     deleteProject,
+    deleteProjects,
+    deleteSuggestionGeneration,
+    hasAiSuggestionsForSignature,
   };
 }

@@ -15,7 +15,6 @@ export interface ManualFallbackClip extends ClipTimingLike {
   punchline: string;
   sourceChunkIndexes: number[];
   suggestedSubtitleLanguage: string;
-  platforms: ShortsPlatform[];
 }
 
 export interface ManualFallbackPlan {
@@ -24,7 +23,6 @@ export interface ManualFallbackPlan {
   platform: ShortsPlatform;
   title: string;
   caption: string;
-  subtitleStyle: "bold_pop" | "clean_caption" | "creator_neon";
   openingText: string;
   endCardText: string;
   editorPreset: {
@@ -73,7 +71,6 @@ export function createManualFallbackClip(options: {
     punchline: "Manual short edit",
     sourceChunkIndexes: [],
     suggestedSubtitleLanguage: options.subtitleLanguage || "en",
-    platforms: ["youtube_shorts", "instagram_reels", "tiktok"],
   };
 }
 
@@ -84,7 +81,6 @@ export function createManualFallbackPlan(clipId: string): ManualFallbackPlan {
     platform: "youtube_shorts",
     title: "Manual Edit Preset",
     caption: "",
-    subtitleStyle: "clean_caption",
     openingText: "Manual short cut",
     endCardText: "Follow for more",
     editorPreset: {
@@ -132,4 +128,3 @@ export function deriveTrimNudgesFromSavedClip(baseClip: ClipTimingLike, savedCli
     trimEndNudge: round2(savedClip.endSeconds - baseClip.endSeconds),
   };
 }
-

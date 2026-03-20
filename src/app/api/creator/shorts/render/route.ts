@@ -1,4 +1,4 @@
-import { renderCreatorShort } from "@/lib/server/creator-service";
+import { renderCreatorShort } from "@/lib/server/creator/shorts/render-service";
 import type { CreatorShortRenderRequest } from "@/lib/creator/types";
 
 export const runtime = "nodejs";

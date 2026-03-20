@@ -1,5 +1,9 @@
 import type { AudioTranscriberDB } from "@/lib/db";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import {
+  sortCreatorShortExports,
+  sortCreatorShortProjects,
+} from "@/lib/creator/core/short-library";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type { ProjectExportRecord } from "@/lib/projects/types";
 
@@ -9,24 +13,8 @@ export interface CreatorShortsRepository {
   putProject(record: CreatorShortProjectRecord): Promise<void>;
   putExport(record: CreatorShortExportRecord): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
-}
-
-export function sortCreatorShortProjects(records: CreatorShortProjectRecord[]): CreatorShortProjectRecord[] {
-  return [...records].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
-}
-
-export function sortCreatorShortExports(records: CreatorShortExportRecord[]): CreatorShortExportRecord[] {
-  return [...records].sort((a, b) => b.createdAt - a.createdAt);
-}
-
-export function groupCreatorShortExportsByProjectId(exports: CreatorShortExportRecord[]): Map<string, CreatorShortExportRecord[]> {
-  const map = new Map<string, CreatorShortExportRecord[]>();
-  for (const exportRecord of exports) {
-    const list = map.get(exportRecord.shortProjectId) ?? [];
-    list.push(exportRecord);
-    map.set(exportRecord.shortProjectId, list);
-  }
-  return map;
+  deleteProjects(projectIds: string[]): Promise<void>;
+  deleteSuggestionGeneration(generationId: string): Promise<void>;
 }
 
 function toCreatorShortExportRecord(record: ProjectExportRecord): CreatorShortExportRecord {
@@ -109,6 +97,14 @@ export function createDexieCreatorShortsRepository(database?: AudioTranscriberDB
 
     async deleteProject(projectId) {
       await projectRepository.deleteShortProject(projectId);
+    },
+
+    async deleteProjects(projectIds) {
+      await projectRepository.deleteShortProjects(projectIds);
+    },
+
+    async deleteSuggestionGeneration(generationId) {
+      await projectRepository.deleteShortProjectsBySuggestionGenerationId(generationId);
     },
   };
 }

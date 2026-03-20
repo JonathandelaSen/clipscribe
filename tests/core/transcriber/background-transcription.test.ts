@@ -156,6 +156,70 @@ test("startBackgroundTranscriptionTask persists progress and final transcript ou
   assert.equal(worker.terminated, true);
 });
 
+test("startBackgroundTranscriptionTask creates a transcribing version before audio decode finishes", async () => {
+  const repo = buildRepository();
+  let finishDecode!: (value: Float32Array) => void;
+
+  const task = startBackgroundTranscriptionTask(
+    {
+      file: new File(["a"], "voice.wav", { type: "audio/wav" }),
+      language: "es",
+      projectId: "proj_1",
+      assetId: "asset_1",
+    },
+    {
+      decodeAudio: async () => await new Promise<Float32Array>((resolve) => {
+        finishDecode = resolve;
+      }),
+      createWorker: () => new MockWorker(() => {}),
+      repository: repo.repository,
+    },
+    {
+      onTaskUpdate: () => {},
+    }
+  );
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const transcriptRecord = repo.getTranscriptRecord();
+  assert.ok(transcriptRecord);
+  assert.equal(transcriptRecord?.transcripts[0].status, "transcribing");
+
+  task.cancel();
+  finishDecode(new Float32Array(16000));
+  await task.promise;
+});
+
+test("startBackgroundTranscriptionTask marks the transcript as error when audio preparation fails", async () => {
+  const repo = buildRepository();
+
+  const task = startBackgroundTranscriptionTask(
+    {
+      file: new File(["a"], "voice.wav", { type: "audio/wav" }),
+      language: "es",
+      projectId: "proj_1",
+      assetId: "asset_1",
+    },
+    {
+      decodeAudio: async () => {
+        throw new Error("Decode failed");
+      },
+      createWorker: () => new MockWorker(() => {}),
+      repository: repo.repository,
+    },
+    {
+      onTaskUpdate: () => {},
+    }
+  );
+
+  await assert.rejects(task.promise, /Decode failed/);
+
+  const transcriptRecord = repo.getTranscriptRecord();
+  assert.ok(transcriptRecord);
+  assert.equal(transcriptRecord?.transcripts[0].status, "error");
+  assert.equal(transcriptRecord?.transcripts[0].error, "Decode failed");
+});
+
 test("startBackgroundTranscriptionTask marks the transcript as stopped when canceled", async () => {
   const repo = buildRepository();
   const worker = new MockWorker((instance) => {

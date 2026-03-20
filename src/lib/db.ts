@@ -20,6 +20,26 @@ export class AudioTranscriberDB extends Dexie {
       projectShorts: 'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform',
       projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind'
     });
+
+    this.version(2)
+      .stores({
+        projects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio, activeSourceAssetId',
+        projectAssets: 'id, projectId, createdAt, updatedAt, kind, role, origin',
+        assetTranscripts: 'assetId, projectId, updatedAt, timestamp',
+        projectShorts:
+          'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
+        projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind'
+      })
+      .upgrade((tx) => {
+        return tx
+          .table('projectShorts')
+          .toCollection()
+          .modify((record: { origin?: string }) => {
+            if (!record.origin) {
+              record.origin = 'manual';
+            }
+          });
+      });
   }
 }
 

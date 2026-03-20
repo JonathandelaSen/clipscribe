@@ -17,7 +17,6 @@ const baseClip: CreatorViralClip = {
   punchline: "Punchline",
   sourceChunkIndexes: [],
   suggestedSubtitleLanguage: "en",
-  platforms: ["youtube_shorts", "instagram_reels", "tiktok"],
 };
 
 test("clipSubtitleChunks keeps only subtitle chunks that overlap clip range", () => {

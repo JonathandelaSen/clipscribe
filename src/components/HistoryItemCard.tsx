@@ -66,7 +66,7 @@ function languageLabel(code?: string) {
   return getTranscriptionLanguageLabel(code);
 }
 
-function statusBadge(status: TranscriptVersion["status"], audioProgress?: number) {
+function statusBadge(status: TranscriptVersion["status"], audioProgress?: number, audioProgressLabel?: string) {
   if (status === "completed") {
     return (
       <span className="flex items-center text-emerald-400">
@@ -90,7 +90,8 @@ function statusBadge(status: TranscriptVersion["status"], audioProgress?: number
   }
   return (
     <span className="flex items-center text-violet-400">
-      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" /> Processing{audioProgress !== undefined ? ` ${audioProgress}%` : ""}
+      <Loader2 className="w-4 h-4 mr-1.5 animate-spin" />
+      {audioProgressLabel ?? `Processing${audioProgress !== undefined ? ` ${audioProgress}%` : ""}`}
     </span>
   );
 }
@@ -121,6 +122,7 @@ export interface HistoryItemCardProps {
   item: HistoryItem;
   onDelete?: (id: string) => void;
   audioProgress?: number;
+  audioProgressLabel?: string;
   autoExpand?: boolean;
   onCreateShiftedSubtitleVersion?: (
     projectId: string,
@@ -130,6 +132,8 @@ export interface HistoryItemCardProps {
   ) => string | null | void;
   onRename?: (id: string, newName: string) => void;
   onRetranscribe?: (id: string, language: string) => void;
+  isRetranscribing?: boolean;
+  retranscribeStatusLabel?: string;
   onSaveTranslation?: (
     projectId: string,
     transcriptVersionId: string,
@@ -145,10 +149,13 @@ export function HistoryItemCard({
   item,
   onDelete,
   audioProgress,
+  audioProgressLabel,
   autoExpand = false,
   onCreateShiftedSubtitleVersion,
   onRename,
   onRetranscribe,
+  isRetranscribing = false,
+  retranscribeStatusLabel,
   onSaveTranslation,
   onDeleteTranscriptVersion,
 }: HistoryItemCardProps) {
@@ -481,7 +488,12 @@ export function HistoryItemCard({
                 timeStyle: "short",
               })}
             </span>
-            {latestTranscript && statusBadge(latestTranscript.status, latestTranscript.status === "transcribing" ? audioProgress : undefined)}
+            {latestTranscript &&
+              statusBadge(
+                latestTranscript.status,
+                latestTranscript.status === "transcribing" ? audioProgress : undefined,
+                latestTranscript.status === "transcribing" ? audioProgressLabel : undefined
+              )}
             <span className="inline-flex items-center px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/70 text-xs">
               <Layers className="w-3.5 h-3.5 mr-1.5" />
               {item.transcripts.length} transcript version{item.transcripts.length === 1 ? "" : "s"}
@@ -506,6 +518,7 @@ export function HistoryItemCard({
                     setRetranscribeLanguage(value);
                     if (value) setRetranscribeTouched(false);
                   }}
+                  disabled={isRetranscribing}
                 >
                   <SelectTrigger
                     className={`h-9 min-w-[118px] bg-white/5 text-white/85 ${
@@ -526,10 +539,11 @@ export function HistoryItemCard({
                   variant="ghost"
                   onClick={handleRetranscribeClick}
                   className="text-violet-300 hover:text-violet-200 hover:bg-violet-500/10 border border-violet-400/15"
-                  title="Create a new transcript version from the same media"
+                  title={isRetranscribing ? "A transcript is already being generated for this source." : "Create a new transcript version from the same media"}
+                  disabled={isRetranscribing}
                 >
-                  <RotateCcw className="w-4 h-4 mr-2" />
-                  New Transcript Version
+                  {isRetranscribing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RotateCcw className="w-4 h-4 mr-2" />}
+                  {isRetranscribing ? retranscribeStatusLabel ?? "Transcribing..." : "New Transcript Version"}
                 </Button>
               </div>
               {retranscribeTouched && !retranscribeLanguage && (
@@ -656,7 +670,11 @@ export function HistoryItemCard({
                   timeStyle: "short",
                 })}
               </span>
-              {statusBadge(selectedTranscript.status, selectedTranscript.status === "transcribing" ? audioProgress : undefined)}
+              {statusBadge(
+                selectedTranscript.status,
+                selectedTranscript.status === "transcribing" ? audioProgress : undefined,
+                selectedTranscript.status === "transcribing" ? audioProgressLabel : undefined
+              )}
             </div>
           )}
 
