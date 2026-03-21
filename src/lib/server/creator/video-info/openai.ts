@@ -1,9 +1,18 @@
-import type { CreatorVideoInfoGenerateRequest, CreatorVideoInfoGenerateResponse } from "../../../creator/types";
+import type {
+  CreatorTracedResult,
+  CreatorVideoInfoGenerateRequest,
+  CreatorVideoInfoGenerateResponse,
+} from "../../../creator/types";
 import { CreatorAIError } from "../shared/errors";
-import { requestOpenAIJson } from "../shared/openai-json";
+import {
+  buildBaseInputSummary,
+  createCreatorLLMRequestFingerprint,
+  runTrackedOpenAIJson,
+  withValidationErrorTrace,
+} from "../shared/openai-run";
 import { getRuntimeSeconds } from "../shared/transcript-format";
 import { mapVideoInfoOpenAIResponse } from "./mapper";
-import { buildVideoInfoPrompt } from "./prompt";
+import { buildVideoInfoPrompt, CREATOR_VIDEO_INFO_PROMPT_VERSION } from "./prompt";
 
 function readVideoInfoConfig() {
   const model = process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL;
@@ -23,7 +32,7 @@ function readVideoInfoConfig() {
 export async function generateVideoInfoWithOpenAI(input: {
   request: CreatorVideoInfoGenerateRequest;
   apiKey: string;
-}): Promise<CreatorVideoInfoGenerateResponse> {
+}): Promise<CreatorTracedResult<CreatorVideoInfoGenerateResponse>> {
   const apiKey = input.apiKey.trim();
   if (!apiKey) {
     throw new CreatorAIError("Missing OpenAI API key.", {
@@ -41,7 +50,7 @@ export async function generateVideoInfoWithOpenAI(input: {
   }
 
   const { model, temperature } = readVideoInfoConfig();
-  const parsed = await requestOpenAIJson({
+  const { parsed, llmRun } = await runTrackedOpenAIJson({
     apiKey,
     model,
     temperature,
@@ -55,7 +64,34 @@ export async function generateVideoInfoWithOpenAI(input: {
         content: buildVideoInfoPrompt(input.request),
       },
     ],
+    feature: "video_info",
+    operation: "generate_video_info",
+    promptVersion: CREATOR_VIDEO_INFO_PROMPT_VERSION,
+    inputSummary: {
+      ...buildBaseInputSummary(input.request),
+      videoInfoBlocks: input.request.videoInfoBlocks?.slice(),
+    },
+    requestFingerprint: createCreatorLLMRequestFingerprint({
+      feature: "video_info",
+      operation: "generate_video_info",
+      request: input.request,
+    }),
+    projectId: input.request.projectId,
+    sourceAssetId: input.request.sourceAssetId,
+    sourceSignature: input.request.sourceSignature,
   });
 
-  return mapVideoInfoOpenAIResponse(input.request, parsed, `${model} (user key)`);
+  try {
+    return {
+      response: mapVideoInfoOpenAIResponse(input.request, parsed, `${model} (user key)`),
+      llmRun,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "OpenAI returned invalid creator video info JSON.";
+    throw new CreatorAIError(message, {
+      status: 502,
+      code: "invalid_openai_response",
+      trace: withValidationErrorTrace(llmRun, message),
+    });
+  }
 }

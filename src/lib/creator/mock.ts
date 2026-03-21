@@ -12,7 +12,6 @@ import {
   type CreatorVideoInfoGenerateRequest,
   type CreatorVideoInfoGenerateResponse,
   type CreatorViralClip,
-  type ShortsPlatform,
 } from "@/lib/creator/types";
 
 const STOPWORDS = new Set([
@@ -233,16 +232,6 @@ function buildChapterText(chapters: CreatorChapter[]): string {
     .join("\n");
 }
 
-function platformLabel(platform: ShortsPlatform): string {
-  switch (platform) {
-    case "tiktok":
-      return "TikTok";
-    case "instagram_reels":
-      return "Instagram Reels";
-    case "youtube_shorts":
-      return "YouTube Shorts";
-  }
-}
 
 function buildShortPlans(clips: CreatorViralClip[], topTerms: string[]): CreatorShortPlan[] {
   const plans: CreatorShortPlan[] = [];
@@ -252,9 +241,8 @@ function buildShortPlans(clips: CreatorViralClip[], topTerms: string[]): Creator
       plans.push({
         id: makeId("shortplan"),
         clipId: clip.id,
-        platform: preset.platform,
-        title: `${platformLabel(preset.platform)} cut: ${clip.title.replace(/^Clip angle:\s*/i, "")}`,
-        caption: `${clip.hook.slice(0, 90)}${clip.hook.length > 90 ? "…" : ""}\n\n#${keyword.replace(/[^a-z0-9]/gi, "")}${preset.platform === "youtube_shorts" ? " #shorts" : ""}`,
+        title: `Clip cut: ${clip.title.replace(/^Clip angle:\s*/i, "")}`,
+        caption: `${clip.hook.slice(0, 90)}${clip.hook.length > 90 ? "…" : ""}\n\n#${keyword.replace(/[^a-z0-9]/gi, "")}`,
         openingText: clip.hook.slice(0, 60),
         endCardText: `Want more ${keyword}? Follow for part 2`,
         editorPreset: preset,
@@ -300,7 +288,6 @@ function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVi
     .slice(0, 8);
 
   const repeatedTerms = topTerms.slice(0, 8);
-  const recommendedPrimaryPlatform: ShortsPlatform = runtimeSeconds > 420 ? "youtube_shorts" : "tiktok";
 
   const descriptionLines = [
     `${videoSummary}`,
@@ -321,7 +308,6 @@ function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVi
     wordCount,
     speakingRate,
     repeatedTerms,
-    recommendedPrimaryPlatform,
     detectedTheme: deduceTheme(topTerms),
     youtube: {
       titleIdeas,
@@ -393,7 +379,6 @@ export function generateMockCreatorVideoInfo(request: CreatorVideoInfoGenerateRe
       estimatedSpeakingRateWpm: mock.speakingRate,
       repeatedTerms: mock.repeatedTerms,
       detectedTheme: mock.detectedTheme,
-      recommendedPrimaryPlatform: mock.recommendedPrimaryPlatform,
     },
   };
 }
@@ -401,7 +386,7 @@ export function generateMockCreatorVideoInfo(request: CreatorVideoInfoGenerateRe
 export function generateMockShortRender(request: CreatorShortRenderRequest): CreatorShortRenderResponse {
   const clip = request.clip;
   const plan = request.plan;
-  const outputFilename = `${request.filename.replace(/\.[^/.]+$/, "")}__${plan.platform}__${clip.startSeconds}-${clip.endSeconds}.mp4`;
+  const outputFilename = `${request.filename.replace(/\.[^/.]+$/, "")}__${clip.startSeconds}-${clip.endSeconds}.mp4`;
 
   const subtitleText = (request.subtitleChunks ?? [])
     .map((chunk) => String(chunk.text ?? ""))
@@ -433,7 +418,6 @@ export function generateMockShortRender(request: CreatorShortRenderRequest): Cre
     createdAt: Date.now(),
     estimatedSeconds: 0,
     output: {
-      platform: plan.platform,
       filename: outputFilename,
       aspectRatio: "9:16",
       resolution: "1080x1920",

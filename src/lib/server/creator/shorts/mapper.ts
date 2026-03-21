@@ -1,4 +1,4 @@
-import { EDITOR_PRESETS, getEditorPresetForPlatform } from "../../../creator/editor-presets";
+import { EDITOR_PRESETS } from "../../../creator/editor-presets";
 import type { SubtitleChunk } from "../../../history";
 import {
   type CreatorShortPlan,
@@ -15,9 +15,7 @@ function isRecord(value: unknown): value is LooseRecord {
   return !!value && typeof value === "object";
 }
 
-function isShortsPlatform(value: unknown): value is CreatorShortPlan["platform"] {
-  return value === "youtube_shorts" || value === "tiktok" || value === "instagram_reels";
-}
+
 
 function readFiniteNumber(value: unknown, field: string): number {
   const next = Number(value);
@@ -147,20 +145,11 @@ function parseShortsPlans(candidate: unknown, clips: CreatorViralClip[]): Creato
       });
     }
 
-    const platform = row.platform;
-    if (!isShortsPlatform(platform)) {
-      throw new CreatorAIError(`OpenAI returned an invalid platform for shortsPlans[${index}].`, {
-        status: 502,
-        code: "invalid_shorts_plan",
-      });
-    }
-
-    const preset = getEditorPresetForPlatform(platform);
+    const preset = EDITOR_PRESETS[0];
 
     return {
       id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `shortplan_${index + 1}`,
       clipId,
-      platform,
       title: readNonEmptyString(row.title, `shortsPlans[${index}].title`),
       caption: readNonEmptyString(row.caption, `shortsPlans[${index}].caption`),
       openingText: readNonEmptyString(row.openingText, `shortsPlans[${index}].openingText`),

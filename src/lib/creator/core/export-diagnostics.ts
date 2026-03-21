@@ -2,7 +2,7 @@ import type { CreatorShortPlan, CreatorViralClip } from "@/lib/creator/types";
 
 export type ShortExportDiagnosticsContext = {
   sourceFilename: string;
-  platform: CreatorShortPlan["platform"];
+
   requestedClip: CreatorViralClip;
   exportClip: CreatorViralClip;
   sourceMeta?: { width: number; height: number; durationSeconds?: number } | null;
@@ -20,7 +20,7 @@ export function buildShortExportDiagnostics(context: ShortExportDiagnosticsConte
 
   return [
     `source=${context.sourceFilename}`,
-    `platform=${context.platform}`,
+
     `sourceSize=${context.sourceMeta?.width ?? "?"}x${context.sourceMeta?.height ?? "?"}`,
     `sourceDurationSec=${sourceDuration}`,
     `requestedClip=${context.requestedClip.startSeconds.toFixed(3)}-${context.requestedClip.endSeconds.toFixed(3)} (${context.requestedClip.durationSeconds.toFixed(3)}s)`,

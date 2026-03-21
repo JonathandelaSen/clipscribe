@@ -1,4 +1,3 @@
-export type ShortsPlatform = "tiktok" | "instagram_reels" | "youtube_shorts";
 
 export interface ClipTimingLike {
   id: string;
@@ -20,13 +19,11 @@ export interface ManualFallbackClip extends ClipTimingLike {
 export interface ManualFallbackPlan {
   id: string;
   clipId: string;
-  platform: ShortsPlatform;
   title: string;
   caption: string;
   openingText: string;
   endCardText: string;
   editorPreset: {
-    platform: ShortsPlatform;
     aspectRatio: "9:16";
     resolution: "1080x1920";
     subtitleStyle: "bold_pop" | "clean_caption" | "creator_neon";
@@ -78,13 +75,11 @@ export function createManualFallbackPlan(clipId: string): ManualFallbackPlan {
   return {
     id: "manual_plan_fallback",
     clipId,
-    platform: "youtube_shorts",
     title: "Manual Edit Preset",
     caption: "",
     openingText: "Manual short cut",
     endCardText: "Follow for more",
     editorPreset: {
-      platform: "youtube_shorts",
       aspectRatio: "9:16",
       resolution: "1080x1920",
       subtitleStyle: "clean_caption",

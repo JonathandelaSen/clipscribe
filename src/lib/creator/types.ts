@@ -1,8 +1,12 @@
 import type { SubtitleChunk } from "@/lib/history";
 
 export type CreatorAIProviderMode = "mock" | "openai";
+export type CreatorLLMFeature = "shorts" | "video_info";
+export type CreatorLLMProvider = "openai";
+export type CreatorLLMOperation = "generate_shorts" | "generate_video_info";
+export type CreatorLLMRunStatus = "success" | "provider_error" | "parse_error" | "validation_error";
+export type CreatorLLMRedactionState = "raw" | "purged";
 
-export type ShortsPlatform = "tiktok" | "instagram_reels" | "youtube_shorts";
 
 export type CreatorVideoInfoBlock =
   | "titleIdeas"
@@ -15,11 +19,75 @@ export type CreatorVideoInfoBlock =
   | "insights";
 
 export interface CreatorGenerationSourceInput {
+  projectId?: string;
+  sourceAssetId?: string;
+  transcriptId?: string;
+  subtitleId?: string;
+  sourceSignature?: string;
   transcriptText: string;
   transcriptChunks: SubtitleChunk[];
   subtitleChunks?: SubtitleChunk[];
   transcriptVersionLabel?: string;
   subtitleVersionLabel?: string;
+}
+
+export interface CreatorLLMUsage {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
+export interface CreatorLLMRunInputSummary {
+  projectId?: string;
+  sourceAssetId?: string;
+  transcriptId?: string;
+  subtitleId?: string;
+  sourceSignature?: string;
+  transcriptVersionLabel?: string;
+  subtitleVersionLabel?: string;
+  transcriptCharCount: number;
+  transcriptChunkCount: number;
+  subtitleChunkCount: number;
+  niche?: string;
+  audience?: string;
+  tone?: string;
+  videoInfoBlocks?: CreatorVideoInfoBlock[];
+}
+
+export interface CreatorLLMRunRecord {
+  id: string;
+  feature: CreatorLLMFeature;
+  provider: CreatorLLMProvider;
+  operation: CreatorLLMOperation;
+  model: string;
+  projectId?: string;
+  sourceAssetId?: string;
+  sourceSignature?: string;
+  startedAt: number;
+  completedAt: number;
+  durationMs: number;
+  fetchDurationMs?: number;
+  parseDurationMs?: number;
+  status: CreatorLLMRunStatus;
+  temperature: number;
+  requestFingerprint: string;
+  promptVersion: string;
+  inputSummary: CreatorLLMRunInputSummary;
+  usage?: CreatorLLMUsage;
+  estimatedCostUsd?: number | null;
+  requestPayloadRaw: unknown | null;
+  responsePayloadRaw: unknown | null;
+  parsedOutputSnapshot: unknown | null;
+  errorCode?: string;
+  errorMessage?: string;
+  redactionState: CreatorLLMRedactionState;
+  exportable: boolean;
+  containsRawPayload: boolean;
+}
+
+export interface CreatorTracedResult<TResponse> {
+  response: TResponse;
+  llmRun?: CreatorLLMRunRecord;
 }
 
 export interface CreatorShortsGenerateRequest extends CreatorGenerationSourceInput {
@@ -72,7 +140,6 @@ export interface CreatorLongFormContentPack {
 }
 
 export interface CreatorVerticalEditorPreset {
-  platform: ShortsPlatform;
   aspectRatio: "9:16";
   resolution: "1080x1920";
   subtitleStyle: "bold_pop" | "clean_caption" | "creator_neon";
@@ -84,7 +151,6 @@ export interface CreatorVerticalEditorPreset {
 export interface CreatorShortPlan {
   id: string;
   clipId: string;
-  platform: ShortsPlatform;
   title: string;
   caption: string;
   openingText: string;
@@ -97,7 +163,6 @@ export interface CreatorInsights {
   estimatedSpeakingRateWpm: number;
   repeatedTerms: string[];
   detectedTheme: string;
-  recommendedPrimaryPlatform: ShortsPlatform;
 }
 
 export interface CreatorGenerationResponseMeta {
@@ -169,7 +234,6 @@ export interface CreatorShortRenderResponse {
   createdAt: number;
   estimatedSeconds: number;
   output: {
-    platform: ShortsPlatform;
     filename: string;
     aspectRatio: "9:16";
     resolution: "1080x1920";

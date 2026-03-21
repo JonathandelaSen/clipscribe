@@ -12,8 +12,8 @@ function isRecord(value: unknown): value is LooseRecord {
   return !!value && typeof value === "object";
 }
 
-function errorResponse(message: string, status = 400, details?: unknown) {
-  return Response.json({ ok: false, error: message, details }, { status });
+function errorResponse(message: string, status = 400, details?: unknown, llmRun?: CreatorAIError["trace"]) {
+  return Response.json({ ok: false, error: message, details, _meta: llmRun ? { creatorLlmRun: llmRun } : undefined }, { status });
 }
 
 export async function POST(request: Request) {
@@ -42,10 +42,13 @@ export async function POST(request: Request) {
     const openAIApiKey = getRequiredCreatorOpenAIApiKey(request.headers);
     const payload = body as unknown as CreatorVideoInfoGenerateRequest;
     const result = await generateCreatorVideoInfo(payload, { openAIApiKey });
-    return Response.json(result);
+    return Response.json({
+      ...result.response,
+      _meta: result.llmRun ? { creatorLlmRun: result.llmRun } : undefined,
+    });
   } catch (error) {
     if (error instanceof CreatorAIError) {
-      return errorResponse(error.message, error.status, { code: error.code });
+      return errorResponse(error.message, error.status, { code: error.code }, error.trace);
     }
 
     const message = error instanceof Error ? error.message : "Creator video info generation failed";

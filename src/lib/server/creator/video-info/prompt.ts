@@ -2,6 +2,8 @@ import type { CreatorVideoInfoGenerateRequest } from "../../../creator/types";
 import { selectedVideoInfoBlocks } from "../shared/request-normalizers";
 import { buildTimedTranscriptLines } from "../shared/transcript-format";
 
+export const CREATOR_VIDEO_INFO_PROMPT_VERSION = "creator-video-info-v1";
+
 export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): string {
   const blocks = selectedVideoInfoBlocks(request);
   const timedTranscript = buildTimedTranscriptLines(request.transcriptChunks);
@@ -27,8 +29,7 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
       "insights.transcriptWordCount",
       "insights.estimatedSpeakingRateWpm",
       "insights.repeatedTerms",
-      "insights.detectedTheme",
-      "insights.recommendedPrimaryPlatform"
+      "insights.detectedTheme"
     );
   }
 
@@ -68,8 +69,7 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
     "transcriptWordCount": 0,
     "estimatedSpeakingRateWpm": 0,
     "repeatedTerms": ["string"],
-    "detectedTheme": "string",
-    "recommendedPrimaryPlatform": "youtube_shorts"
+    "detectedTheme": "string"
   }
 }`,
     "",

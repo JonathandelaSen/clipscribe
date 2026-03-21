@@ -1,6 +1,6 @@
 import type { HistoryItem, TranscriptVersion } from "@/lib/history";
 import type { EditorAssetRecord, EditorExportEngine, EditorProjectRecord } from "@/lib/editor/types";
-import type { CreatorShortEditorState, CreatorShortPlan, CreatorViralClip, ShortsPlatform } from "@/lib/creator/types";
+import type { CreatorShortEditorState, CreatorShortPlan, CreatorViralClip } from "@/lib/creator/types";
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
@@ -47,7 +47,6 @@ export interface ProjectExportRecord {
   resolution?: "720p" | "1080p" | "4K" | "1080x1920";
   width?: number;
   height?: number;
-  platform?: ShortsPlatform;
   warnings?: string[];
   error?: string;
   debugFfmpegCommand?: string[];

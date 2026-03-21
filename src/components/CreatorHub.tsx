@@ -53,6 +53,7 @@ import {
 import {
   secondsToClock,
   type CreatorGenerationSourceInput,
+  type CreatorLLMRunRecord,
   type CreatorShortEditorState,
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
@@ -100,12 +101,14 @@ import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useCreatorShortRenderer } from "@/hooks/useCreatorShortRenderer";
 import { useCreatorShortsGenerator } from "@/hooks/useCreatorShortsGenerator";
+import { useCreatorLlmRuns } from "@/hooks/useCreatorLlmRuns";
 import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
 import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { cn } from "@/lib/utils";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -132,6 +135,7 @@ import {
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 function copyText(text: string, label: string) {
@@ -156,11 +160,6 @@ function subtitleVersionLabel(subtitle: SubtitleVersion): string {
   return `S${subtitle.versionNumber} • ${subtitle.language.toUpperCase()} • ${subtitle.kind} • ${subtitle.shiftSeconds >= 0 ? "+" : ""}${subtitle.shiftSeconds}s`;
 }
 
-function platformLabel(platform: CreatorShortPlan["platform"]): string {
-  if (platform === "youtube_shorts") return "YouTube Shorts";
-  if (platform === "instagram_reels") return "Instagram Reels";
-  return "TikTok";
-}
 
 function buildYouTubeTimestamps(chapters: { timeSeconds: number; label: string }[]): string {
   return chapters
@@ -185,6 +184,38 @@ function formatBytes(bytes: number): string {
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** power;
   return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
+}
+
+function formatDurationMs(durationMs?: number): string {
+  if (!Number.isFinite(durationMs) || durationMs == null) return "n/a";
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
+}
+
+function formatUsd(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "n/a";
+  if (value === 0) return "$0.00";
+  return `$${value.toFixed(value >= 0.01 ? 4 : 6)}`;
+}
+
+function stringifyForDebug(value: unknown): string {
+  if (value == null) return "null";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function downloadJson(filename: string, value: unknown) {
+  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -451,8 +482,13 @@ export function CreatorHub({
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
   const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
+  const [isLlmHistoryOpen, setIsLlmHistoryOpen] = useState(false);
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
   const [isRegenerateAiSuggestionsDialogOpen, setIsRegenerateAiSuggestionsDialogOpen] = useState(false);
+  const [selectedLlmRunId, setSelectedLlmRunId] = useState<string>("");
+  const [llmFeatureFilter, setLlmFeatureFilter] = useState<"all" | "shorts" | "video_info">("all");
+  const [llmStatusFilter, setLlmStatusFilter] = useState<"all" | CreatorLLMRunRecord["status"]>("all");
+  const [llmModelFilter, setLlmModelFilter] = useState<string>("all");
 
   const [niche, setNiche] = useState("");
   const [audience, setAudience] = useState("");
@@ -564,6 +600,15 @@ export function CreatorHub({
     deleteSuggestionGeneration,
     hasAiSuggestionsForSignature,
   } = useCreatorShortsLibrary(selectedProjectRootId);
+  const {
+    runs: llmRuns,
+    isLoading: isLoadingLlmRuns,
+    error: llmRunsError,
+    refresh: refreshLlmRuns,
+    deleteRun: deleteLlmRun,
+    deleteRuns: deleteLlmRuns,
+    clearRuns: clearLlmRuns,
+  } = useCreatorLlmRuns();
 
   const beginShortExportSession = useCallback(() => {
     return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
@@ -853,7 +898,7 @@ export function CreatorHub({
 
   const autoGeneratedShortProjectName = useMemo(() => {
     if (!editedClip || !selectedPlan) return "";
-    return `${platformLabel(selectedPlan.platform)} • ${secondsToClock(editedClip.startSeconds)}-${secondsToClock(editedClip.endSeconds)}`;
+    return `${secondsToClock(editedClip.startSeconds)} - ${secondsToClock(editedClip.endSeconds)}`;
   }, [editedClip, selectedPlan]);
 
   const setEditedClipStartSeconds = useCallback(
@@ -918,31 +963,17 @@ export function CreatorHub({
     if (!selectedProject || !selectedTranscript || !selectedSubtitle || !selectedTranscript.transcript) return null;
 
     return {
+      projectId: selectedProjectRootId || selectedProject.id,
+      sourceAssetId: selectedSourceAssetId || selectedProject.id,
+      transcriptId: selectedTranscript.id,
+      subtitleId: selectedSubtitle.id,
       transcriptText: selectedTranscript.transcript,
       transcriptChunks: selectedTranscript.chunks ?? [],
       subtitleChunks: selectedSubtitle.chunks,
       transcriptVersionLabel: selectedTranscript.label,
       subtitleVersionLabel: selectedSubtitle.label,
     };
-  }, [selectedProject, selectedSubtitle, selectedTranscript]);
-
-  const shortsRequestPayload = useMemo<CreatorShortsGenerateRequest | null>(() => {
-    if (!creatorSourcePayload) return null;
-    return {
-      ...creatorSourcePayload,
-      niche,
-      audience,
-      tone,
-    };
-  }, [audience, creatorSourcePayload, niche, tone]);
-
-  const videoInfoRequestPayload = useMemo<CreatorVideoInfoGenerateRequest | null>(() => {
-    if (!creatorSourcePayload) return null;
-    return {
-      ...creatorSourcePayload,
-      videoInfoBlocks,
-    };
-  }, [creatorSourcePayload, videoInfoBlocks]);
+  }, [selectedProject, selectedProjectRootId, selectedSourceAssetId, selectedSubtitle, selectedTranscript]);
 
   const aiSuggestionSourceSignature = useMemo(() => {
     if (!selectedProject || !selectedTranscript || !selectedSubtitle) return "";
@@ -957,6 +988,25 @@ export function CreatorHub({
       tone,
     });
   }, [audience, niche, selectedProject, selectedProjectRootId, selectedSourceAssetId, selectedSubtitle, selectedTranscript, tone]);
+
+  const shortsRequestPayload = useMemo<CreatorShortsGenerateRequest | null>(() => {
+    if (!creatorSourcePayload) return null;
+    return {
+      ...creatorSourcePayload,
+      sourceSignature: aiSuggestionSourceSignature || undefined,
+      niche,
+      audience,
+      tone,
+    };
+  }, [aiSuggestionSourceSignature, audience, creatorSourcePayload, niche, tone]);
+
+  const videoInfoRequestPayload = useMemo<CreatorVideoInfoGenerateRequest | null>(() => {
+    if (!creatorSourcePayload) return null;
+    return {
+      ...creatorSourcePayload,
+      videoInfoBlocks,
+    };
+  }, [creatorSourcePayload, videoInfoBlocks]);
 
   const matchingAiSuggestionGenerations = useMemo(() => {
     if (!aiSuggestionSourceSignature) return [];
@@ -977,6 +1027,33 @@ export function CreatorHub({
     }),
     []
   );
+
+  const llmModels = useMemo(() => {
+    return Array.from(new Set(llmRuns.map((run) => run.model))).sort((left, right) => left.localeCompare(right));
+  }, [llmRuns]);
+
+  const filteredLlmRuns = useMemo(() => {
+    return llmRuns.filter((run) => {
+      if (llmFeatureFilter !== "all" && run.feature !== llmFeatureFilter) return false;
+      if (llmStatusFilter !== "all" && run.status !== llmStatusFilter) return false;
+      if (llmModelFilter !== "all" && run.model !== llmModelFilter) return false;
+      return true;
+    });
+  }, [llmFeatureFilter, llmModelFilter, llmRuns, llmStatusFilter]);
+
+  const selectedLlmRun = useMemo(() => {
+    return filteredLlmRuns.find((run) => run.id === selectedLlmRunId) ?? filteredLlmRuns[0] ?? null;
+  }, [filteredLlmRuns, selectedLlmRunId]);
+
+  useEffect(() => {
+    if (!selectedLlmRun) {
+      if (selectedLlmRunId) setSelectedLlmRunId("");
+      return;
+    }
+    if (selectedLlmRun.id !== selectedLlmRunId) {
+      setSelectedLlmRunId(selectedLlmRun.id);
+    }
+  }, [selectedLlmRun, selectedLlmRunId]);
 
   const openAiSettingsDialog = useCallback(() => {
     setOpenAIApiKeyDraft(openAIApiKey);
@@ -1029,6 +1106,8 @@ export function CreatorHub({
       });
     } catch (error) {
       console.error(error);
+    } finally {
+      void refreshLlmRuns();
     }
   };
 
@@ -1096,8 +1175,10 @@ export function CreatorHub({
       });
     } catch (error) {
       console.error(error);
+    } finally {
+      void refreshLlmRuns();
     }
-  }, [generateShorts, hasOpenAIApiKey, openAIApiKey, openAiSettingsDialog, persistAiSuggestionGeneration, shortsRequestPayload]);
+  }, [generateShorts, hasOpenAIApiKey, openAIApiKey, openAiSettingsDialog, persistAiSuggestionGeneration, refreshLlmRuns, shortsRequestPayload]);
 
   const handleGenerateClipLab = async () => {
     if (matchingAiSuggestionGenerations.length > 0 || hasAiSuggestionsForSignature(aiSuggestionSourceSignature)) {
@@ -1355,7 +1436,7 @@ export function CreatorHub({
     const buildDiagnosticsSnapshot = (errorMessage?: string) =>
       buildShortExportDiagnostics({
         sourceFilename: mediaFilename || selectedProject.filename,
-        platform: selectedPlan.platform,
+
         requestedClip: editedClip,
         exportClip,
         sourceMeta: sourceVideoMeta,
@@ -1793,18 +1874,32 @@ export function CreatorHub({
                         >
                           {hasOpenAIApiKey ? `Key ${maskedOpenAIApiKey}` : "Key missing"}
                         </span>
+                        <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-white/70">
+                          {llmRuns.length} run{llmRuns.length === 1 ? "" : "s"}
+                        </span>
                       </div>
                       <div className="text-xs text-white/45">Se guarda solo en este navegador y se envía por request al backend.</div>
                     </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="bg-white/5 text-white/85 hover:bg-white/10"
-                      onClick={openAiSettingsDialog}
-                    >
-                      <KeyRound className="mr-2 h-4 w-4" />
-                      {hasOpenAIApiKey ? "Update API Key" : "Add API Key"}
-                    </Button>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="bg-white/5 text-white/85 hover:bg-white/10"
+                        onClick={() => setIsLlmHistoryOpen(true)}
+                      >
+                        <CalendarClock className="mr-2 h-4 w-4" />
+                        AI Runs
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        className="bg-white/5 text-white/85 hover:bg-white/10"
+                        onClick={openAiSettingsDialog}
+                      >
+                        <KeyRound className="mr-2 h-4 w-4" />
+                        {hasOpenAIApiKey ? "Update API Key" : "Add API Key"}
+                      </Button>
+                    </div>
                   </div>
                 </div>
 
@@ -2334,7 +2429,6 @@ export function CreatorHub({
                             <div className="relative">
                               <div className="flex items-start justify-between gap-3 mb-2">
                                 <div className="text-base font-semibold text-white/90 line-clamp-2 leading-snug">{project.name}</div>
-                                <div className="text-10px uppercase tracking-wider bg-emerald-500/10 text-emerald-300 px-2.5 py-1 rounded-full border border-emerald-500/20 whitespace-nowrap">{platformLabel(project.platform)}</div>
                               </div>
                               <div className="text-xs text-white/50 font-medium mb-4">
                                 {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
@@ -2419,7 +2513,7 @@ export function CreatorHub({
                                 <div className="mb-2 flex items-start justify-between gap-3">
                                   <div className="text-sm font-semibold leading-snug text-white/90">{project.plan.title}</div>
                                   <div className="rounded-full border border-orange-400/20 bg-orange-400/10 px-2 py-1 text-[10px] uppercase tracking-wide text-orange-100">
-                                    {platformLabel(project.platform)}
+                                    Corto
                                   </div>
                                 </div>
                                 <div className="mb-2 text-xs font-medium text-white/50">
@@ -2553,7 +2647,7 @@ export function CreatorHub({
                                         AI
                                       </div>
                                       <div className="text-xs px-2.5 py-1 rounded-full bg-orange-400/10 border border-orange-400/20 text-orange-100/90 font-medium tracking-wide">
-                                        {platformLabel(project.platform)}
+                                        Corto
                                       </div>
                                     </div>
                                   </div>
@@ -2640,7 +2734,7 @@ export function CreatorHub({
                                   <div className="text-sm font-semibold text-white/90 truncate mb-1">{project.name}</div>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-[11px] text-white/55">
-                                      {platformLabel(project.platform)} · {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                                      {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
                                     </div>
                                     {isActive && <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />}
                                   </div>
@@ -3476,6 +3570,277 @@ export function CreatorHub({
           </>
         )}
       </div>
+
+      <Dialog open={isLlmHistoryOpen} onOpenChange={setIsLlmHistoryOpen}>
+        <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-6xl">
+          <DialogHeader>
+            <DialogTitle>AI Runs</DialogTitle>
+            <DialogDescription className="text-white/55">
+              Prompt, response, latency, and model traces stored in this browser.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto_auto]">
+              <Select value={llmFeatureFilter} onValueChange={(value) => setLlmFeatureFilter(value as typeof llmFeatureFilter)}>
+                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                  <SelectValue placeholder="Feature" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                  <SelectItem value="all">All features</SelectItem>
+                  <SelectItem value="shorts">Shorts</SelectItem>
+                  <SelectItem value="video_info">Video info</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={llmStatusFilter} onValueChange={(value) => setLlmStatusFilter(value as typeof llmStatusFilter)}>
+                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                  <SelectValue placeholder="Status" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                  <SelectItem value="all">All statuses</SelectItem>
+                  <SelectItem value="success">Success</SelectItem>
+                  <SelectItem value="provider_error">Provider error</SelectItem>
+                  <SelectItem value="parse_error">Parse error</SelectItem>
+                  <SelectItem value="validation_error">Validation error</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Select value={llmModelFilter} onValueChange={setLlmModelFilter}>
+                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                  <SelectValue placeholder="Model" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                  <SelectItem value="all">All models</SelectItem>
+                  {llmModels.map((model) => (
+                    <SelectItem key={model} value={model}>
+                      {model}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Button
+                type="button"
+                variant="ghost"
+                className="bg-white/5 text-white/80 hover:bg-white/10"
+                onClick={() => downloadJson(`clipscribe-ai-runs-${Date.now()}.json`, filteredLlmRuns)}
+                disabled={filteredLlmRuns.length === 0}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                Export JSON
+              </Button>
+
+              <Button
+                type="button"
+                variant="ghost"
+                className="bg-white/5 text-white/80 hover:bg-red-500/10 hover:text-red-100"
+                onClick={() => {
+                  const targetIds = filteredLlmRuns.map((run) => run.id);
+                  if (targetIds.length === 0) return;
+                  if (!window.confirm(`Delete ${targetIds.length} AI run${targetIds.length === 1 ? "" : "s"}?`)) return;
+                  if (targetIds.length === llmRuns.length) {
+                    void clearLlmRuns();
+                    return;
+                  }
+                  void deleteLlmRuns(targetIds);
+                }}
+                disabled={filteredLlmRuns.length === 0}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Delete Visible
+              </Button>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
+              <div className="max-h-[60vh] space-y-3 overflow-auto pr-1">
+                {isLoadingLlmRuns && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/60">
+                    Loading runs...
+                  </div>
+                )}
+                {!isLoadingLlmRuns && filteredLlmRuns.length === 0 && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/60">
+                    No runs match the current filters.
+                  </div>
+                )}
+                {filteredLlmRuns.map((run) => {
+                  const isActive = selectedLlmRun?.id === run.id;
+                  return (
+                    <div
+                      key={run.id}
+                      role="button"
+                      tabIndex={0}
+                      className={cn(
+                        "w-full rounded-xl border p-4 text-left transition",
+                        isActive
+                          ? "border-cyan-400/30 bg-cyan-500/10 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]"
+                          : "border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/[0.06]"
+                      )}
+                      onClick={() => setSelectedLlmRunId(run.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedLlmRunId(run.id);
+                        }
+                      }}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80">
+                              {run.feature === "video_info" ? "Video Info" : "Shorts"}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={cn(
+                                "border-white/15",
+                                run.status === "success"
+                                  ? "bg-emerald-400/10 text-emerald-100"
+                                  : "bg-amber-400/10 text-amber-100"
+                              )}
+                            >
+                              {run.status}
+                            </Badge>
+                          </div>
+                          <div className="text-sm font-semibold text-white/90 break-all">{run.model}</div>
+                          <div className="text-xs text-white/50">
+                            {new Date(run.startedAt).toLocaleString()} · {formatDurationMs(run.durationMs)}
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="h-8 px-2 text-white/60 hover:bg-white/10 hover:text-red-100"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            if (!window.confirm("Delete this AI run?")) return;
+                            void deleteLlmRun(run.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4">
+                {selectedLlmRun ? (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
+                        {selectedLlmRun.feature === "video_info" ? "Video Info" : "Shorts"}
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          "border-white/15",
+                          selectedLlmRun.status === "success"
+                            ? "bg-emerald-400/10 text-emerald-100"
+                            : "bg-amber-400/10 text-amber-100"
+                        )}
+                      >
+                        {selectedLlmRun.status}
+                      </Badge>
+                      <Badge variant="outline" className="border-white/15 bg-white/5 text-white/75">
+                        {selectedLlmRun.promptVersion}
+                      </Badge>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Model</div>
+                        <div className="mt-1 text-sm font-medium text-white/90 break-all">{selectedLlmRun.model}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Duration</div>
+                        <div className="mt-1 text-sm font-medium text-white/90">{formatDurationMs(selectedLlmRun.durationMs)}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Tokens</div>
+                        <div className="mt-1 text-sm font-medium text-white/90">{selectedLlmRun.usage?.totalTokens ?? "n/a"}</div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Estimated Cost</div>
+                        <div className="mt-1 text-sm font-medium text-white/90">{formatUsd(selectedLlmRun.estimatedCostUsd)}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/75">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Input Summary</div>
+                        <div className="mt-2 space-y-1">
+                          <div>Transcript chars: {selectedLlmRun.inputSummary.transcriptCharCount}</div>
+                          <div>Transcript chunks: {selectedLlmRun.inputSummary.transcriptChunkCount}</div>
+                          <div>Subtitle chunks: {selectedLlmRun.inputSummary.subtitleChunkCount}</div>
+                          {selectedLlmRun.inputSummary.niche && <div>Niche: {selectedLlmRun.inputSummary.niche}</div>}
+                          {selectedLlmRun.inputSummary.audience && <div>Audience: {selectedLlmRun.inputSummary.audience}</div>}
+                          {selectedLlmRun.inputSummary.tone && <div>Tone: {selectedLlmRun.inputSummary.tone}</div>}
+                          {selectedLlmRun.inputSummary.videoInfoBlocks?.length ? (
+                            <div>Blocks: {selectedLlmRun.inputSummary.videoInfoBlocks.join(", ")}</div>
+                          ) : null}
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/75">
+                        <div className="text-[11px] uppercase tracking-wider text-white/45">Trace Meta</div>
+                        <div className="mt-2 space-y-1 break-all">
+                          <div>Operation: {selectedLlmRun.operation}</div>
+                          <div>Fingerprint: {selectedLlmRun.requestFingerprint}</div>
+                          <div>Fetch: {formatDurationMs(selectedLlmRun.fetchDurationMs)}</div>
+                          <div>Parse: {formatDurationMs(selectedLlmRun.parseDurationMs)}</div>
+                          <div>Exportable: {selectedLlmRun.exportable ? "yes" : "no"}</div>
+                          <div>Redaction: {selectedLlmRun.redactionState}</div>
+                          {selectedLlmRun.errorMessage && <div>Error: {selectedLlmRun.errorMessage}</div>}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                      <div className="space-y-2 xl:col-span-1">
+                        <div className="text-xs uppercase tracking-wider text-white/45">Request Payload</div>
+                        <Textarea
+                          readOnly
+                          value={stringifyForDebug(selectedLlmRun.requestPayloadRaw)}
+                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
+                        />
+                      </div>
+                      <div className="space-y-2 xl:col-span-1">
+                        <div className="text-xs uppercase tracking-wider text-white/45">Provider Response</div>
+                        <Textarea
+                          readOnly
+                          value={stringifyForDebug(selectedLlmRun.responsePayloadRaw)}
+                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
+                        />
+                      </div>
+                      <div className="space-y-2 xl:col-span-1">
+                        <div className="text-xs uppercase tracking-wider text-white/45">Parsed Output</div>
+                        <Textarea
+                          readOnly
+                          value={stringifyForDebug(selectedLlmRun.parsedOutputSnapshot)}
+                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex min-h-[240px] items-center justify-center text-sm text-white/55">
+                    {isLoadingLlmRuns ? "Loading runs..." : "Select a run to inspect its trace."}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {llmRunsError && (
+              <Alert className="border-red-400/20 bg-red-500/10 text-red-100">
+                <AlertTitle>Failed to load AI runs</AlertTitle>
+                <AlertDescription>{llmRunsError}</AlertDescription>
+              </Alert>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isAiSettingsOpen} onOpenChange={setIsAiSettingsOpen}>
         <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-lg">

@@ -5,7 +5,6 @@ import type {
   CreatorVideoInfoGenerateRequest,
   CreatorVideoInfoGenerateResponse,
   CreatorYouTubePack,
-  ShortsPlatform,
 } from "../../../creator/types";
 import { CreatorAIError } from "../shared/errors";
 import { getRuntimeSeconds } from "../shared/transcript-format";
@@ -16,9 +15,7 @@ function isRecord(value: unknown): value is LooseRecord {
   return !!value && typeof value === "object";
 }
 
-function isShortsPlatform(value: unknown): value is ShortsPlatform {
-  return value === "youtube_shorts" || value === "tiktok" || value === "instagram_reels";
-}
+
 
 function readStringArray(value: unknown, maxItems: number): string[] {
   if (!Array.isArray(value)) return [];
@@ -63,7 +60,6 @@ function createEmptyVideoInfoResponse(request: CreatorVideoInfoGenerateRequest, 
       estimatedSpeakingRateWpm,
       repeatedTerms: [],
       detectedTheme: "",
-      recommendedPrimaryPlatform: "youtube_shorts",
     },
   };
 }
@@ -130,7 +126,6 @@ function parseInsights(candidate: unknown, fallback: CreatorInsights): CreatorIn
         : fallback.estimatedSpeakingRateWpm,
     repeatedTerms: readStringArray(candidate.repeatedTerms, 20),
     detectedTheme: typeof candidate.detectedTheme === "string" ? candidate.detectedTheme.trim() : fallback.detectedTheme,
-    recommendedPrimaryPlatform: isShortsPlatform(recommended) ? recommended : fallback.recommendedPrimaryPlatform,
   };
 }
 

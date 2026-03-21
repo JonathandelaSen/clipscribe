@@ -1,9 +1,14 @@
-import type { CreatorShortsGenerateRequest, CreatorShortsGenerateResponse } from "../../../creator/types";
+import type { CreatorShortsGenerateRequest, CreatorShortsGenerateResponse, CreatorTracedResult } from "../../../creator/types";
 import { CreatorAIError } from "../shared/errors";
-import { requestOpenAIJson } from "../shared/openai-json";
+import {
+  buildBaseInputSummary,
+  createCreatorLLMRequestFingerprint,
+  runTrackedOpenAIJson,
+  withValidationErrorTrace,
+} from "../shared/openai-run";
 import { getRuntimeSeconds } from "../shared/transcript-format";
 import { mapShortsOpenAIResponse } from "./mapper";
-import { buildShortsPrompt } from "./prompt";
+import { buildShortsPrompt, CREATOR_SHORTS_PROMPT_VERSION } from "./prompt";
 
 function readShortsConfig() {
   const model = process.env.OPENAI_CREATOR_SHORTS_MODEL;
@@ -23,7 +28,7 @@ function readShortsConfig() {
 export async function generateShortsWithOpenAI(input: {
   request: CreatorShortsGenerateRequest;
   apiKey: string;
-}): Promise<CreatorShortsGenerateResponse> {
+}): Promise<CreatorTracedResult<CreatorShortsGenerateResponse>> {
   const apiKey = input.apiKey.trim();
   if (!apiKey) {
     throw new CreatorAIError("Missing OpenAI API key.", {
@@ -41,7 +46,7 @@ export async function generateShortsWithOpenAI(input: {
   }
 
   const { model, temperature } = readShortsConfig();
-  const parsed = await requestOpenAIJson({
+  const { parsed, llmRun } = await runTrackedOpenAIJson({
     apiKey,
     model,
     temperature,
@@ -55,7 +60,36 @@ export async function generateShortsWithOpenAI(input: {
         content: buildShortsPrompt(input.request),
       },
     ],
+    feature: "shorts",
+    operation: "generate_shorts",
+    promptVersion: CREATOR_SHORTS_PROMPT_VERSION,
+    inputSummary: {
+      ...buildBaseInputSummary(input.request),
+      niche: input.request.niche,
+      audience: input.request.audience,
+      tone: input.request.tone,
+    },
+    requestFingerprint: createCreatorLLMRequestFingerprint({
+      feature: "shorts",
+      operation: "generate_shorts",
+      request: input.request,
+    }),
+    projectId: input.request.projectId,
+    sourceAssetId: input.request.sourceAssetId,
+    sourceSignature: input.request.sourceSignature,
   });
 
-  return mapShortsOpenAIResponse(input.request, parsed, `${model} (user key)`);
+  try {
+    return {
+      response: mapShortsOpenAIResponse(input.request, parsed, `${model} (user key)`),
+      llmRun,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "OpenAI returned invalid creator shorts JSON.";
+    throw new CreatorAIError(message, {
+      status: 502,
+      code: "invalid_openai_response",
+      trace: withValidationErrorTrace(llmRun, message),
+    });
+  }
 }

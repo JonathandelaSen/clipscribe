@@ -8,7 +8,7 @@ import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 import { normalizeShortsGenerateRequest } from "../../../src/lib/server/creator/shared/request-normalizers";
 import { mapShortsOpenAIResponse } from "../../../src/lib/server/creator/shorts/mapper";
 import { generateShortsWithOpenAI } from "../../../src/lib/server/creator/shorts/openai";
-import { buildShortsPrompt } from "../../../src/lib/server/creator/shorts/prompt";
+import { buildShortsPrompt, CREATOR_SHORTS_PROMPT_VERSION } from "../../../src/lib/server/creator/shorts/prompt";
 
 const baseRequest: CreatorShortsGenerateRequest = {
   transcriptText:
@@ -99,6 +99,7 @@ test("mapShortsOpenAIResponse returns ranked clips and plans from model JSON", (
   const result = mapShortsOpenAIResponse(baseRequest, shortsModelResponse, "test-model");
 
   assert.equal(result.providerMode, "openai");
+  assert.equal(result.model, "test-model");
   assert.equal(result.viralClips.length, 1);
   assert.equal(result.viralClips[0]?.sourceChunkIndexes.join(","), "0,1,2");
   assert.equal(result.shortsPlans.length, 2);
@@ -211,10 +212,14 @@ test("generateShortsWithOpenAI returns clip lab results and uses the shorts-only
           apiKey: "sk-proj-demo",
         });
 
-        assert.equal(payload.providerMode, "openai");
-        assert.match(payload.model, /user key/i);
-        assert.deepEqual(payload.viralClips[0]?.sourceChunkIndexes, [0, 1, 2]);
-        assert.equal(payload.shortsPlans[0]?.clipId, "clip_1");
+        assert.equal(payload.response.providerMode, "openai");
+        assert.match(payload.response.model, /user key/i);
+        assert.deepEqual(payload.response.viralClips[0]?.sourceChunkIndexes, [0, 1, 2]);
+        assert.equal(payload.response.shortsPlans[0]?.clipId, "clip_1");
+        assert.equal(payload.llmRun?.status, "success");
+        assert.equal(payload.llmRun?.feature, "shorts");
+        assert.equal(payload.llmRun?.promptVersion, CREATOR_SHORTS_PROMPT_VERSION);
+        assert.equal(payload.llmRun?.inputSummary.niche, baseRequest.niche);
       }
     );
   } finally {

@@ -1,18 +1,20 @@
 import type { CreatorShortsGenerateRequest } from "../../../creator/types";
 import { buildTimedTranscriptLines } from "../shared/transcript-format";
 
+export const CREATOR_SHORTS_PROMPT_VERSION = "creator-shorts-v1";
+
 export function buildShortsPrompt(request: CreatorShortsGenerateRequest): string {
   const timedTranscript = buildTimedTranscriptLines(request.transcriptChunks);
 
   return [
-    "You are a senior short-form clip producer for YouTube Shorts, TikTok, and Instagram Reels.",
+    "You are a senior short-form clip producer.",
     "Return valid JSON only.",
     "Decide the short candidates directly from the transcript and timestamps.",
     "Do not invent timestamps or clip ranges that are not grounded in the timed transcript.",
     "Return 3 to 6 ranked viralClips in descending score order.",
     "Each clip must be 15 to 60 seconds long, ideally 20 to 45 seconds.",
     "Use ids clip_1, clip_2, clip_3... in viralClips and reference those same ids from shortsPlans.clipId.",
-    "For each clip, include at least one shorts plan. Prefer plans for youtube_shorts, tiktok, and instagram_reels.",
+    "For each clip, include at least one shorts plan.",
     "",
     request.niche ? `Niche: ${request.niche}` : "",
     request.audience ? `Audience: ${request.audience}` : "",
@@ -35,7 +37,6 @@ export function buildShortsPrompt(request: CreatorShortsGenerateRequest): string
   "shortsPlans": [
     {
       "clipId": "clip_1",
-      "platform": "youtube_shorts",
       "title": "string",
       "caption": "string",
       "openingText": "string",

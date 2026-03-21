@@ -17,7 +17,7 @@ const manualRecord: CreatorShortProjectRecord = {
   subtitleId: "sub_1",
   clipId: "clip_manual",
   planId: "plan_manual",
-  platform: "youtube_shorts",
+
   name: "Manual short",
   clip: {
     id: "clip_manual",
@@ -35,13 +35,13 @@ const manualRecord: CreatorShortProjectRecord = {
   plan: {
     id: "plan_manual",
     clipId: "clip_manual",
-    platform: "youtube_shorts",
+  
     title: "Manual plan",
     caption: "Manual caption",
     openingText: "Open",
     endCardText: "End",
     editorPreset: {
-      platform: "youtube_shorts",
+    
       aspectRatio: "9:16",
       resolution: "1080x1920",
       subtitleStyle: "clean_caption",

@@ -25,7 +25,7 @@ function toCreatorShortExportRecord(record: ProjectExportRecord): CreatorShortEx
     sourceAssetId: record.sourceAssetId,
     outputAssetId: record.outputAssetId,
     sourceFilename: record.sourceFilename ?? record.filename,
-    platform: record.platform || "youtube_shorts",
+
     createdAt: record.createdAt,
     status: record.status,
     filename: record.filename,
@@ -84,7 +84,7 @@ export function createDexieCreatorShortsRepository(database?: AudioTranscriberDB
         filename: record.filename,
         mimeType: record.mimeType,
         sizeBytes: record.sizeBytes,
-        platform: record.platform,
+
         error: record.error,
         debugFfmpegCommand: record.debugFfmpegCommand,
         debugNotes: record.debugNotes,

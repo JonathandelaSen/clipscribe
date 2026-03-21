@@ -33,7 +33,7 @@ test("createManualFallbackPlan links to the requested clip id", () => {
   const plan = createManualFallbackPlan("clip_123");
 
   assert.equal(plan.clipId, "clip_123");
-  assert.equal(plan.platform, "youtube_shorts");
+
   assert.equal(plan.editorPreset.aspectRatio, "9:16");
   assert.deepEqual(plan.editorPreset.targetDurationRange, [15, 60]);
 });

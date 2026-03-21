@@ -13,18 +13,13 @@ import type {
   CreatorShortProjectRecord,
 } from "@/lib/creator/storage";
 
-function platformLabel(platform: CreatorShortPlan["platform"]): string {
-  if (platform === "youtube_shorts") return "YouTube Shorts";
-  if (platform === "instagram_reels") return "Instagram Reels";
-  return "TikTok";
-}
 
 export function deriveDefaultShortProjectName(
   plan: CreatorShortPlan,
   clip: CreatorViralClip,
   secondsToClock: (seconds: number) => string
 ): string {
-  return `${platformLabel(plan.platform)} • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
+  return `Short Cut • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
 }
 
 export function deriveDefaultAiSuggestionName(
@@ -32,7 +27,7 @@ export function deriveDefaultAiSuggestionName(
   clip: CreatorViralClip,
   secondsToClock: (seconds: number) => string
 ): string {
-  return `AI Suggestion • ${platformLabel(plan.platform)} • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
+  return `AI Suggestion • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
 }
 
 export function findExistingShortProjectRecord(
@@ -110,7 +105,6 @@ export function buildShortProjectRecord(input: {
     subtitleId: input.subtitleId,
     clipId: input.clip.id,
     planId: input.plan.id,
-    platform: input.plan.platform,
     name:
       (input.explicitName || "").trim() ||
       existing?.name ||
@@ -300,7 +294,6 @@ export function buildCompletedShortExportRecord(input: {
     sourceAssetId: input.sourceAssetId,
     outputAssetId: input.outputAssetId,
     sourceFilename: input.sourceFilename,
-    platform: input.plan.platform,
     createdAt: input.createdAt,
     status: "completed",
     filename: input.filename,
@@ -332,7 +325,7 @@ export function buildLocalBrowserRenderResponse(input: {
     createdAt: input.createdAt,
     estimatedSeconds: 0,
     output: {
-      platform: input.plan.platform,
+
       filename: input.filename,
       aspectRatio: "9:16",
       resolution: "1080x1920",

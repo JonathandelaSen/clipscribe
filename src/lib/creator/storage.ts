@@ -2,7 +2,6 @@ import type {
   CreatorShortEditorState,
   CreatorShortPlan,
   CreatorViralClip,
-  ShortsPlatform,
 } from "@/lib/creator/types";
 
 export type CreatorShortProjectStatus = "draft" | "exporting" | "exported" | "error";
@@ -29,7 +28,6 @@ export interface CreatorShortProjectRecord {
   subtitleId: string;
   clipId: string;
   planId: string;
-  platform: ShortsPlatform;
   name: string;
   clip: CreatorViralClip;
   plan: CreatorShortPlan;
@@ -53,7 +51,6 @@ export interface CreatorShortExportRecord {
   sourceAssetId?: string;
   outputAssetId?: string;
   sourceFilename: string;
-  platform: ShortsPlatform;
   createdAt: number;
   status: CreatorShortExportStatus;
   filename: string;

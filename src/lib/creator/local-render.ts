@@ -88,7 +88,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   const mountDir = `/render_${Date.now()}`;
   const outputFilename = sanitizeFilename(
-    `${input.sourceFilename.replace(/\.[^/.]+$/, "")}__${input.plan.platform}__${Math.floor(input.clip.startSeconds)}-${Math.ceil(
+    `${input.sourceFilename.replace(/\.[^/.]+$/, "")}__${Math.floor(input.clip.startSeconds)}-${Math.ceil(
       input.clip.endSeconds
     )}.mp4`
   );
@@ -413,7 +413,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(input.plan.editorPreset.subtitleStyle, input.editor.subtitleStyle);
 
     const notes = [
-      `Local browser render via ffmpeg.wasm (${input.plan.platform})`,
+      `Local browser render via ffmpeg.wasm`,
       `Geometry contract checks passed (scaleDelta=${geometryContract.metrics.scaleDeltaPct.toFixed(4)}%, aspectDelta=${geometryContract.metrics.aspectRatioDeltaPct.toFixed(4)}%).`,
       usedSeekMode === "hybrid"
         ? inputSeekSeconds > 0

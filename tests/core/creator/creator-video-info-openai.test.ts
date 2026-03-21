@@ -6,7 +6,10 @@ import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 import { normalizeVideoInfoGenerateRequest } from "../../../src/lib/server/creator/shared/request-normalizers";
 import { mapVideoInfoOpenAIResponse } from "../../../src/lib/server/creator/video-info/mapper";
 import { generateVideoInfoWithOpenAI } from "../../../src/lib/server/creator/video-info/openai";
-import { buildVideoInfoPrompt } from "../../../src/lib/server/creator/video-info/prompt";
+import {
+  buildVideoInfoPrompt,
+  CREATOR_VIDEO_INFO_PROMPT_VERSION,
+} from "../../../src/lib/server/creator/video-info/prompt";
 
 const baseRequest: CreatorVideoInfoGenerateRequest = {
   transcriptText:
@@ -175,10 +178,14 @@ test("generateVideoInfoWithOpenAI returns packaging results and uses the video i
           apiKey: "sk-proj-demo",
         });
 
-        assert.equal(payload.providerMode, "openai");
-        assert.match(payload.model, /user key/i);
-        assert.equal(payload.youtube.titleIdeas[0], "The creator workflow that actually scales");
-        assert.equal(payload.chapters[0]?.label, "Intro");
+        assert.equal(payload.response.providerMode, "openai");
+        assert.match(payload.response.model, /user key/i);
+        assert.equal(payload.response.youtube.titleIdeas[0], "The creator workflow that actually scales");
+        assert.equal(payload.response.chapters[0]?.label, "Intro");
+        assert.equal(payload.llmRun?.status, "success");
+        assert.equal(payload.llmRun?.feature, "video_info");
+        assert.equal(payload.llmRun?.promptVersion, CREATOR_VIDEO_INFO_PROMPT_VERSION);
+        assert.deepEqual(payload.llmRun?.inputSummary.videoInfoBlocks, baseRequest.videoInfoBlocks);
       }
     );
   } finally {

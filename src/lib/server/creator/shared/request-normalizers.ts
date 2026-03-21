@@ -18,6 +18,11 @@ export const ALL_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] = [
 
 function normalizeCreatorSourceInput(input: CreatorGenerationSourceInput): CreatorGenerationSourceInput {
   return {
+    projectId: input.projectId ? String(input.projectId) : undefined,
+    sourceAssetId: input.sourceAssetId ? String(input.sourceAssetId) : undefined,
+    transcriptId: input.transcriptId ? String(input.transcriptId) : undefined,
+    subtitleId: input.subtitleId ? String(input.subtitleId) : undefined,
+    sourceSignature: input.sourceSignature ? String(input.sourceSignature) : undefined,
     transcriptText: String(input.transcriptText || "").trim(),
     transcriptChunks: Array.isArray(input.transcriptChunks) ? input.transcriptChunks : [],
     subtitleChunks: Array.isArray(input.subtitleChunks) ? input.subtitleChunks : undefined,

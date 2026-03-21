@@ -33,13 +33,11 @@ const sampleClip: CreatorViralClip = {
 const samplePlan = {
   id: "plan_1",
   clipId: "clip_1",
-  platform: "youtube_shorts" as const,
   title: "Plan",
   caption: "Caption",
   openingText: "Open",
   endCardText: "End",
   editorPreset: {
-    platform: "youtube_shorts" as const,
     aspectRatio: "9:16" as const,
     resolution: "1080x1920" as const,
     subtitleStyle: "clean_caption" as const,
@@ -61,7 +59,7 @@ const sampleEditor = {
 
 test("deriveDefaultShortProjectName uses platform + clip time range", () => {
   const name = deriveDefaultShortProjectName(samplePlan, sampleClip, (s) => `${s}s`);
-  assert.equal(name, "YouTube Shorts • 12.5s-34.5s");
+  assert.equal(name, "Short Cut • 12.5s-34.5s");
 });
 
 test("buildShortProjectRecord reuses explicit-id project and preserves createdAt", () => {
@@ -74,7 +72,6 @@ test("buildShortProjectRecord reuses explicit-id project and preserves createdAt
     subtitleId: "sub_1",
     clipId: "clip_1",
     planId: "plan_1",
-    platform: "youtube_shorts" as const,
     name: "Existing Name",
     clip: sampleClip,
     plan: samplePlan,
@@ -130,7 +127,7 @@ test("buildShortProjectRecord generates default name for new record", () => {
   });
 
   assert.equal(record.id, "shortproj_new");
-  assert.equal(record.name, "YouTube Shorts • clock-clock");
+  assert.equal(record.name, "Short Cut • clock-clock");
   assert.equal(record.createdAt, 5000);
   assert.equal(record.lastExportId, undefined);
   assert.equal(record.origin, "manual");
@@ -235,7 +232,7 @@ test("AI suggestion helpers build normalized signatures and records", () => {
   assert.equal(records[0].suggestionGeneratedAt, 999);
   assert.equal(records[0].suggestionSourceSignature, signatureA);
   assert.deepEqual(records[0].suggestionInputSummary, inputSummary);
-  assert.equal(records[0].name, "AI Suggestion • YouTube Shorts • 12.5s-34.5s");
+  assert.equal(records[0].name, "AI Suggestion • 12.5s-34.5s");
 });
 
 test("shouldReuseShortProjectId only reuses manual records", () => {
@@ -328,7 +325,6 @@ test("buildCompletedShortExportRecord and render response produce stable local-b
   });
 
   assert.equal(exportRecord.status, "completed");
-  assert.equal(exportRecord.platform, "youtube_shorts");
   assert.equal(exportRecord.filename, "out.mp4");
 
   const response = buildLocalBrowserRenderResponse({

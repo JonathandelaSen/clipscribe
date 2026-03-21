@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie';
+import type { CreatorLLMRunRecord } from '@/lib/creator/types';
 import type { CreatorShortProjectRecord } from '@/lib/creator/storage';
 import type { AssetTranscriptRecord, ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from '@/lib/projects/types';
 
@@ -9,6 +10,7 @@ export class AudioTranscriberDB extends Dexie {
   assetTranscripts!: EntityTable<AssetTranscriptRecord, 'assetId'>;
   projectShorts!: EntityTable<CreatorShortProjectRecord, 'id'>;
   projectExports!: EntityTable<ProjectExportRecord, 'id'>;
+  creatorLlmRuns!: EntityTable<CreatorLLMRunRecord, 'id'>;
 
   constructor() {
     super('ClipScribeProjectsDB');
@@ -40,6 +42,16 @@ export class AudioTranscriberDB extends Dexie {
             }
           });
       });
+
+    this.version(3).stores({
+      projects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio, activeSourceAssetId',
+      projectAssets: 'id, projectId, createdAt, updatedAt, kind, role, origin',
+      assetTranscripts: 'assetId, projectId, updatedAt, timestamp',
+      projectShorts:
+        'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
+      projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
+    });
   }
 }
 
