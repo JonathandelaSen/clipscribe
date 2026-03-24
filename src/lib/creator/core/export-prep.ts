@@ -1,17 +1,19 @@
-import type { CreatorViralClip } from "@/lib/creator/types";
+import type { CreatorSuggestedShort, CreatorViralClip } from "@/lib/creator/types";
 import type { SubtitleChunk } from "@/lib/history";
 import { clampClipToMediaDuration, clipSubtitleChunks } from "./clip-windowing";
 
-export interface ShortExportPreparationInput {
-  requestedClip: CreatorViralClip;
+type ExportClipLike = CreatorSuggestedShort | CreatorViralClip;
+
+export interface ShortExportPreparationInput<TClip extends ExportClipLike = ExportClipLike> {
+  requestedClip: TClip;
   allSubtitleChunks: SubtitleChunk[];
   sourceDurationSeconds?: number;
   minClipDurationSeconds?: number;
   clipAdjustmentToleranceSeconds?: number;
 }
 
-export interface ShortExportPreparationResult {
-  exportClip: CreatorViralClip;
+export interface ShortExportPreparationResult<TClip extends ExportClipLike = ExportClipLike> {
+  exportClip: TClip;
   exportSubtitleChunks: SubtitleChunk[];
   clipAdjustedToSource: boolean;
   adjustmentNotice?: string;
@@ -20,13 +22,15 @@ export interface ShortExportPreparationResult {
   validationError?: string;
 }
 
-export function prepareShortExport(input: ShortExportPreparationInput): ShortExportPreparationResult {
+export function prepareShortExport<TClip extends ExportClipLike>(
+  input: ShortExportPreparationInput<TClip>
+): ShortExportPreparationResult<TClip> {
   const clipAdjustmentToleranceSeconds = Math.max(0, input.clipAdjustmentToleranceSeconds ?? 0.02);
   const minClipDurationSeconds = Math.max(0.01, input.minClipDurationSeconds ?? 0.25);
 
   const hasSourceDuration = typeof input.sourceDurationSeconds === "number" && Number.isFinite(input.sourceDurationSeconds);
   const exportClip = hasSourceDuration
-    ? clampClipToMediaDuration(input.requestedClip, input.sourceDurationSeconds as number)
+    ? (clampClipToMediaDuration(input.requestedClip, input.sourceDurationSeconds as number) as TClip)
     : input.requestedClip;
   const clipAdjustedToSource =
     Math.abs(exportClip.startSeconds - input.requestedClip.startSeconds) > clipAdjustmentToleranceSeconds ||

@@ -38,6 +38,7 @@ import {
   type ActiveBrowserRenderSession,
   type BrowserRenderStage,
 } from "@/lib/browser-render";
+import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
 import {
   getLatestSubtitleForLanguage,
   getLatestTranscript,
@@ -117,6 +118,7 @@ import {
   wrapCreatorTextOverlayLines,
 } from "@/lib/creator/text-overlay-style";
 import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
+import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useCreatorShortRenderer } from "@/hooks/useCreatorShortRenderer";
 import { useCreatorShortsGenerator } from "@/hooks/useCreatorShortsGenerator";
@@ -126,6 +128,7 @@ import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerat
 import { cn } from "@/lib/utils";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -156,6 +159,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { BackgroundTaskBanner } from "@/components/tasks/BackgroundTaskBanner";
 
 function copyText(text: string, label: string) {
   navigator.clipboard.writeText(text);
@@ -753,6 +757,132 @@ function TextOverlayEditorCard({
   );
 }
 
+function SuggestionDetailField({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+      <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">{label}</div>
+      <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-white/82">
+        {value.trim() || "None"}
+      </div>
+    </div>
+  );
+}
+
+function AiSuggestionPreviewCard({
+  project,
+  transcriptPreview,
+  onOpenEditor,
+  onDelete,
+}: {
+  project: CreatorShortProjectRecord;
+  transcriptPreview: string;
+  onOpenEditor: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 px-5 flex flex-col">
+      <Accordion type="single" collapsible className="w-full">
+        <AccordionItem value={project.id} className="border-none">
+        <AccordionTrigger className="py-5 text-left hover:no-underline">
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0 space-y-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-fuchsia-100">
+                    AI
+                  </div>
+                  <div className="rounded-full border border-orange-400/20 bg-orange-400/10 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-orange-100">
+                    Short
+                  </div>
+                  <div className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
+                    Score {project.clip.score}
+                  </div>
+                </div>
+                <div className="truncate text-base font-semibold text-white/92">{project.plan.title}</div>
+              </div>
+              <div className="text-right text-[11px] uppercase tracking-[0.24em] text-white/40">
+                {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 text-sm md:grid-cols-2">
+              <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-white/72">
+                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">Clip title</div>
+                <div className="mt-1 leading-relaxed text-white/86">{project.clip.title}</div>
+              </div>
+              <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2 text-white/72">
+                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">Hook preview</div>
+                <div className="mt-1 line-clamp-2 leading-relaxed text-white/86">{project.clip.hook}</div>
+              </div>
+            </div>
+
+            <div className="line-clamp-2 text-sm leading-relaxed text-white/58">
+              {transcriptPreview || project.clip.reason}
+            </div>
+          </div>
+        </AccordionTrigger>
+        <AccordionContent className="space-y-4 pb-5">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            <SuggestionDetailField label="Clip title" value={project.clip.title} />
+            <SuggestionDetailField label="Clip hook" value={project.clip.hook} />
+            <SuggestionDetailField label="Clip reason" value={project.clip.reason} />
+            <SuggestionDetailField label="Clip punchline" value={project.clip.punchline} />
+            <SuggestionDetailField label="Plan title" value={project.plan.title} />
+            <SuggestionDetailField label="Plan caption" value={project.plan.caption} />
+            <SuggestionDetailField label="Opening text" value={project.plan.openingText} />
+            <SuggestionDetailField label="End card" value={project.plan.endCardText} />
+          </div>
+
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3">
+            <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">Clip stats</div>
+            <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/70">
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                Start {secondsToClock(project.clip.startSeconds)}
+              </span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                End {secondsToClock(project.clip.endSeconds)}
+              </span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                Duration {project.clip.durationSeconds.toFixed(1)}s
+              </span>
+              <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
+                Score {project.clip.score}
+              </span>
+            </div>
+          </div>
+
+        </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+      <div className="flex flex-wrap items-center justify-end gap-3 border-t border-white/8 pb-5 pt-4">
+        <Button
+          type="button"
+          variant="ghost"
+          className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
+          onClick={onDelete}
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          Delete
+        </Button>
+        <Button
+          type="button"
+          className="bg-gradient-to-r from-orange-500 to-fuchsia-400 font-semibold text-black hover:from-orange-400 hover:to-fuchsia-300"
+          onClick={onOpenEditor}
+        >
+          <Clapperboard className="mr-2 h-4 w-4" />
+          Open in Editor
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 async function readVideoMetadata(
   file: File,
   existingVideoEl?: HTMLVideoElement | null
@@ -900,6 +1030,7 @@ export function CreatorHub({
     saveOpenAIApiKey,
     clearOpenAIApiKey,
   } = useCreatorAiSettings();
+  const { activeTasks, startShortExport, cancelTask } = useBackgroundTasks();
 
   const [hubView, setHubView] = useState<HubView>(initialView);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialSourceAssetId ?? "");
@@ -943,7 +1074,7 @@ export function CreatorHub({
   );
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
-  const [isExportingShort, setIsExportingShort] = useState(false);
+  const [, setIsExportingShort] = useState(false);
   const [shortExportStage, setShortExportStage] = useState<BrowserRenderStage>("preparing");
   const [exportProgressPct, setExportProgressPct] = useState(0);
   const [localRenderError, setLocalRenderError] = useState<string | null>(null);
@@ -1427,12 +1558,22 @@ export function CreatorHub({
   const showChapters = selectedVideoInfoBlocks.has("chapters");
   const showContentPack = selectedVideoInfoBlocks.has("contentPack");
   const showInsights = selectedVideoInfoBlocks.has("insights");
+  const currentShortTaskProjectId = selectedProjectRootId || selectedProject?.id;
+  const activeShortExportTask =
+    currentShortTaskProjectId == null
+      ? undefined
+      : activeTasks.find(
+          (task) => task.kind === "short-export" && task.scope.projectId === currentShortTaskProjectId
+        );
+  const isActiveShortExportTask = Boolean(activeShortExportTask && isBackgroundTaskActive(activeShortExportTask));
 
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
   const canAnalyzeWithAI = canAnalyze && hasOpenAIApiKey;
   const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
-  const canExportVideo = canRender && !!mediaFile && isVideoMedia;
-  const canCancelShortExport = isExportingShort && isBrowserRenderCancelableStage(shortExportStage);
+  const canExportVideo = canRender && !!mediaFile && isVideoMedia && !isActiveShortExportTask;
+  const canCancelShortExport =
+    Boolean(activeShortExportTask?.canCancel) &&
+    (isActiveShortExportTask || isBrowserRenderCancelableStage(shortExportStage));
   const activeAnalysisMeta = activeTool === "video_info" ? videoInfoAnalysis : shortsAnalysis;
   const isAnalyzing = activeTool === "video_info" ? isGeneratingVideoInfo : isGeneratingShorts;
   const analyzeError = activeTool === "video_info" ? videoInfoError : shortsError;
@@ -1707,18 +1848,9 @@ export function CreatorHub({
   }, [activeEditableShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
   const handleCancelShortExport = useCallback(() => {
-    const session = shortExportSessionRef.current;
-    if (!session || !isBrowserRenderCancelableStage(session.stage)) return;
-
-    session.controller.abort();
-    resetFFmpeg();
-    shortExportSessionRef.current = null;
-    setIsExportingShort(false);
-    setShortExportStage("preparing");
-    setExportProgressPct(0);
-    persistCanceledShortExportRestore();
-    toast("Export canceled");
-  }, [persistCanceledShortExportRestore]);
+    if (!activeShortExportTask?.canCancel) return;
+    cancelTask(activeShortExportTask.id);
+  }, [activeShortExportTask, cancelTask]);
 
   const handleSaveShortProject = useCallback(async () => {
     const record = buildCurrentShortProjectRecord("draft", {
@@ -1869,268 +2001,315 @@ export function CreatorHub({
       });
       return;
     }
+    if (activeShortExportTask) {
+      toast("A short export is already running for this project.");
+      return;
+    }
 
-    const session = beginShortExportSession();
-    shortExportSessionRef.current = session;
-    shortExportRestoreSnapshotRef.current = activeSavedShortProject
-      ? {
-          status: activeSavedShortProject.status,
-          lastExportId: activeSavedShortProject.lastExportId,
-          lastError: activeSavedShortProject.lastError,
-        }
-      : null;
-    setIsExportingShort(true);
-    setShortExportStage(session.stage);
-    setExportProgressPct(0);
-    setLocalRenderError(null);
-    setLocalRenderDiagnostics(null);
-    const bumpExportProgress = (nextPct: number) => {
-      setExportProgressPct((prev) => {
-        const next = Math.round(clampNumber(nextPct, 0, 100));
-        return next > prev ? next : prev;
-      });
-    };
+    startShortExport({
+      projectId: currentShortTaskProjectId || selectedProject.id,
+      title: `Exporting ${selectedPlan.title}`,
+      message: `${secondsToClock(editedClip.startSeconds)} → ${secondsToClock(editedClip.endSeconds)}`,
+      run: async (task) => {
+        const session = beginShortExportSession();
+        shortExportSessionRef.current = session;
+        shortExportRestoreSnapshotRef.current = activeSavedShortProject
+          ? {
+              status: activeSavedShortProject.status,
+              lastExportId: activeSavedShortProject.lastExportId,
+              lastError: activeSavedShortProject.lastError,
+            }
+          : null;
+        setIsExportingShort(true);
+        setShortExportStage(session.stage);
+        setExportProgressPct(0);
+        setLocalRenderError(null);
+        setLocalRenderDiagnostics(null);
+        task.update({
+          status: "preparing",
+          progress: 1,
+          message: "Preparing short export",
+        });
+        task.setCancel(() => {
+          if (!isBrowserRenderCancelableStage(session.stage)) return;
+          session.controller.abort();
+          resetFFmpeg();
+          shortExportSessionRef.current = null;
+          setIsExportingShort(false);
+          setShortExportStage("preparing");
+          setExportProgressPct(0);
+          persistCanceledShortExportRestore();
+          shortExportRestoreSnapshotRef.current = null;
+          toast("Export canceled");
+        });
 
-    let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
-    let exportClip = editedClip;
-    let exportSubtitleChunks = selectedClipSubtitleChunks;
-    const buildDiagnosticsSnapshot = (errorMessage?: string) =>
-      buildShortExportDiagnostics({
-        sourceFilename: mediaFilename || selectedProject.filename,
+        const bumpExportProgress = (nextPct: number) => {
+          setExportProgressPct((prev) => {
+            const next = Math.round(clampNumber(nextPct, 0, 100));
+            if (next <= prev) return prev;
+            task.update({
+              status: next >= 96 ? "finalizing" : "running",
+              progress: next,
+              message: next >= 96 ? "Finalizing short export" : "Rendering short export",
+            });
+            return next;
+          });
+        };
 
-        requestedClip: editedClip,
-        exportClip,
-        sourceMeta: sourceVideoMeta,
-        selectedSubtitleChunkCount: selectedClipSubtitleChunks.length,
-        exportSubtitleChunkCount: exportSubtitleChunks.length,
-        stylePreset: resolvedSubtitleStyle.preset,
-        errorMessage,
-      });
+        let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
+        let exportClip = editedClip;
+        let exportSubtitleChunks = selectedClipSubtitleChunks;
+        const buildDiagnosticsSnapshot = (errorMessage?: string) =>
+          buildShortExportDiagnostics({
+            sourceFilename: mediaFilename || selectedProject.filename,
+            requestedClip: editedClip,
+            exportClip,
+            sourceMeta: sourceVideoMeta,
+            selectedSubtitleChunkCount: selectedClipSubtitleChunks.length,
+            exportSubtitleChunkCount: exportSubtitleChunks.length,
+            stylePreset: resolvedSubtitleStyle.preset,
+            errorMessage,
+          });
 
-    try {
-      sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      console.info("[ShortExport] metadata loaded", sourceVideoMeta);
-      const prepared = prepareShortExport({
-        requestedClip: editedClip,
-        allSubtitleChunks: selectedSubtitle.chunks,
-        sourceDurationSeconds: sourceVideoMeta.durationSeconds,
-        minClipDurationSeconds: 0.25,
-      });
-      exportClip = prepared.exportClip;
-      exportSubtitleChunks = prepared.exportSubtitleChunks;
+        try {
+          sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          const prepared = prepareShortExport({
+            requestedClip: editedClip,
+            allSubtitleChunks: selectedSubtitle.chunks,
+            sourceDurationSeconds: sourceVideoMeta.durationSeconds,
+            minClipDurationSeconds: 0.25,
+          });
+          exportClip = prepared.exportClip;
+          exportSubtitleChunks = prepared.exportSubtitleChunks;
 
-      if (prepared.clipAdjustedToSource) {
-        toast(
-          `Clip adjusted to media range: ${secondsToClock(exportClip.startSeconds)} → ${secondsToClock(exportClip.endSeconds)}.`,
-          {
-            className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+          if (prepared.clipAdjustedToSource) {
+            toast(
+              `Clip adjusted to media range: ${secondsToClock(exportClip.startSeconds)} → ${secondsToClock(exportClip.endSeconds)}.`,
+              {
+                className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+              }
+            );
           }
-        );
-      }
 
-      if (!prepared.durationValid) {
-        throw new Error(prepared.validationError || "Selected clip is too short to export.");
-      }
-      console.info("[ShortExport] diagnostics pre-render\n" + buildDiagnosticsSnapshot());
-    } catch (metadataError) {
-      if (isBrowserRenderCanceledError(metadataError) || session.controller.signal.aborted) {
-        if (shortExportSessionRef.current?.id === session.id) {
+          if (!prepared.durationValid) {
+            throw new Error(prepared.validationError || "Selected clip is too short to export.");
+          }
+
+          task.update({
+            status: "preparing",
+            progress: 8,
+            message: "Preparing short export",
+          });
+          console.info("[ShortExport] diagnostics pre-render\n" + buildDiagnosticsSnapshot());
+        } catch (metadataError) {
+          if (isBrowserRenderCanceledError(metadataError) || session.controller.signal.aborted || task.isCanceled()) {
+            if (shortExportSessionRef.current?.id === session.id) {
+              shortExportSessionRef.current = null;
+              shortExportRestoreSnapshotRef.current = null;
+              setIsExportingShort(false);
+              setShortExportStage("preparing");
+            }
+            return;
+          }
+          console.error(metadataError);
+          const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
+          setLocalRenderError(message);
+          setLocalRenderDiagnostics(buildDiagnosticsSnapshot(message));
+          toast.error(message, {
+            className: "bg-red-500/20 border-red-500/50 text-red-100",
+          });
+          throw new Error(message);
+        }
+
+        let shortProjectRecord = buildCurrentShortProjectRecord("exporting", {
+          id: activeEditableShortProjectId,
+          clipOverride: exportClip,
+        });
+        if (!shortProjectRecord) {
           shortExportSessionRef.current = null;
           shortExportRestoreSnapshotRef.current = null;
           setIsExportingShort(false);
           setShortExportStage("preparing");
+          throw new Error("Short export could not be prepared.");
         }
-        return;
-      }
-      console.error(metadataError);
-      const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
-      setLocalRenderError(message);
-      setLocalRenderDiagnostics(buildDiagnosticsSnapshot(message));
-      toast.error(message, {
-        className: "bg-red-500/20 border-red-500/50 text-red-100",
-      });
-      if (shortExportSessionRef.current?.id === session.id) {
-        shortExportSessionRef.current = null;
-        shortExportRestoreSnapshotRef.current = null;
-        setIsExportingShort(false);
-        setShortExportStage("preparing");
-      }
-      return;
-    }
 
-    let shortProjectRecord = buildCurrentShortProjectRecord("exporting", {
-      id: activeEditableShortProjectId,
-      clipOverride: exportClip,
-    });
-    if (!shortProjectRecord) {
-      shortExportSessionRef.current = null;
-      shortExportRestoreSnapshotRef.current = null;
-      setIsExportingShort(false);
-      setShortExportStage("preparing");
-      return;
-    }
-
-    try {
-      await upsertProject(shortProjectRecord);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      setActiveSavedShortProjectId(shortProjectRecord.id);
-      setDetachedShortSelection({ clip: shortProjectRecord.clip, plan: shortProjectRecord.plan });
-      setShortProjectNameDraft(shortProjectRecord.name);
-
-      const sourceVideoSize = sourceVideoMeta
-        ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
-        : await readVideoMetadata(mediaFile, previewVideoRef.current);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      const frameRect = previewFrameElRef.current?.getBoundingClientRect();
-      const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
-
-      // NOTE: We intentionally pass null for previewVideoRect.
-      // getBoundingClientRect() on a <video> with objectFit:"contain" returns
-      // the full element box (including letterbox/pillarbox areas), not the
-      // actual rendered video content rect. Using that rect causes
-      // export-geometry to compute an incorrectly stretched scale.
-      // The fallback path (source dimensions + editor zoom) is correct.
-
-      const localExport = await exportShortVideoLocally({
-        sourceFile: mediaFile,
-        sourceFilename: mediaFilename || selectedProject.filename,
-        clip: exportClip,
-        plan: selectedPlan,
-        subtitleChunks: exportSubtitleChunks,
-        editor: currentEditorState,
-        sourceVideoSize,
-        previewViewport,
-        previewVideoRect: null,
-        onProgress: bumpExportProgress,
-        renderLifecycle: {
-          signal: session.controller.signal,
-          onStageChange: (stage) => syncShortExportStage(session.id, stage),
-        },
-      });
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      bumpExportProgress(97);
-
-      const exportedVideoMetadata = await readVideoMetadata(localExport.file);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      const now = Date.now();
-      const outputAsset = createEditorAssetRecord({
-        projectId: selectedProjectRootId || selectedProject.id,
-        role: "derived",
-        origin: "short-export",
-        derivedFromAssetId: selectedSourceAssetId || selectedProject.id,
-        kind: "video",
-        filename: localExport.file.name,
-        mimeType: localExport.file.type || "video/mp4",
-        sizeBytes: localExport.file.size,
-        durationSeconds: exportedVideoMetadata.durationSeconds ?? exportClip.durationSeconds,
-        width: exportedVideoMetadata.width,
-        height: exportedVideoMetadata.height,
-        hasAudio: true,
-        sourceType: "upload",
-        captionSource: { kind: "none" },
-        fileBlob: localExport.file,
-        now,
-      });
-
-      await db.transaction("rw", db.projects, db.projectAssets, async () => {
-        await db.projectAssets.put(outputAsset);
-        const rootProject = await db.projects.get(selectedProjectRootId || selectedProject.id);
-        if (rootProject) {
-          await db.projects.put({
-            ...rootProject,
-            assetIds: [...rootProject.assetIds, outputAsset.id],
-            updatedAt: now,
-            lastOpenedAt: now,
-          });
-        }
-      });
-      if (shortExportSessionRef.current?.id !== session.id) return;
-
-      const exportRecord = buildCompletedShortExportRecord({
-        id: makeId("shortexport"),
-        shortProjectId: shortProjectRecord.id,
-        projectId: selectedProjectRootId || selectedProject.id,
-        sourceAssetId: selectedSourceAssetId || selectedProject.id,
-        outputAssetId: outputAsset.id,
-        sourceFilename: mediaFilename || selectedProject.filename,
-        plan: selectedPlan,
-        clip: exportClip,
-        editor: currentEditorState,
-        createdAt: now,
-        filename: localExport.file.name,
-        mimeType: localExport.file.type || "video/mp4",
-        sizeBytes: localExport.file.size,
-        fileBlob: localExport.file,
-        debugFfmpegCommand: localExport.ffmpegCommandPreview,
-        debugNotes: localExport.notes,
-      });
-
-      await upsertExport(exportRecord);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      bumpExportProgress(98);
-
-      shortProjectRecord = markShortProjectExported(shortProjectRecord, {
-        now: Date.now(),
-        exportId: exportRecord.id,
-      });
-      await upsertProject(shortProjectRecord);
-      if (shortExportSessionRef.current?.id !== session.id) return;
-      bumpExportProgress(99);
-
-      const renderResult = buildLocalBrowserRenderResponse({
-        jobId: exportRecord.id,
-        createdAt: exportRecord.createdAt,
-        plan: selectedPlan,
-        filename: exportRecord.filename,
-        subtitleBurnedIn: localExport.subtitleBurnedIn,
-        ffmpegCommandPreview: localExport.ffmpegCommandPreview,
-        notes: localExport.notes,
-      });
-      syncShortExportStage(session.id, "complete");
-      setLastRender(renderResult);
-
-      handleDownloadSavedExport(exportRecord);
-      bumpExportProgress(100);
-      toast.success(`Short exported and saved (${formatBytes(exportRecord.sizeBytes)})`, {
-        className: "bg-green-500/20 border-green-500/50 text-green-100",
-      });
-    } catch (error) {
-      if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted) {
-        return;
-      }
-
-      console.error(error);
-      const rawMessage = error instanceof Error ? error.message : "Short export failed";
-      const toastMessage = rawMessage.split("\n")[0] || "Short export failed";
-      const diagnostics = buildDiagnosticsSnapshot(rawMessage);
-      setLocalRenderError(toastMessage);
-      setLocalRenderDiagnostics(diagnostics);
-      console.error("[ShortExport] failed diagnostics\n" + diagnostics);
-
-      if (shortProjectRecord) {
         try {
-          const failedProject = markShortProjectFailed(shortProjectRecord, {
-            now: Date.now(),
-            error: toastMessage,
-          });
-          await upsertProject(failedProject);
-        } catch (persistErr) {
-          console.error("Failed to persist short export error state", persistErr);
-        }
-      }
+          await upsertProject(shortProjectRecord);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          setActiveSavedShortProjectId(shortProjectRecord.id);
+          setDetachedShortSelection({ clip: shortProjectRecord.clip, plan: shortProjectRecord.plan });
+          setShortProjectNameDraft(shortProjectRecord.name);
 
-      toast.error(toastMessage, {
-        className: "bg-red-500/20 border-red-500/50 text-red-100",
-      });
-    } finally {
-      if (shortExportSessionRef.current?.id === session.id) {
-        shortExportSessionRef.current = null;
-        shortExportRestoreSnapshotRef.current = null;
-        setIsExportingShort(false);
-        setShortExportStage("preparing");
-      }
-    }
+          const sourceVideoSize = sourceVideoMeta
+            ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
+            : await readVideoMetadata(mediaFile, previewVideoRef.current);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          const frameRect = previewFrameElRef.current?.getBoundingClientRect();
+          const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
+
+          const localExport = await exportShortVideoLocally({
+            sourceFile: mediaFile,
+            sourceFilename: mediaFilename || selectedProject.filename,
+            clip: exportClip,
+            plan: selectedPlan,
+            subtitleChunks: exportSubtitleChunks,
+            editor: currentEditorState,
+            sourceVideoSize,
+            previewViewport,
+            previewVideoRect: null,
+            onProgress: bumpExportProgress,
+            renderLifecycle: {
+              signal: session.controller.signal,
+              onStageChange: (stage) => {
+                syncShortExportStage(session.id, stage);
+                task.update({
+                  status:
+                    stage === "preparing"
+                      ? "preparing"
+                      : stage === "rendering"
+                        ? "running"
+                        : "finalizing",
+                  progress: stage === "handoff" ? 96 : undefined,
+                  message:
+                    stage === "handoff" || stage === "complete"
+                      ? "Finalizing short export"
+                      : "Rendering short export",
+                });
+              },
+            },
+          });
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          bumpExportProgress(97);
+
+          const exportedVideoMetadata = await readVideoMetadata(localExport.file);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          const now = Date.now();
+          const outputAsset = createEditorAssetRecord({
+            projectId: currentShortTaskProjectId || selectedProject.id,
+            role: "derived",
+            origin: "short-export",
+            derivedFromAssetId: selectedSourceAssetId || selectedProject.id,
+            kind: "video",
+            filename: localExport.file.name,
+            mimeType: localExport.file.type || "video/mp4",
+            sizeBytes: localExport.file.size,
+            durationSeconds: exportedVideoMetadata.durationSeconds ?? exportClip.durationSeconds,
+            width: exportedVideoMetadata.width,
+            height: exportedVideoMetadata.height,
+            hasAudio: true,
+            sourceType: "upload",
+            captionSource: { kind: "none" },
+            fileBlob: localExport.file,
+            now,
+          });
+
+          await db.transaction("rw", db.projects, db.projectAssets, async () => {
+            await db.projectAssets.put(outputAsset);
+            const rootProject = await db.projects.get(currentShortTaskProjectId || selectedProject.id);
+            if (rootProject) {
+              await db.projects.put({
+                ...rootProject,
+                assetIds: [...rootProject.assetIds, outputAsset.id],
+                updatedAt: now,
+                lastOpenedAt: now,
+              });
+            }
+          });
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+
+          const exportRecord = buildCompletedShortExportRecord({
+            id: makeId("shortexport"),
+            shortProjectId: shortProjectRecord.id,
+            projectId: currentShortTaskProjectId || selectedProject.id,
+            sourceAssetId: selectedSourceAssetId || selectedProject.id,
+            outputAssetId: outputAsset.id,
+            sourceFilename: mediaFilename || selectedProject.filename,
+            plan: selectedPlan,
+            clip: exportClip,
+            editor: currentEditorState,
+            createdAt: now,
+            filename: localExport.file.name,
+            mimeType: localExport.file.type || "video/mp4",
+            sizeBytes: localExport.file.size,
+            fileBlob: localExport.file,
+            debugFfmpegCommand: localExport.ffmpegCommandPreview,
+            debugNotes: localExport.notes,
+          });
+
+          await upsertExport(exportRecord);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          bumpExportProgress(98);
+
+          shortProjectRecord = markShortProjectExported(shortProjectRecord, {
+            now: Date.now(),
+            exportId: exportRecord.id,
+          });
+          await upsertProject(shortProjectRecord);
+          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          bumpExportProgress(99);
+
+          const renderResult = buildLocalBrowserRenderResponse({
+            jobId: exportRecord.id,
+            createdAt: exportRecord.createdAt,
+            plan: selectedPlan,
+            filename: exportRecord.filename,
+            subtitleBurnedIn: localExport.subtitleBurnedIn,
+            ffmpegCommandPreview: localExport.ffmpegCommandPreview,
+            notes: localExport.notes,
+          });
+          syncShortExportStage(session.id, "complete");
+          setLastRender(renderResult);
+
+          handleDownloadSavedExport(exportRecord);
+          bumpExportProgress(100);
+          task.update({
+            status: "finalizing",
+            progress: 100,
+            message: "Saving short export",
+          });
+          toast.success(`Short exported and saved (${formatBytes(exportRecord.sizeBytes)})`, {
+            className: "bg-green-500/20 border-green-500/50 text-green-100",
+          });
+        } catch (error) {
+          if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted || task.isCanceled()) {
+            return;
+          }
+
+          console.error(error);
+          const rawMessage = error instanceof Error ? error.message : "Short export failed";
+          const toastMessage = rawMessage.split("\n")[0] || "Short export failed";
+          const diagnostics = buildDiagnosticsSnapshot(rawMessage);
+          setLocalRenderError(toastMessage);
+          setLocalRenderDiagnostics(diagnostics);
+          console.error("[ShortExport] failed diagnostics\n" + diagnostics);
+
+          if (shortProjectRecord) {
+            try {
+              const failedProject = markShortProjectFailed(shortProjectRecord, {
+                now: Date.now(),
+                error: toastMessage,
+              });
+              await upsertProject(failedProject);
+            } catch (persistErr) {
+              console.error("Failed to persist short export error state", persistErr);
+            }
+          }
+
+          toast.error(toastMessage, {
+            className: "bg-red-500/20 border-red-500/50 text-red-100",
+          });
+          throw error instanceof Error ? error : new Error(toastMessage);
+        } finally {
+          if (shortExportSessionRef.current?.id === session.id) {
+            shortExportSessionRef.current = null;
+            shortExportRestoreSnapshotRef.current = null;
+            setIsExportingShort(false);
+            setShortExportStage("preparing");
+          }
+        }
+      },
+    });
   };
 
   const previewSubtitleLine = useMemo(() => {
@@ -3052,41 +3231,16 @@ export function CreatorHub({
 
                           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                             {group.projects.map((project) => (
-                              <div
+                              <AiSuggestionPreviewCard
                                 key={project.id}
-                                onClick={() => {
+                                project={project}
+                                transcriptPreview={project.clip.reason}
+                                onOpenEditor={() => {
                                   applySavedShortProject(project);
                                   setHubView("editor");
                                 }}
-                                className="rounded-xl border border-white/10 bg-white/[0.03] p-4 transition-colors hover:bg-white/5 cursor-pointer"
-                              >
-                                <div className="mb-2 flex items-start justify-between gap-3">
-                                  <div className="text-sm font-semibold leading-snug text-white/90">{project.plan.title}</div>
-                                  <div className="rounded-full border border-orange-400/20 bg-orange-400/10 px-2 py-1 text-[10px] uppercase tracking-wide text-orange-100">
-                                    Corto
-                                  </div>
-                                </div>
-                                <div className="mb-2 text-xs font-medium text-white/50">
-                                  {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
-                                </div>
-                                <div className="mb-3 line-clamp-3 text-xs leading-relaxed text-white/60">{project.clip.reason}</div>
-                                <div className="flex items-center justify-between gap-2 border-t border-white/5 pt-3">
-                                  <div className="text-[11px] text-white/40">Score {project.clip.score}</div>
-                                  <Button
-                                    type="button"
-                                    size="icon-xs"
-                                    variant="ghost"
-                                    className="shrink-0 bg-white/5 hover:bg-red-500/15 text-white/50 hover:text-red-200"
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      void handleDeleteShortProject(project);
-                                    }}
-                                    title={`Delete ${project.name}`}
-                                  >
-                                    <Trash2 className="w-3.5 h-3.5" />
-                                  </Button>
-                                </div>
-                              </div>
+                                onDelete={() => void handleDeleteShortProject(project)}
+                              />
                             ))}
                           </div>
                         </div>
@@ -3180,50 +3334,16 @@ export function CreatorHub({
                                 ? summarizeClipText(project.clip, selectedSubtitle.chunks, 200)
                                 : project.clip.hook;
                               return (
-                                <button
+                                <AiSuggestionPreviewCard
                                   key={project.id}
-                                  onClick={() => {
+                                  project={project}
+                                  transcriptPreview={textPreview}
+                                  onOpenEditor={() => {
                                     applySavedShortProject(project);
                                     setHubView("editor");
                                   }}
-                                  className="w-full text-left rounded-2xl border border-white/10 bg-black/20 hover:bg-black/40 hover:border-orange-300/30 transition-all p-5 group"
-                                >
-                                  <div className="mb-3 flex items-center justify-between gap-3">
-                                    <div className="text-base font-semibold text-white/90 group-hover:text-orange-200 transition-colors">
-                                      {project.plan.title}
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <div className="text-xs px-2.5 py-1 rounded-full bg-fuchsia-400/10 border border-fuchsia-400/20 text-fuchsia-100/90 font-medium tracking-wide">
-                                        AI
-                                      </div>
-                                      <div className="text-xs px-2.5 py-1 rounded-full bg-orange-400/10 border border-orange-400/20 text-orange-100/90 font-medium tracking-wide">
-                                        Corto
-                                      </div>
-                                    </div>
-                                  </div>
-                                  <div className="text-xs text-white/50 mb-3 font-medium">
-                                    {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)} ({Math.round(project.clip.durationSeconds)}s)
-                                  </div>
-                                  <div className="text-sm text-white/80 leading-relaxed italic border-l-2 border-white/10 pl-3 py-1 mb-3">
-                                    {textPreview}
-                                  </div>
-                                  <div className="flex items-start justify-between gap-3 rounded-lg bg-white/5 p-3">
-                                    <div className="text-xs text-white/55 leading-relaxed">{project.clip.reason}</div>
-                                    <Button
-                                      type="button"
-                                      size="icon-xs"
-                                      variant="ghost"
-                                      className="shrink-0 bg-white/5 hover:bg-red-500/15 text-white/50 hover:text-red-200"
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-                                        void handleDeleteShortProject(project);
-                                      }}
-                                      title={`Delete ${project.name}`}
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </Button>
-                                  </div>
-                                </button>
+                                  onDelete={() => void handleDeleteShortProject(project)}
+                                />
                               );
                             })}
                           </div>
@@ -3247,6 +3367,12 @@ export function CreatorHub({
                     <ArrowLeft className="w-4 h-4 mr-2" /> Back
                   </Button>
                 </div>
+                {activeShortExportTask ? (
+                  <BackgroundTaskBanner
+                    task={activeShortExportTask}
+                    onCancel={activeShortExportTask.canCancel ? handleCancelShortExport : undefined}
+                  />
+                ) : null}
                 <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr] 2xl:grid-cols-[320px_1fr] gap-6 items-start">
 
                 <div className="space-y-6">
@@ -3485,6 +3611,7 @@ export function CreatorHub({
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-white/70 space-y-1">
                             <div>Clip: {secondsToClock(editedClip.startSeconds)} → {secondsToClock(editedClip.endSeconds)}</div>
                             <div>Duration: {editedClip.durationSeconds.toFixed(1)}s</div>
+                            <div>Score: {selectedClip?.score ?? "n/a"}</div>
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
                             <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
@@ -3497,6 +3624,37 @@ export function CreatorHub({
                             )}
                           </div>
                         )}
+
+                        {selectedPlan ? (
+                          <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="text-sm font-semibold text-white/90">
+                                {hasAiReferenceMetadata ? "AI suggestion summary" : "Selected short summary"}
+                              </div>
+                              <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">
+                                Always visible
+                              </div>
+                            </div>
+                            <div className="space-y-2 text-sm">
+                              <div>
+                                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">AI Title</div>
+                                <div className="mt-1 text-white/88">{selectedPlan.title}</div>
+                              </div>
+                              <div>
+                                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">AI Caption</div>
+                                <div className="mt-1 whitespace-pre-wrap text-white/78">{selectedPlan.caption || "None"}</div>
+                              </div>
+                              <div>
+                                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">AI Opening Text</div>
+                                <div className="mt-1 text-white/78">{selectedPlan.openingText || "None"}</div>
+                              </div>
+                              <div>
+                                <div className="text-[10px] uppercase tracking-[0.24em] text-white/38">AI End Card</div>
+                                <div className="mt-1 text-white/78">{selectedPlan.endCardText || "None"}</div>
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
                       </div>
 
                       <div className="space-y-4 min-w-0">
@@ -4049,7 +4207,7 @@ export function CreatorHub({
                                 Current source is audio-only. Save config is available, local MP4 export needs a video source.
                               </div>
                             )}
-                            {!canRender && !isExportingShort && (
+                            {!canRender && !isActiveShortExportTask && (
                               <div className="text-xs text-white/50 bg-white/5 border border-white/10 rounded-lg p-2">
                                 {selectedProject && (!selectedTranscript || !selectedSubtitle)
                                   ? "Select a transcript + subtitle source to enable save/export."
@@ -4059,7 +4217,7 @@ export function CreatorHub({
                             <div className="pt-2 flex flex-wrap gap-2">
                               <Button
                                 onClick={handleSaveShortProject}
-                                disabled={!canRender || isExportingShort}
+                                disabled={!canRender || isActiveShortExportTask}
                                 variant="ghost"
                                 className="bg-white/5 hover:bg-white/10 text-white/90"
                               >
@@ -4068,14 +4226,14 @@ export function CreatorHub({
                               </Button>
                               <Button
                                 onClick={handleRenderShort}
-                                disabled={!canExportVideo || isExportingShort}
+                                disabled={!canExportVideo}
                                 className="bg-gradient-to-r from-fuchsia-500 to-cyan-400 text-black font-semibold hover:from-fuchsia-400 hover:to-cyan-300"
                               >
-                                {isExportingShort ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
-                                {isExportingShort
-                                  ? shortExportStage === "handoff" || shortExportStage === "complete"
-                                    ? `Finalizing ${exportProgressPct}%`
-                                    : `Exporting ${exportProgressPct}%`
+                                {isActiveShortExportTask ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
+                                {isActiveShortExportTask
+                                  ? activeShortExportTask?.status === "finalizing"
+                                    ? `Finalizing ${Math.round(activeShortExportTask.progress ?? exportProgressPct)}%`
+                                    : `Exporting ${Math.round(activeShortExportTask?.progress ?? exportProgressPct)}%`
                                   : "Export Short (Local)"}
                               </Button>
                               {canCancelShortExport && (
@@ -4094,7 +4252,7 @@ export function CreatorHub({
                                   variant="ghost"
                                   className="bg-red-500/10 hover:bg-red-500/15 text-red-100 border border-red-500/20"
                                   onClick={() => void handleDeleteShortProject(activeSavedShortProject)}
-                                  disabled={isExportingShort}
+                                  disabled={isActiveShortExportTask}
                                 >
                                   <Trash2 className="w-4 h-4 mr-2" />
                                   {activeSavedShortProject.origin === "ai_suggestion" ? "Delete Loaded Suggestion" : "Delete Loaded Short"}
@@ -4134,19 +4292,17 @@ export function CreatorHub({
                                 Reset Editor
                               </Button>
                             </div>
-                            {isExportingShort && (
+                            {isActiveShortExportTask && (
                               <div className="space-y-2">
                                 <div className="h-2 rounded-full bg-white/10 overflow-hidden">
                                   <div
                                     className="h-full bg-gradient-to-r from-fuchsia-400 to-cyan-300 transition-[width] duration-150"
-                                    style={{ width: `${Math.max(4, exportProgressPct)}%` }}
+                                    style={{ width: `${Math.max(4, Math.round(activeShortExportTask?.progress ?? exportProgressPct))}%` }}
                                   />
                                 </div>
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="text-xs text-white/55">
-                                    {shortExportStage === "handoff" || shortExportStage === "complete"
-                                      ? "Render complete. Saving export file to local library… keep this tab open."
-                                      : "Local ffmpeg.wasm render in progress… keep this tab open."}
+                                    {activeShortExportTask?.message || "Local ffmpeg.wasm render in progress… keep this tab open."}
                                   </div>
                                   {canCancelShortExport ? (
                                     <Button
@@ -4163,13 +4319,7 @@ export function CreatorHub({
                                   )}
                                 </div>
                                 <div className="text-[11px] uppercase tracking-[0.24em] text-white/35">
-                                  {shortExportStage === "preparing"
-                                    ? "Preparing"
-                                    : shortExportStage === "rendering"
-                                      ? "Rendering"
-                                      : shortExportStage === "handoff"
-                                        ? "Finalizing"
-                                        : "Complete"}
+                                  {activeShortExportTask?.status ?? "Running"}
                                 </div>
                               </div>
                             )}

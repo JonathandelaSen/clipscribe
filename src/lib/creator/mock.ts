@@ -1,17 +1,17 @@
 import { makeId, type SubtitleChunk } from "@/lib/history";
 import { EDITOR_PRESETS } from "@/lib/creator/editor-presets";
+import { resolveCreatorSuggestedShort, toCreatorShortPlan, toCreatorViralClip } from "@/lib/creator/shorts-compat";
 import {
   clamp,
   secondsToClock,
   type CreatorChapter,
-  type CreatorShortPlan,
   type CreatorShortRenderRequest,
   type CreatorShortRenderResponse,
   type CreatorShortsGenerateRequest,
   type CreatorShortsGenerateResponse,
+  type CreatorSuggestedShort,
   type CreatorVideoInfoGenerateRequest,
   type CreatorVideoInfoGenerateResponse,
-  type CreatorViralClip,
 } from "@/lib/creator/types";
 
 const STOPWORDS = new Set([
@@ -146,14 +146,14 @@ function scoreWindow(window: SubtitleChunk[], topTerms: string[]): number {
   return score;
 }
 
-function overlap(a: CreatorViralClip, b: CreatorViralClip): boolean {
+function overlap(a: CreatorSuggestedShort, b: CreatorSuggestedShort): boolean {
   return a.startSeconds < b.endSeconds && b.startSeconds < a.endSeconds;
 }
 
-function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: string[]): CreatorViralClip[] {
+function buildSuggestedShorts(chunks: SubtitleChunk[], runtime: number, topTerms: string[]): CreatorSuggestedShort[] {
   if (!chunks.length) return [];
 
-  const candidates: CreatorViralClip[] = [];
+  const candidates: CreatorSuggestedShort[] = [];
   const maxStartIndex = Math.max(0, chunks.length - 2);
 
   for (let i = 0; i <= maxStartIndex; i++) {
@@ -172,23 +172,25 @@ function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: str
           const joined = normalizeText(window.map((c) => String(c.text ?? "")).join(" "));
           const titleSeed = joined.split(/(?<=[.!?])\s+/)[0] ?? joined;
           const hook = titleSeed.slice(0, 120);
-          const punchline = (joined.split(/(?<=[.!?])\s+/)[1] ?? joined.slice(0, 180)).slice(0, 160);
           const score = scoreWindow(window, topTerms);
           const progress = runtime > 0 ? startSeconds / runtime : 0;
           const boostedScore = score + (progress < 0.2 ? 4 : 0) + (progress > 0.2 && progress < 0.8 ? 3 : 0);
+          const keyword = topTerms[(candidates.length + startSeconds) % Math.max(topTerms.length, 1)] ?? "creator";
 
           candidates.push({
-            id: makeId("clip"),
+            id: makeId("short"),
             startSeconds,
             endSeconds,
             durationSeconds: Math.max(1, endSeconds - startSeconds),
             score: Math.round(boostedScore),
-            title: `Clip angle: ${titleSeed.split(" ").slice(0, 8).join(" ")}`,
-            hook,
+            title: `Clip cut: ${titleSeed.split(" ").slice(0, 8).join(" ")}`,
             reason: `High hook density and compact narrative window (${sourceChunkIndexes.length} subtitle chunks).`,
-            punchline,
+            caption: `${hook.slice(0, 90)}${hook.length > 90 ? "…" : ""}\n\n#${keyword.replace(/[^a-z0-9]/gi, "")}`,
+            openingText: hook.slice(0, 60),
+            endCardText: `Want more ${keyword}? Follow for part 2`,
             sourceChunkIndexes,
             suggestedSubtitleLanguage: "en",
+            editorPreset: EDITOR_PRESETS[0],
           });
         }
         break;
@@ -196,7 +198,7 @@ function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: str
     }
   }
 
-  const selected: CreatorViralClip[] = [];
+  const selected: CreatorSuggestedShort[] = [];
   for (const candidate of candidates.sort((a, b) => b.score - a.score || a.startSeconds - b.startSeconds)) {
     if (selected.some((picked) => overlap(picked, candidate))) continue;
     selected.push(candidate);
@@ -208,17 +210,19 @@ function buildViralClips(chunks: SubtitleChunk[], runtime: number, topTerms: str
     const startSeconds = Math.floor(firstChunk.timestamp?.[0] ?? 0);
     const endSeconds = Math.ceil(firstChunk.timestamp?.[1] ?? startSeconds + 20);
     selected.push({
-      id: makeId("clip"),
+      id: makeId("short"),
       startSeconds,
       endSeconds,
       durationSeconds: Math.max(1, endSeconds - startSeconds),
       score: 50,
-      title: "Opening hook clip",
-      hook: normalizeText(String(firstChunk.text ?? "Opening line")),
-      reason: "Fallback clip from the opening chunk.",
-      punchline: normalizeText(String(firstChunk.text ?? "")),
+      title: "Manual-ready opening cut",
+      reason: "Fallback short from the opening chunk.",
+      caption: "#creator",
+      openingText: normalizeText(String(firstChunk.text ?? "Opening line")).slice(0, 60),
+      endCardText: "Follow for more",
       sourceChunkIndexes: [0],
       suggestedSubtitleLanguage: "en",
+      editorPreset: EDITOR_PRESETS[0],
     });
   }
 
@@ -230,26 +234,6 @@ function buildChapterText(chapters: CreatorChapter[]): string {
     .sort((a, b) => a.timeSeconds - b.timeSeconds)
     .map((chapter) => `${secondsToClock(chapter.timeSeconds)} ${chapter.label}`)
     .join("\n");
-}
-
-
-function buildShortPlans(clips: CreatorViralClip[], topTerms: string[]): CreatorShortPlan[] {
-  const plans: CreatorShortPlan[] = [];
-  for (const clip of clips.slice(0, 4)) {
-    for (const preset of EDITOR_PRESETS) {
-      const keyword = topTerms[(plans.length + clip.startSeconds) % Math.max(topTerms.length, 1)] ?? "creator";
-      plans.push({
-        id: makeId("shortplan"),
-        clipId: clip.id,
-        title: `Clip cut: ${clip.title.replace(/^Clip angle:\s*/i, "")}`,
-        caption: `${clip.hook.slice(0, 90)}${clip.hook.length > 90 ? "…" : ""}\n\n#${keyword.replace(/[^a-z0-9]/gi, "")}`,
-        openingText: clip.hook.slice(0, 60),
-        endCardText: `Want more ${keyword}? Follow for part 2`,
-        editorPreset: preset,
-      });
-    }
-  }
-  return plans;
 }
 
 function deduceTheme(topTerms: string[]): string {
@@ -264,8 +248,7 @@ function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVi
   const topTerms = extractTopTerms(transcriptText, 12);
   const chapters = buildChapters(chunks, runtimeSeconds, topTerms);
   const chapterText = buildChapterText(chapters);
-  const viralClips = buildViralClips(chunks, runtimeSeconds, topTerms);
-  const shortsPlans = buildShortPlans(viralClips, topTerms);
+  const shorts = buildSuggestedShorts(chunks, runtimeSeconds, topTerms);
   const wordCount = transcriptText.split(/\s+/).filter(Boolean).length;
   const speakingRate = runtimeSeconds > 0 ? Math.round((wordCount / runtimeSeconds) * 60) : 0;
 
@@ -344,8 +327,7 @@ function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVi
       ],
     },
     chapters,
-    viralClips,
-    shortsPlans,
+    shorts,
   };
 }
 
@@ -357,8 +339,9 @@ export function generateMockCreatorShorts(request: CreatorShortsGenerateRequest)
     model: "mock-chatgpt-creator-v1",
     generatedAt: Date.now(),
     runtimeSeconds: mock.runtimeSeconds,
-    viralClips: mock.viralClips,
-    shortsPlans: mock.shortsPlans,
+    shorts: mock.shorts,
+    viralClips: mock.shorts.map(toCreatorViralClip),
+    shortsPlans: mock.shorts.map(toCreatorShortPlan),
     editorPresets: EDITOR_PRESETS,
   };
 }
@@ -384,9 +367,12 @@ export function generateMockCreatorVideoInfo(request: CreatorVideoInfoGenerateRe
 }
 
 export function generateMockShortRender(request: CreatorShortRenderRequest): CreatorShortRenderResponse {
-  const clip = request.clip;
-  const plan = request.plan;
-  const outputFilename = `${request.filename.replace(/\.[^/.]+$/, "")}__${clip.startSeconds}-${clip.endSeconds}.mp4`;
+  const short = resolveCreatorSuggestedShort({
+    short: request.short,
+    clip: request.clip,
+    plan: request.plan,
+  });
+  const outputFilename = `${request.filename.replace(/\.[^/.]+$/, "")}__${short.startSeconds}-${short.endSeconds}.mp4`;
 
   const subtitleText = (request.subtitleChunks ?? [])
     .map((chunk) => String(chunk.text ?? ""))
@@ -398,9 +384,9 @@ export function generateMockShortRender(request: CreatorShortRenderRequest): Cre
     "-i",
     request.filename,
     "-ss",
-    String(clip.startSeconds),
+    String(short.startSeconds),
     "-to",
-    String(clip.endSeconds),
+    String(short.endSeconds),
     "-vf",
     `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,subtitles=mock.ass`,
     "-c:v",
@@ -427,7 +413,7 @@ export function generateMockShortRender(request: CreatorShortRenderRequest): Cre
       ffmpegCommandPreview,
       notes: [
         "Mock render response (no real video file generated yet).",
-        `Clip duration ${clip.durationSeconds}s, subtitle style ${plan.editorPreset.subtitleStyle}.`,
+        `Clip duration ${short.durationSeconds}s, subtitle style ${short.editorPreset.subtitleStyle}.`,
         subtitleText ? `Subtitle preview text: ${subtitleText}${subtitleText.length >= 80 ? "…" : ""}` : "No subtitle chunks provided.",
       ],
     },

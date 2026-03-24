@@ -12,17 +12,11 @@ export interface ManualFallbackClip extends ClipTimingLike {
   hook: string;
   reason: string;
   punchline: string;
-  sourceChunkIndexes: number[];
-  suggestedSubtitleLanguage: string;
-}
-
-export interface ManualFallbackPlan {
-  id: string;
-  clipId: string;
-  title: string;
   caption: string;
   openingText: string;
   endCardText: string;
+  sourceChunkIndexes: number[];
+  suggestedSubtitleLanguage: string;
   editorPreset: {
     aspectRatio: "9:16";
     resolution: "1080x1920";
@@ -46,10 +40,10 @@ function round2(value: number): number {
   return Number(value.toFixed(2));
 }
 
-export function createManualFallbackClip(options: {
+export function createManualFallbackShort(options: {
   sourceDurationSeconds?: number;
   subtitleLanguage?: string;
-}): ManualFallbackClip {
+} = {}): ManualFallbackClip {
   const maxDuration =
     typeof options.sourceDurationSeconds === "number" && Number.isFinite(options.sourceDurationSeconds)
       ? Math.max(1, round2(options.sourceDurationSeconds))
@@ -62,23 +56,15 @@ export function createManualFallbackClip(options: {
     endSeconds,
     durationSeconds: round2(endSeconds),
     score: 0,
-    title: "Manual Clip (No Clip Lab)",
-    hook: "Edit this source manually without generating clip suggestions first.",
-    reason: "Fallback clip created so the editor can be used immediately.",
-    punchline: "Manual short edit",
-    sourceChunkIndexes: [],
-    suggestedSubtitleLanguage: options.subtitleLanguage || "en",
-  };
-}
-
-export function createManualFallbackPlan(clipId: string): ManualFallbackPlan {
-  return {
-    id: "manual_plan_fallback",
-    clipId,
     title: "Manual Edit Preset",
+    hook: "Edit this source manually without generating clip suggestions first.",
+    reason: "Fallback short created so the editor can be used immediately.",
+    punchline: "Manual short edit",
     caption: "",
     openingText: "Manual short cut",
     endCardText: "Follow for more",
+    sourceChunkIndexes: [],
+    suggestedSubtitleLanguage: options.subtitleLanguage || "en",
     editorPreset: {
       aspectRatio: "9:16",
       resolution: "1080x1920",
@@ -87,6 +73,26 @@ export function createManualFallbackPlan(clipId: string): ManualFallbackPlan {
       safeBottomPct: 14,
       targetDurationRange: [15, 60],
     },
+  };
+}
+
+export function createManualFallbackClip(options: {
+  sourceDurationSeconds?: number;
+  subtitleLanguage?: string;
+}): ManualFallbackClip {
+  return createManualFallbackShort(options);
+}
+
+export function createManualFallbackPlan(clipId: string) {
+  const short = createManualFallbackShort();
+  return {
+    id: short.id,
+    clipId,
+    title: short.title,
+    caption: short.caption,
+    openingText: short.openingText,
+    endCardText: short.endCardText,
+    editorPreset: short.editorPreset,
   };
 }
 

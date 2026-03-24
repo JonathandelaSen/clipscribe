@@ -24,8 +24,7 @@ export async function POST(request: Request) {
 
   if (!isRecord(body)) return badRequest("Request body must be an object");
   if (typeof body.filename !== "string" || !body.filename.trim()) return badRequest("filename is required");
-  if (!isRecord(body.clip)) return badRequest("clip is required");
-  if (!isRecord(body.plan)) return badRequest("plan is required");
+  if (!isRecord(body.short)) return badRequest("short is required");
   if (!isRecord(body.editor)) return badRequest("editor is required");
 
   const payload = body as unknown as CreatorShortRenderRequest;

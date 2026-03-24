@@ -1,10 +1,11 @@
 import type {
-  CreatorShortRenderResponse,
   CreatorShortPlan,
+  CreatorShortRenderResponse,
+  CreatorSuggestedShort,
   CreatorShortsGenerateRequest,
   CreatorShortsGenerateResponse,
-  CreatorViralClip,
   CreatorShortEditorState,
+  CreatorViralClip,
 } from "@/lib/creator/types";
 import type {
   CreatorAISuggestionInputSummary,
@@ -12,23 +13,46 @@ import type {
   CreatorShortProjectOrigin,
   CreatorShortProjectRecord,
 } from "@/lib/creator/storage";
+import { resolveCreatorSuggestedShort, toCreatorShortPlan, toCreatorViralClip } from "../shorts-compat";
 import { hydrateCreatorShortEditorState } from "./text-overlays";
 
+function normalizeShortArgs(
+  shortOrPlan: CreatorSuggestedShort | CreatorShortPlan,
+  clipOrSecondsToClock: CreatorViralClip | ((seconds: number) => string),
+  maybeSecondsToClock?: (seconds: number) => string
+): { short: CreatorSuggestedShort; secondsToClock: (seconds: number) => string } {
+  if (typeof clipOrSecondsToClock === "function") {
+    return {
+      short: shortOrPlan as CreatorSuggestedShort,
+      secondsToClock: clipOrSecondsToClock,
+    };
+  }
+
+  return {
+    short: resolveCreatorSuggestedShort({
+      clip: clipOrSecondsToClock,
+      plan: shortOrPlan as CreatorShortPlan,
+    }),
+    secondsToClock: maybeSecondsToClock as (seconds: number) => string,
+  };
+}
 
 export function deriveDefaultShortProjectName(
-  plan: CreatorShortPlan,
-  clip: CreatorViralClip,
-  secondsToClock: (seconds: number) => string
+  shortOrPlan: CreatorSuggestedShort | CreatorShortPlan,
+  clipOrSecondsToClock: CreatorViralClip | ((seconds: number) => string),
+  maybeSecondsToClock?: (seconds: number) => string
 ): string {
-  return `Short Cut • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
+  const { short, secondsToClock } = normalizeShortArgs(shortOrPlan, clipOrSecondsToClock, maybeSecondsToClock);
+  return `Short Cut • ${secondsToClock(short.startSeconds)}-${secondsToClock(short.endSeconds)}`;
 }
 
 export function deriveDefaultAiSuggestionName(
-  plan: CreatorShortPlan,
-  clip: CreatorViralClip,
-  secondsToClock: (seconds: number) => string
+  shortOrPlan: CreatorSuggestedShort | CreatorShortPlan,
+  clipOrSecondsToClock: CreatorViralClip | ((seconds: number) => string),
+  maybeSecondsToClock?: (seconds: number) => string
 ): string {
-  return `AI Suggestion • ${secondsToClock(clip.startSeconds)}-${secondsToClock(clip.endSeconds)}`;
+  const { short, secondsToClock } = normalizeShortArgs(shortOrPlan, clipOrSecondsToClock, maybeSecondsToClock);
+  return `AI Suggestion • ${secondsToClock(short.startSeconds)}-${secondsToClock(short.endSeconds)}`;
 }
 
 export function findExistingShortProjectRecord(
@@ -40,8 +64,7 @@ export function findExistingShortProjectRecord(
     projectId: string;
     transcriptId: string;
     subtitleId: string;
-    clipId: string;
-    planId: string;
+    shortId: string;
   }
 ): CreatorShortProjectRecord | undefined {
   if (options.explicitId) {
@@ -56,8 +79,7 @@ export function findExistingShortProjectRecord(
       record.projectId === options.projectId &&
       record.transcriptId === options.transcriptId &&
       record.subtitleId === options.subtitleId &&
-      record.clipId === options.clipId &&
-      record.planId === options.planId
+      record.shortId === options.shortId
   );
 }
 
@@ -70,8 +92,9 @@ export function buildShortProjectRecord(input: {
   sourceFilename: string;
   transcriptId: string;
   subtitleId: string;
-  clip: CreatorViralClip;
-  plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
+  clip?: CreatorViralClip;
+  plan?: CreatorShortPlan;
   editor: CreatorShortEditorState;
   savedRecords: CreatorShortProjectRecord[];
   explicitId?: string;
@@ -85,6 +108,13 @@ export function buildShortProjectRecord(input: {
   suggestionInputSummary?: CreatorAISuggestionInputSummary;
   secondsToClock: (seconds: number) => string;
 }): CreatorShortProjectRecord {
+  const short = resolveCreatorSuggestedShort({
+    short: input.short,
+    clip: input.clip,
+    plan: input.plan,
+  });
+  const clip = toCreatorViralClip(short);
+  const plan = toCreatorShortPlan(short);
   const origin = input.origin ?? "manual";
   const existing = findExistingShortProjectRecord(input.savedRecords, {
     explicitId: input.explicitId,
@@ -93,13 +123,12 @@ export function buildShortProjectRecord(input: {
     projectId: input.projectId,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
-    clipId: input.clip.id,
-    planId: input.plan.id,
+    shortId: short.id,
   });
   const hydratedEditor = hydrateCreatorShortEditorState(input.editor, {
     origin,
-    plan: input.plan,
-    clipDurationSeconds: input.clip.durationSeconds,
+    short,
+    clipDurationSeconds: short.durationSeconds,
   });
 
   return {
@@ -109,16 +138,18 @@ export function buildShortProjectRecord(input: {
     sourceFilename: input.sourceFilename,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
-    clipId: input.clip.id,
-    planId: input.plan.id,
+    clipId: clip.id,
+    planId: plan.id,
+    shortId: short.id,
     name:
       (input.explicitName || "").trim() ||
       existing?.name ||
       (origin === "ai_suggestion"
-        ? deriveDefaultAiSuggestionName(input.plan, input.clip, input.secondsToClock)
-        : deriveDefaultShortProjectName(input.plan, input.clip, input.secondsToClock)),
-    clip: input.clip,
-    plan: input.plan,
+        ? deriveDefaultAiSuggestionName(short, input.secondsToClock)
+        : deriveDefaultShortProjectName(short, input.secondsToClock)),
+    clip,
+    plan,
+    short,
     editor: hydratedEditor,
     createdAt: existing?.createdAt ?? input.now,
     updatedAt: input.now,
@@ -201,36 +232,36 @@ export function buildAiSuggestionProjectRecords(input: {
   newId: () => string;
   secondsToClock: (seconds: number) => string;
 }): CreatorShortProjectRecord[] {
-  const clipsById = new Map(input.analysis.viralClips.map((clip) => [clip.id, clip]));
+  const normalizedShorts =
+    input.analysis.shorts ??
+    input.analysis.viralClips.flatMap((clip, index) => {
+      const plan = input.analysis.shortsPlans[index];
+      if (!plan) return [];
+      return [resolveCreatorSuggestedShort({ clip, plan })];
+    });
 
-  return input.analysis.shortsPlans.flatMap((plan) => {
-    const clip = clipsById.get(plan.clipId);
-    if (!clip) return [];
-
-    return [
-      buildShortProjectRecord({
-        status: "draft",
-        now: input.now,
-        newId: input.newId(),
-        projectId: input.projectId,
-        sourceAssetId: input.sourceAssetId,
-        sourceFilename: input.sourceFilename,
-        transcriptId: input.transcriptId,
-        subtitleId: input.subtitleId,
-        clip,
-        plan,
-        editor: input.editor,
-        savedRecords: input.savedRecords,
-        explicitName: deriveDefaultAiSuggestionName(plan, clip, input.secondsToClock),
-        origin: "ai_suggestion",
-        suggestionGenerationId: input.generationId,
-        suggestionGeneratedAt: input.now,
-        suggestionSourceSignature: input.sourceSignature,
-        suggestionInputSummary: input.inputSummary,
-        secondsToClock: input.secondsToClock,
-      }),
-    ];
-  });
+  return normalizedShorts.map((short) =>
+    buildShortProjectRecord({
+      status: "draft",
+      now: input.now,
+      newId: input.newId(),
+      projectId: input.projectId,
+      sourceAssetId: input.sourceAssetId,
+      sourceFilename: input.sourceFilename,
+      transcriptId: input.transcriptId,
+      subtitleId: input.subtitleId,
+      short,
+      editor: input.editor,
+      savedRecords: input.savedRecords,
+      explicitName: deriveDefaultAiSuggestionName(short, input.secondsToClock),
+      origin: "ai_suggestion",
+      suggestionGenerationId: input.generationId,
+      suggestionGeneratedAt: input.now,
+      suggestionSourceSignature: input.sourceSignature,
+      suggestionInputSummary: input.inputSummary,
+      secondsToClock: input.secondsToClock,
+    })
+  );
 }
 
 export function markShortProjectExported(
@@ -282,8 +313,7 @@ export function buildCompletedShortExportRecord(input: {
   sourceAssetId?: string;
   outputAssetId?: string;
   sourceFilename: string;
-  plan: CreatorShortPlan;
-  clip: CreatorViralClip;
+  short?: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   createdAt: number;
   filename: string;
@@ -292,7 +322,14 @@ export function buildCompletedShortExportRecord(input: {
   fileBlob?: Blob;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  clip?: CreatorViralClip;
+  plan?: CreatorShortPlan;
 }): CreatorShortExportRecord {
+  const short = resolveCreatorSuggestedShort({
+    short: input.short,
+    clip: input.clip,
+    plan: input.plan,
+  });
   return {
     id: input.id,
     shortProjectId: input.shortProjectId,
@@ -308,8 +345,9 @@ export function buildCompletedShortExportRecord(input: {
     fileBlob: input.fileBlob,
     debugFfmpegCommand: input.debugFfmpegCommand,
     debugNotes: input.debugNotes,
-    clip: input.clip,
-    plan: input.plan,
+    clip: toCreatorViralClip(short),
+    plan: toCreatorShortPlan(short),
+    short,
     editor: input.editor,
   };
 }
@@ -317,7 +355,9 @@ export function buildCompletedShortExportRecord(input: {
 export function buildLocalBrowserRenderResponse(input: {
   jobId: string;
   createdAt: number;
-  plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
+  clip?: CreatorViralClip;
+  plan?: CreatorShortPlan;
   filename: string;
   subtitleBurnedIn: boolean;
   ffmpegCommandPreview: string[];

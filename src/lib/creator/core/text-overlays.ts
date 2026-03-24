@@ -1,6 +1,7 @@
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
+  CreatorSuggestedShort,
   CreatorTextOverlayPreset,
   CreatorTextOverlayState,
 } from "@/lib/creator/types";
@@ -10,6 +11,7 @@ export type CreatorTextOverlaySlot = "intro" | "outro";
 
 interface HydrateTextOverlayOptions {
   origin?: CreatorShortProjectOrigin;
+  short?: CreatorSuggestedShort;
   plan?: CreatorShortPlan;
   clipDurationSeconds?: number;
 }
@@ -52,10 +54,13 @@ export function getCreatorTextOverlayFontSize(
 function getDefaultOverlayText(
   slot: CreatorTextOverlaySlot,
   origin: CreatorShortProjectOrigin,
+  short?: CreatorSuggestedShort,
   plan?: CreatorShortPlan
 ): string {
-  if (origin !== "ai_suggestion" || !plan) return "";
-  return slot === "intro" ? plan.title : plan.endCardText;
+  if (origin !== "ai_suggestion") return "";
+  const introText = short?.openingText ?? plan?.openingText ?? "";
+  const outroText = short?.endCardText ?? plan?.endCardText ?? "";
+  return slot === "intro" ? introText : outroText;
 }
 
 export function getDefaultCreatorTextOverlayState(
@@ -69,7 +74,7 @@ export function getDefaultCreatorTextOverlayState(
   if (slot === "intro") {
     return {
       enabled: defaultEnabled,
-      text: getDefaultOverlayText(slot, origin, options.plan),
+      text: getDefaultOverlayText(slot, origin, options.short, options.plan),
       startOffsetSeconds: 0,
       durationSeconds: round2(Math.min(3.2, clipDurationSeconds)),
       positionXPercent: 50,
@@ -84,7 +89,7 @@ export function getDefaultCreatorTextOverlayState(
 
   return {
     enabled: defaultEnabled,
-    text: getDefaultOverlayText(slot, origin, options.plan),
+    text: getDefaultOverlayText(slot, origin, options.short, options.plan),
     startOffsetSeconds: round2(Math.max(0, clipDurationSeconds - 2.6)),
     durationSeconds: round2(Math.min(2.6, clipDurationSeconds)),
     positionXPercent: 50,

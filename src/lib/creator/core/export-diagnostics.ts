@@ -1,10 +1,10 @@
-import type { CreatorShortPlan, CreatorViralClip } from "@/lib/creator/types";
+import type { CreatorSuggestedShort, CreatorViralClip } from "@/lib/creator/types";
 
 export type ShortExportDiagnosticsContext = {
   sourceFilename: string;
 
-  requestedClip: CreatorViralClip;
-  exportClip: CreatorViralClip;
+  requestedClip: CreatorSuggestedShort | CreatorViralClip;
+  exportClip: CreatorSuggestedShort | CreatorViralClip;
   sourceMeta?: { width: number; height: number; durationSeconds?: number } | null;
   selectedSubtitleChunkCount: number;
   exportSubtitleChunkCount: number;

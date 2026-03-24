@@ -1,11 +1,13 @@
-import type { CreatorViralClip } from "@/lib/creator/types";
+import type { CreatorSuggestedShort, CreatorViralClip } from "@/lib/creator/types";
 import type { SubtitleChunk } from "@/lib/history";
+
+type ClipWindowLike = CreatorSuggestedShort | CreatorViralClip;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-export function clipSubtitleChunks(clip: CreatorViralClip, chunks: SubtitleChunk[]): SubtitleChunk[] {
+export function clipSubtitleChunks(clip: ClipWindowLike, chunks: SubtitleChunk[]): SubtitleChunk[] {
   return chunks.filter((chunk) => {
     const start = chunk.timestamp?.[0] ?? 0;
     const end = chunk.timestamp?.[1] ?? start;
@@ -26,7 +28,10 @@ export function findSubtitleChunkAtTime(chunks: SubtitleChunk[], timeSeconds: nu
   });
 }
 
-export function clampClipToMediaDuration(clip: CreatorViralClip, mediaDurationSeconds: number): CreatorViralClip {
+export function clampClipToMediaDuration(
+  clip: ClipWindowLike,
+  mediaDurationSeconds: number
+): typeof clip {
   const safeDuration = Number.isFinite(mediaDurationSeconds) ? mediaDurationSeconds : 0;
   if (safeDuration <= 0) return clip;
 
@@ -53,5 +58,5 @@ export function clampClipToMediaDuration(clip: CreatorViralClip, mediaDurationSe
     startSeconds: Number(start.toFixed(3)),
     endSeconds: Number(end.toFixed(3)),
     durationSeconds: Number(duration.toFixed(3)),
-  };
+  } as typeof clip;
 }

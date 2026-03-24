@@ -1,4 +1,5 @@
 import type { AudioTranscriberDB } from "@/lib/db";
+import { toCreatorShortPlan, toCreatorViralClip } from "@/lib/creator/shorts-compat";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import {
   sortCreatorShortExports,
@@ -34,8 +35,9 @@ function toCreatorShortExportRecord(record: ProjectExportRecord): CreatorShortEx
     fileBlob: undefined,
     debugFfmpegCommand: record.debugFfmpegCommand,
     debugNotes: record.debugNotes,
-    clip: record.clip!,
-    plan: record.plan!,
+    clip: record.clip ?? toCreatorViralClip(record.short!),
+    plan: record.plan ?? toCreatorShortPlan(record.short!),
+    short: record.short!,
     editor: record.editor!,
     error: record.error,
   };
@@ -52,7 +54,7 @@ export function createDexieCreatorShortsRepository(database?: AudioTranscriberDB
     async listExports(projectId?: string) {
       const records = await projectRepository.listProjectExports(projectId);
       const shortExports = records
-          .filter((record) => record.kind === "short" && record.shortProjectId && record.clip && record.plan && record.editor)
+          .filter((record) => record.kind === "short" && record.shortProjectId && record.short && record.editor)
           .map((record) => toCreatorShortExportRecord(record));
       const hydrated = await Promise.all(
         shortExports.map(async (record) => {
@@ -90,6 +92,7 @@ export function createDexieCreatorShortsRepository(database?: AudioTranscriberDB
         debugNotes: record.debugNotes,
         clip: record.clip,
         plan: record.plan,
+        short: record.short,
         editor: record.editor,
         sourceFilename: record.sourceFilename,
       } as ProjectExportRecord & { sourceFilename?: string });

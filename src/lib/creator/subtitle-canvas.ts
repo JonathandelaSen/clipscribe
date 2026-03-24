@@ -21,9 +21,8 @@ import {
 } from "@/lib/creator/subtitle-style";
 import type {
   CreatorShortEditorState,
-  CreatorShortPlan,
   CreatorSubtitleStyleSettings,
-  CreatorViralClip,
+  CreatorSuggestedShort,
 } from "@/lib/creator/types";
 import type { SubtitleChunk } from "@/lib/history";
 
@@ -186,8 +185,7 @@ function renderChunk(
 
 export async function renderSubtitlesToPngs(
   subtitleChunks: SubtitleChunk[],
-  clip: CreatorViralClip,
-  plan: CreatorShortPlan,
+  short: CreatorSuggestedShort,
   editor: CreatorShortEditorState,
   timeOffsetSeconds: number,
   signal?: AbortSignal
@@ -201,7 +199,7 @@ export async function renderSubtitlesToPngs(
     console.warn("subtitle-canvas: Inter font failed to load — PNGs will use fallback font");
   }
 
-  const style = resolveCreatorSubtitleStyle(plan.editorPreset.subtitleStyle, editor.subtitleStyle);
+  const style = resolveCreatorSubtitleStyle(short.editorPreset.subtitleStyle, editor.subtitleStyle);
   const fontSize = Math.round(Math.min(96, Math.max(36, 56 * editor.subtitleScale)));
   const maxCharsPerLine = getSubtitleMaxCharsPerLine(
     fontSize,
@@ -220,12 +218,12 @@ export async function renderSubtitlesToPngs(
     const endAbs   = chunk.timestamp?.[1];
     if (startAbs == null) continue;
 
-    const start = Math.max(0, startAbs - clip.startSeconds);
+    const start = Math.max(0, startAbs - short.startSeconds);
     const end   = endAbs != null
-      ? Math.min(Math.max(0, endAbs - clip.startSeconds), clip.durationSeconds)
-      : Math.min(start + 2.5, clip.durationSeconds);
+      ? Math.min(Math.max(0, endAbs - short.startSeconds), short.durationSeconds)
+      : Math.min(start + 2.5, short.durationSeconds);
 
-    if (end <= start || start > clip.durationSeconds + 0.25) continue;
+    if (end <= start || start > short.durationSeconds + 0.25) continue;
 
     const text = String(chunk.text ?? "").replace(/\s+/g, " ").trim();
     if (!text) continue;

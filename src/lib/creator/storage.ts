@@ -2,6 +2,7 @@ import type {
   CreatorShortEditorState,
   CreatorShortPlan,
   CreatorViralClip,
+  CreatorSuggestedShort,
 } from "@/lib/creator/types";
 
 export type CreatorShortProjectStatus = "draft" | "exporting" | "exported" | "error";
@@ -28,9 +29,11 @@ export interface CreatorShortProjectRecord {
   subtitleId: string;
   clipId: string;
   planId: string;
+  shortId?: string;
   name: string;
   clip: CreatorViralClip;
   plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   createdAt: number;
   updatedAt: number;
@@ -61,6 +64,7 @@ export interface CreatorShortExportRecord {
   debugNotes?: string[];
   clip: CreatorViralClip;
   plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   error?: string;
 }

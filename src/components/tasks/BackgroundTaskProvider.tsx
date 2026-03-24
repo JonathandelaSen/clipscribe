@@ -67,6 +67,7 @@ type BackgroundTasksContextValue = {
   startTranscription: (options: StartTranscriptionOptions) => string;
   startTimelineExport: (options: StartEditorTaskOptions) => string;
   startTimelineBake: (options: StartEditorTaskOptions) => string;
+  startShortExport: (options: StartEditorTaskOptions) => string;
   cancelTask: (taskId: string) => void;
   dismissTask: (taskId: string) => void;
   getTaskForResource: (scope: BackgroundTaskScope & { kind?: BackgroundTaskKind }) => BackgroundTaskRecord | undefined;
@@ -210,7 +211,12 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
           taskId,
           now: Date.now(),
           patch: {
-            message: options.kind === "transcription" ? "Transcript ready" : "Task complete",
+            message:
+              options.kind === "transcription"
+                ? "Transcript ready"
+                : options.kind === "short-export"
+                  ? "Short export ready"
+                  : "Task complete",
           },
         });
       })
@@ -294,6 +300,20 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
     [startManagedTask]
   );
 
+  const startShortExport = useCallback(
+    (options: StartEditorTaskOptions) =>
+      startManagedTask({
+        kind: "short-export",
+        title: options.title,
+        message: options.message,
+        scope: {
+          projectId: options.projectId,
+        },
+        run: options.run,
+      }),
+    [startManagedTask]
+  );
+
   const activeTasks = useMemo(() => tasks.filter(isBackgroundTaskActive), [tasks]);
 
   const getTaskForResource = useCallback(
@@ -310,6 +330,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
       startTranscription,
       startTimelineExport,
       startTimelineBake,
+      startShortExport,
       cancelTask,
       dismissTask,
       getTaskForResource,
@@ -321,6 +342,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
       startTranscription,
       startTimelineExport,
       startTimelineBake,
+      startShortExport,
       cancelTask,
       dismissTask,
       getTaskForResource,

@@ -1,5 +1,6 @@
 import { db, type AudioTranscriberDB } from "@/lib/db";
 import { hydrateCreatorShortEditorState } from "@/lib/creator/core/text-overlays";
+import type { CreatorSuggestedShort } from "@/lib/creator/types";
 import { normalizeHistoryItem, sortHistoryItems, type HistoryItem } from "@/lib/history";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
 import type {
@@ -67,6 +68,70 @@ export function toHistoryItem(
   };
 }
 
+type LegacyShortProjectRecord = CreatorShortProjectRecord & {
+  clip?: {
+    id: string;
+    startSeconds: number;
+    endSeconds: number;
+    durationSeconds: number;
+    score: number;
+    title?: string;
+    hook?: string;
+    reason: string;
+    sourceChunkIndexes: number[];
+    suggestedSubtitleLanguage: string;
+  };
+  plan?: {
+    id: string;
+    title: string;
+    caption: string;
+    openingText?: string;
+    endCardText: string;
+    editorPreset: CreatorSuggestedShort["editorPreset"];
+  };
+  clipId?: string;
+  planId?: string;
+  short?: CreatorSuggestedShort;
+  shortId?: string;
+};
+
+function mergeLegacyShort(record: LegacyShortProjectRecord): CreatorSuggestedShort | undefined {
+  if (record.short) return record.short;
+  if (!record.clip || !record.plan) return undefined;
+
+  return {
+    id: record.shortId || record.planId || record.clipId || record.clip.id,
+    startSeconds: record.clip.startSeconds,
+    endSeconds: record.clip.endSeconds,
+    durationSeconds: record.clip.durationSeconds,
+    score: record.clip.score,
+    title: record.plan.title || record.clip.title || "AI Short",
+    reason: record.clip.reason,
+    caption: record.plan.caption,
+    openingText: record.plan.openingText || record.clip.hook || record.plan.title,
+    endCardText: record.plan.endCardText,
+    sourceChunkIndexes: record.clip.sourceChunkIndexes,
+    suggestedSubtitleLanguage: record.clip.suggestedSubtitleLanguage,
+    editorPreset: record.plan.editorPreset,
+  };
+}
+
+function hydrateShortProjectRecord(record: LegacyShortProjectRecord): CreatorShortProjectRecord {
+  const short = mergeLegacyShort(record);
+  const shortId = record.shortId || short?.id || record.clipId || record.planId || record.id;
+
+  return {
+    ...record,
+    shortId,
+    short: short!,
+    editor: hydrateCreatorShortEditorState(record.editor, {
+      origin: record.origin,
+      short,
+      clipDurationSeconds: short?.durationSeconds,
+    }),
+  };
+}
+
 export function createDexieProjectRepository(database: AudioTranscriberDB = db): ProjectRepository {
   return {
     async listProjects() {
@@ -125,14 +190,7 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
         ? await database.projectShorts.where("projectId").equals(projectId).toArray()
         : await database.projectShorts.toArray();
       return [...records]
-        .map((record) => ({
-          ...record,
-          editor: hydrateCreatorShortEditorState(record.editor, {
-            origin: record.origin,
-            plan: record.plan,
-            clipDurationSeconds: record.clip?.durationSeconds,
-          }),
-        }))
+        .map((record) => hydrateShortProjectRecord(record as LegacyShortProjectRecord))
         .sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
     },
 
@@ -141,8 +199,8 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
         ...record,
         editor: hydrateCreatorShortEditorState(record.editor, {
           origin: record.origin,
-          plan: record.plan,
-          clipDurationSeconds: record.clip?.durationSeconds,
+          short: record.short,
+          clipDurationSeconds: record.short?.durationSeconds,
         }),
       });
     },

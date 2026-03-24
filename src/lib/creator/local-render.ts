@@ -11,11 +11,13 @@ import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
 import {
   resolveCreatorSubtitleStyle,
 } from "@/lib/creator/subtitle-style";
+import { resolveCreatorSuggestedShort } from "@/lib/creator/shorts-compat";
 import { renderSubtitlesToPngs } from "@/lib/creator/subtitle-canvas";
 import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
+  CreatorSuggestedShort,
   CreatorViralClip,
 } from "@/lib/creator/types";
 import type { SubtitleChunk } from "@/lib/history";
@@ -65,8 +67,9 @@ function parseFfmpegLogProgressSeconds(message: string): number | null {
 export interface LocalShortExportInput {
   sourceFile: File;
   sourceFilename: string;
-  clip: CreatorViralClip;
-  plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
+  clip?: CreatorViralClip;
+  plan?: CreatorShortPlan;
   subtitleChunks: SubtitleChunk[];
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
@@ -84,13 +87,18 @@ export interface LocalShortExportResult {
 }
 
 export async function exportShortVideoLocally(input: LocalShortExportInput): Promise<LocalShortExportResult> {
+  const short = resolveCreatorSuggestedShort({
+    short: input.short,
+    clip: input.clip,
+    plan: input.plan,
+  });
   setBrowserRenderStage(input.renderLifecycle, "preparing");
   const ff = await getFFmpeg();
   throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   const mountDir = `/render_${Date.now()}`;
   const outputFilename = sanitizeFilename(
-    `${input.sourceFilename.replace(/\.[^/.]+$/, "")}__${Math.floor(input.clip.startSeconds)}-${Math.ceil(
-      input.clip.endSeconds
+    `${input.sourceFilename.replace(/\.[^/.]+$/, "")}__${Math.floor(short.startSeconds)}-${Math.ceil(
+      short.endSeconds
     )}.mp4`
   );
   const outputPath = `out_${Date.now()}.mp4`;
@@ -115,9 +123,9 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     { contextLabel: "local-export" }
   );
 
-  const clipDuration = Math.max(0.5, input.clip.endSeconds - input.clip.startSeconds);
-  const inputSeekSeconds = Math.max(0, input.clip.startSeconds - FAST_SEEK_CUSHION_SECONDS);
-  const exactTrimAfterSeekSeconds = Math.max(0, input.clip.startSeconds - inputSeekSeconds);
+  const clipDuration = Math.max(0.5, short.endSeconds - short.startSeconds);
+  const inputSeekSeconds = Math.max(0, short.startSeconds - FAST_SEEK_CUSHION_SECONDS);
+  const exactTrimAfterSeekSeconds = Math.max(0, short.startSeconds - inputSeekSeconds);
 
 
   let lastProgressPct = 0;
@@ -226,7 +234,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     extraInputPaths: string[] = []
   ): string[] => {
     const preInputSeek = seekMode === "hybrid" ? ["-ss", String(inputSeekSeconds)] : [];
-    const postInputSeekSeconds = seekMode === "hybrid" ? exactTrimAfterSeekSeconds : input.clip.startSeconds;
+    const postInputSeekSeconds = seekMode === "hybrid" ? exactTrimAfterSeekSeconds : short.startSeconds;
     // Extra PNG overlay inputs: each needs -loop 1 -i <path>
     const extraInputArgs = extraInputPaths.flatMap((p) => ["-loop", "1", "-i", p]);
     // When we have overlay inputs, we must use -filter_complex instead of -vf
@@ -305,7 +313,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
         maxWidthPct: 78,
       },
       slot: "intro",
-      clipDurationSeconds: input.clip.durationSeconds,
+      clipDurationSeconds: short.durationSeconds,
       timeOffsetSeconds: exactTrimAfterSeekSeconds,
       signal: input.renderLifecycle?.signal,
     });
@@ -321,14 +329,13 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
         maxWidthPct: 72,
       },
       slot: "outro",
-      clipDurationSeconds: input.clip.durationSeconds,
+      clipDurationSeconds: short.durationSeconds,
       timeOffsetSeconds: exactTrimAfterSeekSeconds,
       signal: input.renderLifecycle?.signal,
     });
     const subtitleFrames = await renderSubtitlesToPngs(
       input.subtitleChunks ?? [],
-      input.clip,
-      input.plan,
+      short,
       input.editor,
       exactTrimAfterSeekSeconds,
       input.renderLifecycle?.signal
@@ -425,7 +432,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             "-i",
             input.sourceFilename,
             "-ss",
-            String(input.clip.startSeconds),
+            String(short.startSeconds),
             "-t",
             String(clipDuration),
             usedVisualOverlayBurnIn ? "-filter_complex" : "-vf",
@@ -443,7 +450,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             outputFilename,
           ];
 
-    const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(input.plan.editorPreset.subtitleStyle, input.editor.subtitleStyle);
+    const effectiveSubtitleStyle = resolveCreatorSubtitleStyle(short.editorPreset.subtitleStyle, input.editor.subtitleStyle);
 
     const notes = [
       `Local browser render via ffmpeg.wasm`,
@@ -452,7 +459,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
         ? inputSeekSeconds > 0
           ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
           : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
-        : `Fallback exact-seek mode used from ${input.clip.startSeconds.toFixed(2)}s for container compatibility.`,
+        : `Fallback exact-seek mode used from ${short.startSeconds.toFixed(2)}s for container compatibility.`,
       preview.canvasWidth !== preview.scaledWidth || preview.canvasHeight !== preview.scaledHeight
         ? `Zoom-out/pad mode. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, padded canvas ${preview.canvasWidth}x${preview.canvasHeight} @ (${preview.padX}, ${preview.padY}), crop @ (${preview.cropX}, ${preview.cropY}).`
         : `Crop based on zoom/pan. Scaled frame ${preview.scaledWidth}x${preview.scaledHeight}, crop @ (${preview.cropX}, ${preview.cropY}).`,
@@ -493,7 +500,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
 
     const rawMessage = error instanceof Error ? error.message : String(error);
     const diagnostics = [
-      `clip=${input.clip.startSeconds.toFixed(3)}-${input.clip.endSeconds.toFixed(3)} (${clipDuration.toFixed(3)}s)`,
+      `clip=${short.startSeconds.toFixed(3)}-${short.endSeconds.toFixed(3)} (${clipDuration.toFixed(3)}s)`,
       `seekMode=${usedSeekMode}`,
       `subtitleBurnIn=${usedSubtitleBurnIn}`,
       `visualOverlayBurnIn=${usedVisualOverlayBurnIn}`,

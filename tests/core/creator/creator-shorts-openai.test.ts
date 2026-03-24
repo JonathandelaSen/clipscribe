@@ -29,31 +29,25 @@ const baseRequest: CreatorShortsGenerateRequest = {
 };
 
 const shortsModelResponse = {
-  viralClips: [
+  shorts: [
     {
-      id: "clip_1",
+      id: "short_1",
       startSeconds: 0,
       endSeconds: 24,
       score: 94,
-      title: "Fast hook with payoff",
-      hook: "This is the opening hook.",
-      reason: "It opens with a strong promise and resolves with a clear takeaway.",
-      punchline: "The punchline lands at the end of the section.",
-    },
-  ],
-  shortsPlans: [
-    {
-      clipId: "clip_1",
-      platform: "youtube_shorts",
       title: "YouTube cut",
+      reason: "It opens with a strong promise and resolves with a clear takeaway.",
       caption: "Opening hook to payoff. #shorts",
       openingText: "Opening hook",
       endCardText: "Follow for more",
     },
     {
-      clipId: "clip_1",
-      platform: "tiktok",
+      id: "short_2",
+      startSeconds: 0,
+      endSeconds: 24,
+      score: 90,
       title: "TikTok cut",
+      reason: "Same clip window, alternate packaging for a more suspenseful opener.",
       caption: "One tight idea, one clean payoff.",
       openingText: "Wait for the payoff",
       endCardText: "Part 2 next",
@@ -86,8 +80,9 @@ test("normalizeShortsGenerateRequest strips video info-only fields", () => {
 test("buildShortsPrompt contains clip instructions and excludes video info packaging fields", () => {
   const prompt = buildShortsPrompt(baseRequest);
 
-  assert.match(prompt, /viralClips/i);
-  assert.match(prompt, /shortsPlans/i);
+  assert.match(prompt, /"shorts"/i);
+  assert.doesNotMatch(prompt, /viralClips/i);
+  assert.doesNotMatch(prompt, /shortsPlans/i);
   assert.doesNotMatch(prompt, /youtube\.titleIdeas/i);
   assert.doesNotMatch(prompt, /copy-ready packaging/i);
   assert.doesNotMatch(prompt, /Allowed platforms/i);
@@ -100,10 +95,10 @@ test("mapShortsOpenAIResponse returns ranked clips and plans from model JSON", (
 
   assert.equal(result.providerMode, "openai");
   assert.equal(result.model, "test-model");
-  assert.equal(result.viralClips.length, 1);
+  assert.equal(result.shorts?.length, 2);
   assert.equal(result.viralClips[0]?.sourceChunkIndexes.join(","), "0,1,2");
   assert.equal(result.shortsPlans.length, 2);
-  assert.equal(result.shortsPlans[0]?.clipId, "clip_1");
+  assert.equal(result.shortsPlans[0]?.clipId, "short_1");
 });
 
 test("mapShortsOpenAIResponse rejects clips outside source bounds", () => {
@@ -113,9 +108,9 @@ test("mapShortsOpenAIResponse rejects clips outside source bounds", () => {
         baseRequest,
         {
           ...shortsModelResponse,
-          viralClips: [
+          shorts: [
             {
-              ...shortsModelResponse.viralClips[0],
+              ...shortsModelResponse.shorts[0],
               endSeconds: 90,
             },
           ],
@@ -185,7 +180,8 @@ test("generateShortsWithOpenAI returns clip lab results and uses the shorts-only
           messages?: Array<{ role: string; content: string }>;
         };
         const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
-        assert.match(userMessage, /viralClips/i);
+        assert.match(userMessage, /"shorts"/i);
+        assert.doesNotMatch(userMessage, /viralClips/i);
         assert.doesNotMatch(userMessage, /youtube\.titleIdeas/i);
 
         return new Response(
@@ -214,8 +210,9 @@ test("generateShortsWithOpenAI returns clip lab results and uses the shorts-only
 
         assert.equal(payload.response.providerMode, "openai");
         assert.match(payload.response.model, /user key/i);
+        assert.equal(payload.response.shorts?.length, 2);
         assert.deepEqual(payload.response.viralClips[0]?.sourceChunkIndexes, [0, 1, 2]);
-        assert.equal(payload.response.shortsPlans[0]?.clipId, "clip_1");
+        assert.equal(payload.response.shortsPlans[0]?.clipId, "short_1");
         assert.equal(payload.llmRun?.status, "success");
         assert.equal(payload.llmRun?.feature, "shorts");
         assert.equal(payload.llmRun?.promptVersion, CREATOR_SHORTS_PROMPT_VERSION);

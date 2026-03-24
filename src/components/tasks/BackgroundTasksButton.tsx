@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock3, Film, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
+import { Clapperboard, Clock3, Film, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
 
 import { useBackgroundTasks, getBackgroundTaskStatusLabel } from "@/components/tasks/BackgroundTaskProvider";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
@@ -16,6 +16,7 @@ const TASK_ICONS: Record<BackgroundTaskKind, LucideIcon> = {
   transcription: Mic,
   "timeline-bake": Scissors,
   "timeline-export": Film,
+  "short-export": Clapperboard,
 };
 
 function formatTimestamp(timestamp: number) {
@@ -144,7 +145,7 @@ export function BackgroundTasksButton() {
           <SheetHeader className="border-b border-white/8 px-6 py-5">
             <SheetTitle>Background Tasks</SheetTitle>
             <SheetDescription>
-              Long-running transcription and editor jobs stay visible here while you move around the app.
+              Long-running transcription, short export, and editor jobs stay visible here while you move around the app.
             </SheetDescription>
           </SheetHeader>
 

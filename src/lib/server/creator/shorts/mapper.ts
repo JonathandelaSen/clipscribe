@@ -1,10 +1,10 @@
 import { EDITOR_PRESETS } from "../../../creator/editor-presets";
+import { toCreatorShortPlan, toCreatorViralClip } from "../../../creator/shorts-compat";
 import type { SubtitleChunk } from "../../../history";
 import {
-  type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
   type CreatorShortsGenerateResponse,
-  type CreatorViralClip,
+  type CreatorSuggestedShort,
 } from "../../../creator/types";
 import { CreatorAIError } from "../shared/errors";
 import { getRuntimeSeconds } from "../shared/transcript-format";
@@ -14,8 +14,6 @@ type LooseRecord = Record<string, unknown>;
 function isRecord(value: unknown): value is LooseRecord {
   return !!value && typeof value === "object";
 }
-
-
 
 function readFiniteNumber(value: unknown, field: string): number {
   const next = Number(value);
@@ -63,31 +61,38 @@ function createEmptyShortsResponse(request: CreatorShortsGenerateRequest, model:
     model,
     generatedAt: Date.now(),
     runtimeSeconds,
+    shorts: [],
     viralClips: [],
     shortsPlans: [],
     editorPresets: EDITOR_PRESETS,
   };
 }
 
-function parseViralClips(request: CreatorShortsGenerateRequest, candidate: unknown, runtimeSeconds: number): CreatorViralClip[] {
+function parseShorts(
+  request: CreatorShortsGenerateRequest,
+  candidate: unknown,
+  runtimeSeconds: number
+): CreatorSuggestedShort[] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw new CreatorAIError("OpenAI did not return any viral clips.", {
+    throw new CreatorAIError("OpenAI did not return any shorts.", {
       status: 502,
-      code: "missing_viral_clips",
+      code: "missing_shorts",
     });
   }
 
+  const preset = EDITOR_PRESETS[0];
+
   return candidate.map((row, index) => {
     if (!isRecord(row)) {
-      throw new CreatorAIError("OpenAI returned an invalid viral clip entry.", {
+      throw new CreatorAIError("OpenAI returned an invalid short entry.", {
         status: 502,
         code: "invalid_openai_response",
       });
     }
 
-    const startSeconds = readFiniteNumber(row.startSeconds, `viralClips[${index}].startSeconds`);
-    const endSeconds = readFiniteNumber(row.endSeconds, `viralClips[${index}].endSeconds`);
-    const score = Math.round(readFiniteNumber(row.score, `viralClips[${index}].score`));
+    const startSeconds = readFiniteNumber(row.startSeconds, `shorts[${index}].startSeconds`);
+    const endSeconds = readFiniteNumber(row.endSeconds, `shorts[${index}].endSeconds`);
+    const score = Math.round(readFiniteNumber(row.score, `shorts[${index}].score`));
 
     if (startSeconds < 0 || endSeconds <= startSeconds || endSeconds > runtimeSeconds) {
       throw new CreatorAIError("OpenAI returned clip timestamps outside the source bounds.", {
@@ -105,69 +110,62 @@ function parseViralClips(request: CreatorShortsGenerateRequest, candidate: unkno
     }
 
     return {
-      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `clip_${index + 1}`,
+      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `short_${index + 1}`,
       startSeconds,
       endSeconds,
       durationSeconds: Number((endSeconds - startSeconds).toFixed(3)),
       score,
-      title: readNonEmptyString(row.title, `viralClips[${index}].title`),
-      hook: readNonEmptyString(row.hook, `viralClips[${index}].hook`),
-      reason: readNonEmptyString(row.reason, `viralClips[${index}].reason`),
-      punchline: readNonEmptyString(row.punchline, `viralClips[${index}].punchline`),
+      title: readNonEmptyString(row.title, `shorts[${index}].title`),
+      reason: readNonEmptyString(row.reason, `shorts[${index}].reason`),
+      caption: readNonEmptyString(row.caption, `shorts[${index}].caption`),
+      openingText: readNonEmptyString(row.openingText, `shorts[${index}].openingText`),
+      endCardText: readNonEmptyString(row.endCardText, `shorts[${index}].endCardText`),
       sourceChunkIndexes,
       suggestedSubtitleLanguage: "en",
+      editorPreset: preset,
     };
   });
 }
 
-function parseShortsPlans(candidate: unknown, clips: CreatorViralClip[]): CreatorShortPlan[] {
-  if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw new CreatorAIError("OpenAI did not return any shorts plans.", {
-      status: 502,
-      code: "missing_shorts_plans",
-    });
+function normalizeLegacyPayload(candidate: LooseRecord): LooseRecord {
+  if (Array.isArray(candidate.shorts)) return candidate;
+  if (!Array.isArray(candidate.viralClips) || !Array.isArray(candidate.shortsPlans)) {
+    return candidate;
   }
 
-  const clipIds = new Set(clips.map((clip) => clip.id));
-  const plans = candidate.map((row, index) => {
-    if (!isRecord(row)) {
-      throw new CreatorAIError("OpenAI returned an invalid short plan entry.", {
-        status: 502,
-        code: "invalid_openai_response",
-      });
-    }
+  const clipsById = new Map<string, LooseRecord>();
+  for (const clip of candidate.viralClips) {
+    if (!isRecord(clip)) continue;
+    const id = typeof clip.id === "string" && clip.id.trim() ? clip.id.trim() : "";
+    if (!id) continue;
+    clipsById.set(id, clip);
+  }
 
-    const clipId = readNonEmptyString(row.clipId, `shortsPlans[${index}].clipId`);
-    if (!clipIds.has(clipId)) {
-      throw new CreatorAIError(`OpenAI returned a short plan for an unknown clip id: ${clipId}.`, {
-        status: 502,
-        code: "invalid_shorts_plan",
-      });
-    }
-
-    const preset = EDITOR_PRESETS[0];
-
-    return {
-      id: typeof row.id === "string" && row.id.trim() ? row.id.trim() : `shortplan_${index + 1}`,
-      clipId,
-      title: readNonEmptyString(row.title, `shortsPlans[${index}].title`),
-      caption: readNonEmptyString(row.caption, `shortsPlans[${index}].caption`),
-      openingText: readNonEmptyString(row.openingText, `shortsPlans[${index}].openingText`),
-      endCardText: readNonEmptyString(row.endCardText, `shortsPlans[${index}].endCardText`),
-      editorPreset: preset,
-    };
+  const shorts = candidate.shortsPlans.flatMap((plan, index) => {
+    if (!isRecord(plan)) return [];
+    const clipId = typeof plan.clipId === "string" ? plan.clipId.trim() : "";
+    if (!clipId) return [];
+    const clip = clipsById.get(clipId);
+    if (!clip) return [];
+    return [
+      {
+        id: typeof plan.id === "string" && plan.id.trim() ? plan.id.trim() : `short_${index + 1}`,
+        startSeconds: clip.startSeconds,
+        endSeconds: clip.endSeconds,
+        score: clip.score,
+        title: plan.title,
+        reason: clip.reason,
+        caption: plan.caption,
+        openingText: plan.openingText ?? clip.hook,
+        endCardText: plan.endCardText,
+      },
+    ];
   });
 
-  for (const clip of clips) {
-    if (!plans.some((plan) => plan.clipId === clip.id)) {
-      throw new CreatorAIError(`OpenAI did not return any short plan for ${clip.id}.`, {
-        status: 502,
-        code: "invalid_shorts_plan",
-      });
-    }
-  }
-
-  return plans;
+  return {
+    ...candidate,
+    shorts,
+  };
 }
 
 export function mapShortsOpenAIResponse(
@@ -182,9 +180,11 @@ export function mapShortsOpenAIResponse(
     });
   }
 
+  const normalized = normalizeLegacyPayload(candidate);
   const response = createEmptyShortsResponse(request, model);
-  response.viralClips = parseViralClips(request, candidate.viralClips, response.runtimeSeconds);
-  response.shortsPlans = parseShortsPlans(candidate.shortsPlans, response.viralClips);
+  response.shorts = parseShorts(request, normalized.shorts, response.runtimeSeconds);
+  response.viralClips = response.shorts.map(toCreatorViralClip);
+  response.shortsPlans = response.shorts.map(toCreatorShortPlan);
 
   return response;
 }

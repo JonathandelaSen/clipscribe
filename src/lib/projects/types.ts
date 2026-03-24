@@ -1,6 +1,6 @@
 import type { HistoryItem, TranscriptVersion } from "@/lib/history";
 import type { EditorAssetRecord, EditorExportEngine, EditorProjectRecord } from "@/lib/editor/types";
-import type { CreatorShortEditorState, CreatorShortPlan, CreatorViralClip } from "@/lib/creator/types";
+import type { CreatorShortEditorState, CreatorShortPlan, CreatorSuggestedShort, CreatorViralClip } from "@/lib/creator/types";
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
@@ -53,6 +53,7 @@ export interface ProjectExportRecord {
   debugNotes?: string[];
   clip?: CreatorViralClip;
   plan?: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
   editor?: CreatorShortEditorState;
 }
 

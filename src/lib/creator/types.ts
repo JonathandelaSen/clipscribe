@@ -107,6 +107,22 @@ export interface CreatorChapter {
   reason: string;
 }
 
+export interface CreatorSuggestedShort {
+  id: string;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  score: number;
+  title: string;
+  reason: string;
+  caption: string;
+  openingText: string;
+  endCardText: string;
+  sourceChunkIndexes: number[];
+  suggestedSubtitleLanguage: string;
+  editorPreset: CreatorVerticalEditorPreset;
+}
+
 export interface CreatorViralClip {
   id: string;
   startSeconds: number;
@@ -119,33 +135,6 @@ export interface CreatorViralClip {
   punchline: string;
   sourceChunkIndexes: number[];
   suggestedSubtitleLanguage: string;
-}
-
-export interface CreatorYouTubePack {
-  titleIdeas: string[];
-  description: string;
-  pinnedComment: string;
-  hashtags: string[];
-  seoKeywords: string[];
-  thumbnailHooks: string[];
-  chapterText: string;
-}
-
-export interface CreatorLongFormContentPack {
-  videoSummary: string;
-  keyMoments: string[];
-  hookIdeas: string[];
-  ctaIdeas: string[];
-  repurposeIdeas: string[];
-}
-
-export interface CreatorVerticalEditorPreset {
-  aspectRatio: "9:16";
-  resolution: "1080x1920";
-  subtitleStyle: "bold_pop" | "clean_caption" | "creator_neon";
-  safeTopPct: number;
-  safeBottomPct: number;
-  targetDurationRange: [number, number];
 }
 
 export interface CreatorShortPlan {
@@ -174,6 +163,7 @@ export interface CreatorGenerationResponseMeta {
 }
 
 export interface CreatorShortsGenerateResponse extends CreatorGenerationResponseMeta {
+  shorts?: CreatorSuggestedShort[];
   viralClips: CreatorViralClip[];
   shortsPlans: CreatorShortPlan[];
   editorPresets: CreatorVerticalEditorPreset[];
@@ -188,10 +178,38 @@ export interface CreatorVideoInfoGenerateResponse extends CreatorGenerationRespo
 
 export interface CreatorShortRenderRequest {
   filename: string;
-  clip: CreatorViralClip;
-  plan: CreatorShortPlan;
+  short?: CreatorSuggestedShort;
+  clip?: CreatorViralClip;
+  plan?: CreatorShortPlan;
   subtitleChunks?: SubtitleChunk[];
   editor: CreatorShortEditorState;
+}
+
+export interface CreatorYouTubePack {
+  titleIdeas: string[];
+  description: string;
+  pinnedComment: string;
+  hashtags: string[];
+  seoKeywords: string[];
+  thumbnailHooks: string[];
+  chapterText: string;
+}
+
+export interface CreatorLongFormContentPack {
+  videoSummary: string;
+  keyMoments: string[];
+  hookIdeas: string[];
+  ctaIdeas: string[];
+  repurposeIdeas: string[];
+}
+
+export interface CreatorVerticalEditorPreset {
+  aspectRatio: "9:16";
+  resolution: "1080x1920";
+  subtitleStyle: "bold_pop" | "clean_caption" | "creator_neon";
+  safeTopPct: number;
+  safeBottomPct: number;
+  targetDurationRange: [number, number];
 }
 
 export type CreatorSubtitleTextCase = "original" | "uppercase";
