@@ -195,6 +195,8 @@ export interface CreatorShortRenderRequest {
 }
 
 export type CreatorSubtitleTextCase = "original" | "uppercase";
+export type CreatorTextOverlayTextCase = "original" | "uppercase";
+export type CreatorTextOverlayPreset = "headline_bold" | "glass_card" | "neon_punch";
 
 export interface CreatorSubtitleStyleSettings {
   preset: CreatorVerticalEditorPreset["subtitleStyle"];
@@ -214,6 +216,35 @@ export interface CreatorSubtitleStyleSettings {
   backgroundPaddingY: number;
 }
 
+export interface CreatorTextOverlayStyleSettings {
+  preset: CreatorTextOverlayPreset;
+  textColor: string;
+  borderColor: string;
+  borderWidth: number;
+  shadowColor: string;
+  shadowOpacity: number;
+  shadowDistance: number;
+  textCase: CreatorTextOverlayTextCase;
+  backgroundEnabled: boolean;
+  backgroundColor: string;
+  backgroundOpacity: number;
+  backgroundRadius: number;
+  backgroundPaddingX: number;
+  backgroundPaddingY: number;
+}
+
+export interface CreatorTextOverlayState {
+  enabled: boolean;
+  text: string;
+  startOffsetSeconds: number;
+  durationSeconds: number;
+  positionXPercent: number;
+  positionYPercent: number;
+  scale: number;
+  maxWidthPct: number;
+  style?: Partial<CreatorTextOverlayStyleSettings>;
+}
+
 export interface CreatorShortEditorState {
   zoom: number;
   panX: number;
@@ -224,6 +255,8 @@ export interface CreatorShortEditorState {
   showSubtitles?: boolean;
   showSafeZones?: boolean;
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
+  introOverlay?: CreatorTextOverlayState;
+  outroOverlay?: CreatorTextOverlayState;
 }
 
 export interface CreatorShortRenderResponse {

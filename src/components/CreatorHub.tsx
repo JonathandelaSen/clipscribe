@@ -57,6 +57,8 @@ import {
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
   type CreatorSubtitleStyleSettings,
+  type CreatorTextOverlayState,
+  type CreatorTextOverlayStyleSettings,
   type CreatorVideoInfoGenerateRequest,
   type CreatorViralClip,
   type CreatorVideoInfoBlock,
@@ -70,6 +72,15 @@ import {
 import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/clip-windowing";
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
+import {
+  getCreatorTextOverlayFallbackPreset,
+  getCreatorTextOverlayFontSize,
+  getDefaultCreatorTextOverlayState,
+  hydrateCreatorShortEditorState,
+  resolveCreatorTextOverlayWindow,
+  type CreatorResolvedTextOverlayWindow,
+  type CreatorTextOverlaySlot,
+} from "@/lib/creator/core/text-overlays";
 import {
   buildAiSuggestionInputSummary,
   buildAiSuggestionProjectRecords,
@@ -96,6 +107,15 @@ import {
   resolveCreatorSubtitleStyle,
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
+import {
+  COMMON_TEXT_OVERLAY_STYLE_PRESETS,
+  CREATOR_TEXT_OVERLAY_STYLE_LABELS,
+  cssTextShadowFromTextOverlayStyle,
+  getDefaultCreatorTextOverlayStyle,
+  getCreatorTextOverlayMaxCharsPerLine,
+  resolveCreatorTextOverlayStyle,
+  wrapCreatorTextOverlayLines,
+} from "@/lib/creator/text-overlay-style";
 import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useCreatorShortRenderer } from "@/hooks/useCreatorShortRenderer";
@@ -132,7 +152,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 function copyText(text: string, label: string) {
@@ -291,6 +313,443 @@ function SubtitlePreviewText({
         {text}
       </span>
     </span>
+  );
+}
+
+function TextOverlayPreviewText({
+  text,
+  overlayStyle,
+  fontSizePx,
+  lineHeightPx,
+  borderWidthPx,
+  shadowScale = 1,
+  className,
+}: {
+  text: string;
+  overlayStyle: CreatorTextOverlayStyleSettings;
+  fontSizePx: number;
+  lineHeightPx: number;
+  borderWidthPx: number;
+  shadowScale?: number;
+  className?: string;
+}) {
+  const hasBackground = overlayStyle.backgroundEnabled && overlayStyle.backgroundOpacity > 0;
+
+  return (
+    <span className={className} style={{ position: "relative", display: "inline-block", maxWidth: "100%" }}>
+      <span
+        style={{
+          display: "block",
+          whiteSpace: "pre-line",
+          textAlign: "center",
+          fontSize: `${fontSizePx}px`,
+          lineHeight: `${lineHeightPx}px`,
+          fontWeight: 800,
+          letterSpacing: "-0.03em",
+          fontFamily: "var(--font-inter), 'Inter', sans-serif",
+          color: overlayStyle.textColor,
+          WebkitTextStroke: `${borderWidthPx.toFixed(2)}px ${cssRgbaFromHex(overlayStyle.borderColor, 0.95)}`,
+          textShadow: cssTextShadowFromTextOverlayStyle(overlayStyle, shadowScale),
+          paintOrder: "stroke fill",
+          background: hasBackground ? cssRgbaFromHex(overlayStyle.backgroundColor, overlayStyle.backgroundOpacity) : "transparent",
+          borderRadius: hasBackground ? `${overlayStyle.backgroundRadius * shadowScale}px` : undefined,
+          padding: hasBackground
+            ? `${overlayStyle.backgroundPaddingY * shadowScale}px ${overlayStyle.backgroundPaddingX * shadowScale}px`
+            : undefined,
+        }}
+      >
+        {text}
+      </span>
+    </span>
+  );
+}
+
+function TextOverlayEditorCard({
+  title,
+  slot,
+  overlay,
+  resolvedStyle,
+  effectiveWindow,
+  referenceText,
+  onChange,
+  onResetToSuggestion,
+}: {
+  title: string;
+  slot: CreatorTextOverlaySlot;
+  overlay: CreatorTextOverlayState;
+  resolvedStyle: CreatorTextOverlayStyleSettings;
+  effectiveWindow: CreatorResolvedTextOverlayWindow;
+  referenceText?: string;
+  onChange: (updater: (prev: CreatorTextOverlayState) => CreatorTextOverlayState) => void;
+  onResetToSuggestion?: () => void;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/25 p-4 space-y-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <div className="text-sm font-semibold text-white/92">{title}</div>
+          <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">
+            {slot === "intro" ? "Opening title overlay" : "Closing title overlay"}
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {referenceText?.trim() && onResetToSuggestion ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-8 bg-white/5 px-3 text-xs text-white/80 hover:bg-white/10"
+              onClick={onResetToSuggestion}
+            >
+              Reset to AI suggestion
+            </Button>
+          ) : null}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/55">{overlay.enabled ? "On" : "Off"}</span>
+            <Switch
+              checked={overlay.enabled}
+              onCheckedChange={(checked) => onChange((prev) => ({ ...prev, enabled: checked }))}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <Label className="text-xs uppercase tracking-[0.24em] text-white/45">Text</Label>
+        <Textarea
+          value={overlay.text}
+          onChange={(event) => onChange((prev) => ({ ...prev, text: event.target.value }))}
+          rows={3}
+          placeholder={slot === "intro" ? "Type the hook viewers should read first." : "Type the final card text."}
+          className="min-h-[88px] border-white/10 bg-white/[0.04] text-white placeholder:text-white/30"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <label className="text-xs text-white/70 block">
+          Start offset
+          <Input
+            type="number"
+            min={0}
+            step={0.1}
+            value={overlay.startOffsetSeconds}
+            onChange={(event) =>
+              onChange((prev) => ({
+                ...prev,
+                startOffsetSeconds: Number(event.target.value),
+              }))
+            }
+            className="mt-1 border-white/10 bg-white/[0.04] text-white"
+          />
+        </label>
+        <label className="text-xs text-white/70 block">
+          Duration
+          <Input
+            type="number"
+            min={0}
+            step={0.1}
+            value={overlay.durationSeconds}
+            onChange={(event) =>
+              onChange((prev) => ({
+                ...prev,
+                durationSeconds: Number(event.target.value),
+              }))
+            }
+            className="mt-1 border-white/10 bg-white/[0.04] text-white"
+          />
+        </label>
+      </div>
+
+      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[11px] text-white/60">
+        Effective timing: {effectiveWindow.enabled
+          ? `${effectiveWindow.startOffsetSeconds.toFixed(1)}s → ${effectiveWindow.endOffsetSeconds.toFixed(1)}s`
+          : "Disabled or empty"}
+      </div>
+
+      <div className="space-y-3">
+        <div className="text-sm font-medium text-white/82">Quick styles</div>
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+          {COMMON_TEXT_OVERLAY_STYLE_PRESETS.map((quick) => (
+            <button
+              key={quick.id}
+              type="button"
+              onClick={() => onChange((prev) => ({ ...prev, style: { ...quick.style } }))}
+              className="rounded-2xl border border-white/10 bg-black/35 p-3 text-left transition-colors hover:bg-white/[0.05] hover:border-white/20"
+            >
+              <div className="mb-3 rounded-xl border border-white/10 bg-[linear-gradient(135deg,rgba(10,18,30,0.96),rgba(18,38,62,0.88)_52%,rgba(107,33,168,0.25))] px-4 py-7 text-center">
+                <TextOverlayPreviewText
+                  text="Title Goes Here"
+                  overlayStyle={quick.style}
+                  fontSizePx={20}
+                  lineHeightPx={22}
+                  borderWidthPx={Math.max(1, quick.style.borderWidth * 0.6)}
+                  shadowScale={0.65}
+                />
+              </div>
+              <div className="text-sm font-semibold text-white/90">{quick.name}</div>
+              <div className="mt-1 text-xs leading-relaxed text-white/55">{quick.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <label className="text-xs text-white/70 block">
+          Style preset
+          <Select
+            value={resolvedStyle.preset}
+            onValueChange={(value) => {
+              if (value !== "headline_bold" && value !== "glass_card" && value !== "neon_punch") return;
+              onChange((prev) => ({ ...prev, style: getDefaultCreatorTextOverlayStyle(value) }));
+            }}
+          >
+            <SelectTrigger className="mt-1 border-white/10 bg-white/[0.04] text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="border-white/10 bg-zinc-950 text-white">
+              {(["headline_bold", "glass_card", "neon_punch"] as const).map((preset) => (
+                <SelectItem key={preset} value={preset}>
+                  {CREATOR_TEXT_OVERLAY_STYLE_LABELS[preset]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+        <label className="text-xs text-white/70 block">
+          Text case
+          <Select
+            value={resolvedStyle.textCase}
+            onValueChange={(value) => {
+              if (value !== "original" && value !== "uppercase") return;
+              onChange((prev) => ({ ...prev, style: { ...prev.style, textCase: value } }));
+            }}
+          >
+            <SelectTrigger className="mt-1 border-white/10 bg-white/[0.04] text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="border-white/10 bg-zinc-950 text-white">
+              <SelectItem value="original">Original</SelectItem>
+              <SelectItem value="uppercase">Uppercase</SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+      </div>
+
+      <label className="text-xs text-white/70 block">Scale: {overlay.scale.toFixed(2)}x</label>
+      <input
+        type="range"
+        min={0.5}
+        max={2.5}
+        step={0.01}
+        value={overlay.scale}
+        onChange={(event) => onChange((prev) => ({ ...prev, scale: Number(event.target.value) }))}
+        className="w-full"
+      />
+      <label className="text-xs text-white/70 block">Horizontal position: {overlay.positionXPercent.toFixed(0)}%</label>
+      <input
+        type="range"
+        min={5}
+        max={95}
+        step={1}
+        value={overlay.positionXPercent}
+        onChange={(event) => onChange((prev) => ({ ...prev, positionXPercent: Number(event.target.value) }))}
+        className="w-full"
+      />
+      <label className="text-xs text-white/70 block">Vertical position: {overlay.positionYPercent.toFixed(0)}%</label>
+      <input
+        type="range"
+        min={5}
+        max={95}
+        step={1}
+        value={overlay.positionYPercent}
+        onChange={(event) => onChange((prev) => ({ ...prev, positionYPercent: Number(event.target.value) }))}
+        className="w-full"
+      />
+      <label className="text-xs text-white/70 block">Max width: {overlay.maxWidthPct.toFixed(0)}%</label>
+      <input
+        type="range"
+        min={20}
+        max={95}
+        step={1}
+        value={overlay.maxWidthPct}
+        onChange={(event) => onChange((prev) => ({ ...prev, maxWidthPct: Number(event.target.value) }))}
+        className="w-full"
+      />
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <label className="text-xs text-white/70 block">
+          Text color
+          <input
+            type="color"
+            value={resolvedStyle.textColor}
+            onChange={(event) =>
+              onChange((prev) => ({ ...prev, style: { ...prev.style, textColor: event.target.value.toUpperCase() } }))
+            }
+            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/[0.04]"
+          />
+        </label>
+        <label className="text-xs text-white/70 block">
+          Border color
+          <input
+            type="color"
+            value={resolvedStyle.borderColor}
+            onChange={(event) =>
+              onChange((prev) => ({ ...prev, style: { ...prev.style, borderColor: event.target.value.toUpperCase() } }))
+            }
+            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/[0.04]"
+          />
+        </label>
+        <label className="text-xs text-white/70 block">
+          Shadow color
+          <input
+            type="color"
+            value={resolvedStyle.shadowColor}
+            onChange={(event) =>
+              onChange((prev) => ({ ...prev, style: { ...prev.style, shadowColor: event.target.value.toUpperCase() } }))
+            }
+            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/[0.04]"
+          />
+        </label>
+      </div>
+
+      <label className="text-xs text-white/70 block">Border width: {resolvedStyle.borderWidth.toFixed(1)}px</label>
+      <input
+        type="range"
+        min={0}
+        max={8}
+        step={0.1}
+        value={resolvedStyle.borderWidth}
+        onChange={(event) =>
+          onChange((prev) => ({ ...prev, style: { ...prev.style, borderWidth: Number(event.target.value) } }))
+        }
+        className="w-full"
+      />
+      <label className="text-xs text-white/70 block">Shadow opacity: {Math.round(resolvedStyle.shadowOpacity * 100)}%</label>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={resolvedStyle.shadowOpacity}
+        onChange={(event) =>
+          onChange((prev) => ({ ...prev, style: { ...prev.style, shadowOpacity: Number(event.target.value) } }))
+        }
+        className="w-full"
+      />
+      <label className="text-xs text-white/70 block">Shadow distance: {resolvedStyle.shadowDistance.toFixed(1)}px</label>
+      <input
+        type="range"
+        min={0}
+        max={16}
+        step={0.1}
+        value={resolvedStyle.shadowDistance}
+        onChange={(event) =>
+          onChange((prev) => ({ ...prev, style: { ...prev.style, shadowDistance: Number(event.target.value) } }))
+        }
+        className="w-full"
+      />
+
+      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-semibold text-white/85">Background</div>
+            <div className="text-[11px] text-white/50">Use a rounded card behind the text for legibility.</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/60">{resolvedStyle.backgroundEnabled ? "On" : "Off"}</span>
+            <Switch
+              checked={resolvedStyle.backgroundEnabled}
+              onCheckedChange={(checked) =>
+                onChange((prev) => ({ ...prev, style: { ...prev.style, backgroundEnabled: checked } }))
+              }
+            />
+          </div>
+        </div>
+
+        {resolvedStyle.backgroundEnabled ? (
+          <>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <label className="text-xs text-white/70 block">
+                Background color
+                <input
+                  type="color"
+                  value={resolvedStyle.backgroundColor}
+                  onChange={(event) =>
+                    onChange((prev) => ({
+                      ...prev,
+                      style: { ...prev.style, backgroundColor: event.target.value.toUpperCase() },
+                    }))
+                  }
+                  className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/[0.04]"
+                />
+              </label>
+              <label className="text-xs text-white/70 block">
+                Background opacity: {Math.round(resolvedStyle.backgroundOpacity * 100)}%
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  value={resolvedStyle.backgroundOpacity}
+                  onChange={(event) =>
+                    onChange((prev) => ({
+                      ...prev,
+                      style: { ...prev.style, backgroundOpacity: Number(event.target.value) },
+                    }))
+                  }
+                  className="mt-1 w-full"
+                />
+              </label>
+            </div>
+            <label className="text-xs text-white/70 block">Background radius: {resolvedStyle.backgroundRadius.toFixed(0)}px</label>
+            <input
+              type="range"
+              min={0}
+              max={80}
+              step={1}
+              value={resolvedStyle.backgroundRadius}
+              onChange={(event) =>
+                onChange((prev) => ({
+                  ...prev,
+                  style: { ...prev.style, backgroundRadius: Number(event.target.value) },
+                }))
+              }
+              className="w-full"
+            />
+            <label className="text-xs text-white/70 block">Horizontal padding: {resolvedStyle.backgroundPaddingX.toFixed(0)}px</label>
+            <input
+              type="range"
+              min={0}
+              max={80}
+              step={1}
+              value={resolvedStyle.backgroundPaddingX}
+              onChange={(event) =>
+                onChange((prev) => ({
+                  ...prev,
+                  style: { ...prev.style, backgroundPaddingX: Number(event.target.value) },
+                }))
+              }
+              className="w-full"
+            />
+            <label className="text-xs text-white/70 block">Vertical padding: {resolvedStyle.backgroundPaddingY.toFixed(0)}px</label>
+            <input
+              type="range"
+              min={0}
+              max={48}
+              step={1}
+              value={resolvedStyle.backgroundPaddingY}
+              onChange={(event) =>
+                onChange((prev) => ({
+                  ...prev,
+                  style: { ...prev.style, backgroundPaddingY: Number(event.target.value) },
+                }))
+              }
+              className="w-full"
+            />
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -476,6 +935,12 @@ export function CreatorHub({
   const [subtitleStyleOverrides, setSubtitleStyleOverrides] = useState<Partial<CreatorSubtitleStyleSettings>>({});
   const [showSubtitles, setShowSubtitles] = useState(true);
   const [showSafeZones, setShowSafeZones] = useState(true);
+  const [introOverlay, setIntroOverlay] = useState<CreatorTextOverlayState>(() =>
+    getDefaultCreatorTextOverlayState("intro")
+  );
+  const [outroOverlay, setOutroOverlay] = useState<CreatorTextOverlayState>(() =>
+    getDefaultCreatorTextOverlayState("outro")
+  );
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
   const [isExportingShort, setIsExportingShort] = useState(false);
@@ -697,6 +1162,9 @@ export function CreatorHub({
     setShortProjectNameDraft("");
     setSubtitleStyleOverrides({});
     setShowSubtitles(true);
+    setShowSafeZones(true);
+    setIntroOverlay(getDefaultCreatorTextOverlayState("intro"));
+    setOutroOverlay(getDefaultCreatorTextOverlayState("outro"));
   }, [selectedProject?.id]);
 
   // Video event callbacks — attached as JSX props on the <video>, no effect needed
@@ -833,6 +1301,20 @@ export function CreatorHub({
     return resolveCreatorSubtitleStyle(fallback, subtitleStyleOverrides);
   }, [selectedPlan?.editorPreset.subtitleStyle, subtitleStyleOverrides]);
 
+  const resolvedIntroOverlayStyle = useMemo(() => {
+    return resolveCreatorTextOverlayStyle(
+      getCreatorTextOverlayFallbackPreset("intro"),
+      introOverlay.style
+    );
+  }, [introOverlay.style]);
+
+  const resolvedOutroOverlayStyle = useMemo(() => {
+    return resolveCreatorTextOverlayStyle(
+      getCreatorTextOverlayFallbackPreset("outro"),
+      outroOverlay.style
+    );
+  }, [outroOverlay.style]);
+
   const currentEditorState = useMemo<CreatorShortEditorState>(
     () => ({
       zoom,
@@ -844,8 +1326,22 @@ export function CreatorHub({
       showSubtitles,
       subtitleStyle: subtitleStyleOverrides,
       showSafeZones,
+      introOverlay,
+      outroOverlay,
     }),
-    [panX, panY, showSafeZones, showSubtitles, subtitleScale, subtitleStyleOverrides, subtitleXPositionPct, subtitleYOffsetPct, zoom]
+    [
+      introOverlay,
+      outroOverlay,
+      panX,
+      panY,
+      showSafeZones,
+      showSubtitles,
+      subtitleScale,
+      subtitleStyleOverrides,
+      subtitleXPositionPct,
+      subtitleYOffsetPct,
+      zoom,
+    ]
   );
 
   useEffect(() => {
@@ -890,6 +1386,33 @@ export function CreatorHub({
     [editedClip, setEditedClipDurationSeconds]
   );
 
+  const updateTextOverlay = useCallback(
+    (
+      slot: CreatorTextOverlaySlot,
+      updater: (prev: CreatorTextOverlayState) => CreatorTextOverlayState
+    ) => {
+      if (slot === "intro") {
+        setIntroOverlay((prev) => updater(prev));
+        return;
+      }
+      setOutroOverlay((prev) => updater(prev));
+    },
+    []
+  );
+
+  const resetTextOverlayToSuggestion = useCallback(
+    (slot: CreatorTextOverlaySlot) => {
+      if (!selectedPlan || !editedClip) return;
+      const next = getDefaultCreatorTextOverlayState(slot, {
+        origin: "ai_suggestion",
+        plan: selectedPlan,
+        clipDurationSeconds: editedClip.durationSeconds,
+      });
+      updateTextOverlay(slot, () => next);
+    },
+    [editedClip, selectedPlan, updateTextOverlay]
+  );
+
   const savedExportsForActiveShort = useMemo(
     () => (activeSavedShortProject ? exportsByProjectId.get(activeSavedShortProject.id) ?? [] : []),
     [activeSavedShortProject, exportsByProjectId]
@@ -915,6 +1438,7 @@ export function CreatorHub({
   const analyzeError = activeTool === "video_info" ? videoInfoError : shortsError;
   const analyzeErrorDetails = getAnalyzeErrorDetails(analyzeError);
   const activeEditableShortProjectId = shouldReuseShortProjectId(activeSavedShortProject);
+  const hasAiReferenceMetadata = activeSavedShortProject?.origin === "ai_suggestion";
 
   const creatorSourcePayload = useMemo<CreatorGenerationSourceInput | null>(() => {
     if (!selectedProject || !selectedTranscript || !selectedSubtitle || !selectedTranscript.transcript) return null;
@@ -1224,6 +1748,11 @@ export function CreatorHub({
   }, [activeEditableShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
   const applySavedShortProject = useCallback((project: CreatorShortProjectRecord) => {
+    const hydratedEditor = hydrateCreatorShortEditorState(project.editor, {
+      origin: project.origin,
+      plan: project.plan,
+      clipDurationSeconds: project.clip.durationSeconds,
+    });
     setActiveTool("clip_lab");
     setActiveSavedShortProjectId(project.id);
     setDetachedShortSelection({ clip: project.clip, plan: project.plan });
@@ -1236,15 +1765,17 @@ export function CreatorHub({
 
     setTrimStartNudge(0);
     setTrimEndNudge(0);
-    setZoom(project.editor.zoom);
-    setPanX(project.editor.panX);
-    setPanY(project.editor.panY);
-    setSubtitleScale(project.editor.subtitleScale);
-    setSubtitleXPositionPct(project.editor.subtitleXPositionPct ?? 50);
-    setSubtitleYOffsetPct(project.editor.subtitleYOffsetPct);
-    setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.editorPreset.subtitleStyle, project.editor.subtitleStyle));
-    setShowSubtitles(project.editor.showSubtitles ?? true);
-    setShowSafeZones(project.editor.showSafeZones ?? true);
+    setZoom(hydratedEditor.zoom);
+    setPanX(hydratedEditor.panX);
+    setPanY(hydratedEditor.panY);
+    setSubtitleScale(hydratedEditor.subtitleScale);
+    setSubtitleXPositionPct(hydratedEditor.subtitleXPositionPct ?? 50);
+    setSubtitleYOffsetPct(hydratedEditor.subtitleYOffsetPct);
+    setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.editorPreset.subtitleStyle, hydratedEditor.subtitleStyle));
+    setShowSubtitles(hydratedEditor.showSubtitles ?? true);
+    setShowSafeZones(hydratedEditor.showSafeZones ?? true);
+    setIntroOverlay(hydratedEditor.introOverlay ?? getDefaultCreatorTextOverlayState("intro"));
+    setOutroOverlay(hydratedEditor.outroOverlay ?? getDefaultCreatorTextOverlayState("outro"));
   }, []);
 
   const handleDeleteShortProject = useCallback(
@@ -1630,6 +2161,70 @@ export function CreatorHub({
     const maxCharsPerLine = getSubtitleMaxCharsPerLine(fontSize, resolvedSubtitleStyle.letterWidth, 1080);
     return wrapSubtitleLines(previewSubtitleDisplayLine, maxCharsPerLine).join("\n");
   }, [previewSubtitleDisplayLine, resolvedSubtitleStyle.letterWidth, subtitleScale]);
+
+  const clipRelativeTime = useMemo(() => {
+    if (!editedClip) return 0;
+    return Math.max(0, currentTime - editedClip.startSeconds);
+  }, [currentTime, editedClip]);
+
+  const resolvedIntroOverlayWindow = useMemo(() => {
+    if (!editedClip) return resolveCreatorTextOverlayWindow(introOverlay, 0);
+    return resolveCreatorTextOverlayWindow(introOverlay, editedClip.durationSeconds);
+  }, [editedClip, introOverlay]);
+
+  const resolvedOutroOverlayWindow = useMemo(() => {
+    if (!editedClip) return resolveCreatorTextOverlayWindow(outroOverlay, 0);
+    return resolveCreatorTextOverlayWindow(outroOverlay, editedClip.durationSeconds);
+  }, [editedClip, outroOverlay]);
+
+  const activePreviewTextOverlays = useMemo(() => {
+    if (!editedClip) return [];
+
+    const overlayEntries: Array<{
+      slot: CreatorTextOverlaySlot;
+      overlay: CreatorTextOverlayState;
+      window: ReturnType<typeof resolveCreatorTextOverlayWindow>;
+      style: CreatorTextOverlayStyleSettings;
+    }> = [
+      {
+        slot: "intro",
+        overlay: introOverlay,
+        window: resolvedIntroOverlayWindow,
+        style: resolvedIntroOverlayStyle,
+      },
+      {
+        slot: "outro",
+        overlay: outroOverlay,
+        window: resolvedOutroOverlayWindow,
+        style: resolvedOutroOverlayStyle,
+      },
+    ];
+
+    return overlayEntries
+      .filter(({ window }) => window.enabled && clipRelativeTime >= window.startOffsetSeconds && clipRelativeTime <= window.endOffsetSeconds)
+      .map(({ slot, overlay, window, style }) => {
+        const fontSize = getCreatorTextOverlayFontSize(slot, overlay.scale);
+        const maxChars = getCreatorTextOverlayMaxCharsPerLine(fontSize, overlay.maxWidthPct, 1080);
+        const displayText = style.textCase === "uppercase" ? window.text.toUpperCase() : window.text;
+        return {
+          slot,
+          overlay,
+          style,
+          wrappedText: wrapCreatorTextOverlayLines(displayText, maxChars).join("\n"),
+          fontSize,
+        };
+      })
+      .filter((entry) => entry.wrappedText);
+  }, [
+    clipRelativeTime,
+    editedClip,
+    introOverlay,
+    outroOverlay,
+    resolvedIntroOverlayStyle,
+    resolvedIntroOverlayWindow,
+    resolvedOutroOverlayStyle,
+    resolvedOutroOverlayWindow,
+  ]);
 
   // Export-equivalent font size (px at 1080-wide canvas) – used to derive preview CSS values.
   const exportFontSize = Math.round(clampNumber(56 * subtitleScale, 36, 96));
@@ -2308,6 +2903,29 @@ export function CreatorHub({
                       setShortProjectNameDraft("");
                       setTrimStartNudge(0);
                       setTrimEndNudge(0);
+                      setZoom(1.15);
+                      setPanX(0);
+                      setPanY(0);
+                      setSubtitleScale(1);
+                      setSubtitleXPositionPct(50);
+                      setSubtitleYOffsetPct(78);
+                      setSubtitleStyleOverrides({});
+                      setShowSubtitles(true);
+                      setShowSafeZones(true);
+                      setIntroOverlay(
+                        getDefaultCreatorTextOverlayState("intro", {
+                          origin: "manual",
+                          plan: manualFallbackPlan,
+                          clipDurationSeconds: manualFallbackClip.durationSeconds,
+                        })
+                      );
+                      setOutroOverlay(
+                        getDefaultCreatorTextOverlayState("outro", {
+                          origin: "manual",
+                          plan: manualFallbackPlan,
+                          clipDurationSeconds: manualFallbackClip.durationSeconds,
+                        })
+                      );
                       setHubView("editor");
                     }}
                   >
@@ -2750,6 +3368,36 @@ export function CreatorHub({
                             </>
                           )}
 
+                          {activePreviewTextOverlays.map((entry) => {
+                            const previewScale = previewFrameWidth > 0 ? previewFrameWidth / 1080 : 1;
+                            const cssFontSize = entry.fontSize * previewScale;
+                            const cssLineHeight = entry.fontSize * 1.02 * previewScale;
+                            const cssBorder = entry.style.borderWidth * previewScale;
+                            const cssMaxWidth = 1080 * (entry.overlay.maxWidthPct / 100) * previewScale;
+                            return (
+                              <div
+                                key={entry.slot}
+                                className="absolute text-center transition-opacity duration-150"
+                                style={{
+                                  left: `${entry.overlay.positionXPercent}%`,
+                                  top: `${entry.overlay.positionYPercent}%`,
+                                  transform: "translate(-50%, -50%)",
+                                  maxWidth: `${cssMaxWidth}px`,
+                                  width: "max-content",
+                                }}
+                              >
+                                <TextOverlayPreviewText
+                                  text={entry.wrappedText}
+                                  overlayStyle={entry.style}
+                                  fontSizePx={cssFontSize}
+                                  lineHeightPx={cssLineHeight}
+                                  borderWidthPx={cssBorder}
+                                  shadowScale={previewScale}
+                                />
+                              </div>
+                            );
+                          })}
+
                           {showSubtitles && previewWrappedSubtitleLine && (() => {
                             // Render the preview subtitle in the same coordinate space as the FFmpeg export.
                             // previewScale maps the 1080 px export canvas onto the preview frame pixels.
@@ -2857,6 +3505,9 @@ export function CreatorHub({
                             <div className="absolute inset-0 bg-gradient-to-r from-fuchsia-500/5 via-cyan-500/5 to-transparent pointer-events-none" />
                             <TabsTrigger value="framing" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(52,211,153,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-emerald-400/30 data-[state=active]:text-emerald-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(52,211,153,0.15)] font-medium tracking-wide relative">
                               <span className="relative z-10">Framing & Trim</span>
+                            </TabsTrigger>
+                            <TabsTrigger value="copy" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(251,191,36,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-amber-400/30 data-[state=active]:text-amber-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(251,191,36,0.15)] font-medium tracking-wide relative">
+                              <span className="relative z-10">Copy & Titles</span>
                             </TabsTrigger>
                             <TabsTrigger value="subtitles" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(34,211,238,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-cyan-400/30 data-[state=active]:text-cyan-50 text-cyan-50/50 hover:text-cyan-50 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(34,211,238,0.15)] font-medium tracking-wide relative">
                                <span className="relative z-10">Subtitles</span>
@@ -2984,6 +3635,82 @@ export function CreatorHub({
                             <input type="range" min={-600} max={600} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
                             <label className="text-xs text-white/70 block">Pan Y: {panY}px</label>
                             <input type="range" min={-600} max={600} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
+                            </div>
+                          </TabsContent>
+
+                          <TabsContent value="copy" className="mt-0 outline-none">
+                            <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-5">
+                              <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
+                                Copy Metadata & Titles
+                              </div>
+
+                              <div
+                                className={cn(
+                                  "rounded-2xl border p-4 space-y-4",
+                                  hasAiReferenceMetadata
+                                    ? "border-amber-300/25 bg-amber-400/10"
+                                    : "border-white/10 bg-white/[0.03]"
+                                )}
+                              >
+                                <div className="flex items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-sm font-semibold text-white/92">
+                                      {hasAiReferenceMetadata ? "AI suggestion metadata" : "Source copy metadata"}
+                                    </div>
+                                    <div className="text-[11px] uppercase tracking-[0.24em] text-white/40">
+                                      Visible for reference only
+                                    </div>
+                                  </div>
+                                  {hasAiReferenceMetadata ? (
+                                    <div className="rounded-full border border-amber-300/20 bg-amber-300/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-amber-100">
+                                      AI
+                                    </div>
+                                  ) : null}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                                  {[
+                                    ["AI Title", selectedPlan?.title ?? ""],
+                                    ["AI Caption", selectedPlan?.caption ?? ""],
+                                    ["AI Opening Text", selectedPlan?.openingText ?? ""],
+                                    ["AI End Card", selectedPlan?.endCardText ?? ""],
+                                  ].map(([label, value]) => (
+                                    <div key={label} className="rounded-xl border border-white/10 bg-black/20 p-3">
+                                      <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">{label}</div>
+                                      <div className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-white/82">
+                                        {value || "None"}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                                <TextOverlayEditorCard
+                                  title="Intro Title"
+                                  slot="intro"
+                                  overlay={introOverlay}
+                                  resolvedStyle={resolvedIntroOverlayStyle}
+                                  effectiveWindow={resolvedIntroOverlayWindow}
+                                  referenceText={hasAiReferenceMetadata ? selectedPlan?.title : undefined}
+                                  onChange={(updater) => updateTextOverlay("intro", updater)}
+                                  onResetToSuggestion={
+                                    hasAiReferenceMetadata ? () => resetTextOverlayToSuggestion("intro") : undefined
+                                  }
+                                />
+                                <TextOverlayEditorCard
+                                  title="Outro Card"
+                                  slot="outro"
+                                  overlay={outroOverlay}
+                                  resolvedStyle={resolvedOutroOverlayStyle}
+                                  effectiveWindow={resolvedOutroOverlayWindow}
+                                  referenceText={hasAiReferenceMetadata ? selectedPlan?.endCardText : undefined}
+                                  onChange={(updater) => updateTextOverlay("outro", updater)}
+                                  onResetToSuggestion={
+                                    hasAiReferenceMetadata ? () => resetTextOverlayToSuggestion("outro") : undefined
+                                  }
+                                />
+                              </div>
                             </div>
                           </TabsContent>
 
@@ -3387,6 +4114,21 @@ export function CreatorHub({
                                   setSubtitleYOffsetPct(78);
                                   setSubtitleStyleOverrides({});
                                   setShowSafeZones(true);
+                                  setShowSubtitles(true);
+                                  setIntroOverlay(
+                                    getDefaultCreatorTextOverlayState("intro", {
+                                      origin: activeSavedShortProject?.origin ?? "manual",
+                                      plan: selectedPlan,
+                                      clipDurationSeconds: editedClip?.durationSeconds,
+                                    })
+                                  );
+                                  setOutroOverlay(
+                                    getDefaultCreatorTextOverlayState("outro", {
+                                      origin: activeSavedShortProject?.origin ?? "manual",
+                                      plan: selectedPlan,
+                                      clipDurationSeconds: editedClip?.durationSeconds,
+                                    })
+                                  );
                                 }}
                               >
                                 Reset Editor

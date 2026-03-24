@@ -12,6 +12,7 @@ import type {
   CreatorShortProjectOrigin,
   CreatorShortProjectRecord,
 } from "@/lib/creator/storage";
+import { hydrateCreatorShortEditorState } from "./text-overlays";
 
 
 export function deriveDefaultShortProjectName(
@@ -95,6 +96,11 @@ export function buildShortProjectRecord(input: {
     clipId: input.clip.id,
     planId: input.plan.id,
   });
+  const hydratedEditor = hydrateCreatorShortEditorState(input.editor, {
+    origin,
+    plan: input.plan,
+    clipDurationSeconds: input.clip.durationSeconds,
+  });
 
   return {
     id: existing?.id ?? input.newId,
@@ -113,7 +119,7 @@ export function buildShortProjectRecord(input: {
         : deriveDefaultShortProjectName(input.plan, input.clip, input.secondsToClock)),
     clip: input.clip,
     plan: input.plan,
-    editor: input.editor,
+    editor: hydratedEditor,
     createdAt: existing?.createdAt ?? input.now,
     updatedAt: input.now,
     status: input.status,

@@ -1,4 +1,5 @@
 import { db, type AudioTranscriberDB } from "@/lib/db";
+import { hydrateCreatorShortEditorState } from "@/lib/creator/core/text-overlays";
 import { normalizeHistoryItem, sortHistoryItems, type HistoryItem } from "@/lib/history";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
 import type {
@@ -123,11 +124,27 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
       const records = projectId
         ? await database.projectShorts.where("projectId").equals(projectId).toArray()
         : await database.projectShorts.toArray();
-      return [...records].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+      return [...records]
+        .map((record) => ({
+          ...record,
+          editor: hydrateCreatorShortEditorState(record.editor, {
+            origin: record.origin,
+            plan: record.plan,
+            clipDurationSeconds: record.clip?.durationSeconds,
+          }),
+        }))
+        .sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
     },
 
     async putShortProject(record) {
-      await database.projectShorts.put(record);
+      await database.projectShorts.put({
+        ...record,
+        editor: hydrateCreatorShortEditorState(record.editor, {
+          origin: record.origin,
+          plan: record.plan,
+          clipDurationSeconds: record.clip?.durationSeconds,
+        }),
+      });
     },
 
     async deleteShortProject(shortProjectId) {

@@ -12,6 +12,7 @@ import {
   resolveCreatorSubtitleStyle,
 } from "@/lib/creator/subtitle-style";
 import { renderSubtitlesToPngs } from "@/lib/creator/subtitle-canvas";
+import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
@@ -283,6 +284,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
   };
 
   let usedSubtitleBurnIn = false;
+  let usedVisualOverlayBurnIn = false;
   let usedSeekMode: "hybrid" | "exact" = "hybrid";
 
   try {
@@ -291,7 +293,38 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
     await ff.mount("WORKERFS" as never, { files: [input.sourceFile] }, mountDir);
     emitProgress(LOCAL_EXPORT_PROGRESS.mounted);
 
-    // Attempt subtitle burn-in using Canvas PNG overlays (pixel-identical to preview)
+    const introOverlayFrames = await renderTextOverlayToPngFrames({
+      overlay: input.editor.introOverlay ?? {
+        enabled: false,
+        text: "",
+        startOffsetSeconds: 0,
+        durationSeconds: 0,
+        positionXPercent: 50,
+        positionYPercent: 24,
+        scale: 1,
+        maxWidthPct: 78,
+      },
+      slot: "intro",
+      clipDurationSeconds: input.clip.durationSeconds,
+      timeOffsetSeconds: exactTrimAfterSeekSeconds,
+      signal: input.renderLifecycle?.signal,
+    });
+    const outroOverlayFrames = await renderTextOverlayToPngFrames({
+      overlay: input.editor.outroOverlay ?? {
+        enabled: false,
+        text: "",
+        startOffsetSeconds: 0,
+        durationSeconds: 0,
+        positionXPercent: 50,
+        positionYPercent: 34,
+        scale: 0.9,
+        maxWidthPct: 72,
+      },
+      slot: "outro",
+      clipDurationSeconds: input.clip.durationSeconds,
+      timeOffsetSeconds: exactTrimAfterSeekSeconds,
+      signal: input.renderLifecycle?.signal,
+    });
     const subtitleFrames = await renderSubtitlesToPngs(
       input.subtitleChunks ?? [],
       input.clip,
@@ -300,11 +333,11 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       exactTrimAfterSeekSeconds,
       input.renderLifecycle?.signal
     );
+    const overlayFrames = [...introOverlayFrames, ...outroOverlayFrames, ...subtitleFrames];
 
-    if (subtitleFrames.length > 0) {
+    if (overlayFrames.length > 0) {
       emitProgress(6);
-      // Write each PNG to the VFS
-      for (const frame of subtitleFrames) {
+      for (const frame of overlayFrames) {
         throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
         await ff.writeFile(frame.vfsPath, frame.pngBytes);
       }
@@ -315,27 +348,27 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       //   [v0][2:v]   → overlay(enable=between(t,s,e)) → [v1]
       //   ...         → [vout]
       const filterParts: string[] = [`[0:v]${baseFilter}[base]`];
-      subtitleFrames.forEach((frame, i) => {
+      overlayFrames.forEach((frame, i) => {
         const inLabel  = i === 0 ? "base" : `v${i - 1}`;
-        const outLabel = i === subtitleFrames.length - 1 ? "vout" : `v${i}`;
+        const outLabel = i === overlayFrames.length - 1 ? "vout" : `v${i}`;
         filterParts.push(
           `[${inLabel}][${i + 1}:v]overlay=enable='between(t,${frame.start.toFixed(3)},${frame.end.toFixed(3)})'[${outLabel}]`
         );
       });
       const overlayFilter = filterParts.join(";");
-      const pngPaths = subtitleFrames.map((f) => f.vfsPath);
+      const pngPaths = overlayFrames.map((f) => f.vfsPath);
 
       try {
         usedSeekMode = await renderWithSeekFallback(overlayFilter, pngPaths);
-        usedSubtitleBurnIn = true;
+        usedVisualOverlayBurnIn = true;
+        usedSubtitleBurnIn = subtitleFrames.length > 0;
       } catch (err) {
         if (isBrowserRenderCanceledError(err) || input.renderLifecycle?.signal?.aborted) {
           throw createBrowserRenderCanceledError();
         }
         console.warn("PNG overlay subtitle burn-in failed, retrying export without subtitles:", err);
         try { await ff.deleteFile(outputPath); } catch {}
-        // Clean up PNGs and fall back to plain render
-        for (const frame of subtitleFrames) {
+        for (const frame of overlayFrames) {
           try { await ff.deleteFile(frame.vfsPath); } catch {}
         }
         usedSeekMode = await renderWithSeekFallback(baseFilter);
@@ -373,8 +406,8 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             String(exactTrimAfterSeekSeconds),
             "-t",
             String(clipDuration),
-            "-vf",
-            usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
+            usedVisualOverlayBurnIn ? "-filter_complex" : "-vf",
+            usedVisualOverlayBurnIn ? `${baseFilter};...overlay` : baseFilter,
             "-c:v",
             "libx264",
             "-preset",
@@ -395,8 +428,8 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
             String(input.clip.startSeconds),
             "-t",
             String(clipDuration),
-            "-vf",
-            usedSubtitleBurnIn ? `${baseFilter},...drawtext` : baseFilter,
+            usedVisualOverlayBurnIn ? "-filter_complex" : "-vf",
+            usedVisualOverlayBurnIn ? `${baseFilter};...overlay` : baseFilter,
             "-c:v",
             "libx264",
             "-preset",
@@ -433,6 +466,12 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
         : usedSubtitleBurnIn
         ? `Subtitles burned in at x=${input.editor.subtitleXPositionPct.toFixed(0)}%, y=${input.editor.subtitleYOffsetPct.toFixed(0)}% using ${effectiveSubtitleStyle.preset}.`
         : "Rendered without burned subtitles (subtitle filter unavailable or no subtitle chunks).",
+      introOverlayFrames.length > 0
+        ? `Intro title overlay active for ${(introOverlayFrames[0].end - introOverlayFrames[0].start).toFixed(2)}s.`
+        : "Intro title overlay disabled.",
+      outroOverlayFrames.length > 0
+        ? `Outro card overlay active for ${(outroOverlayFrames[0].end - outroOverlayFrames[0].start).toFixed(2)}s.`
+        : "Outro card overlay disabled.",
       "Export uses a single outline/shadow pass with subtle fill spreads so wider letters do not duplicate borders.",
       `Letter width scale ${effectiveSubtitleStyle.letterWidth.toFixed(2)}x.`,
       `Subtitle styling uses text border ${effectiveSubtitleStyle.borderWidth.toFixed(1)}px plus shadow ${effectiveSubtitleStyle.shadowDistance.toFixed(1)}px.`,
@@ -457,6 +496,7 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       `clip=${input.clip.startSeconds.toFixed(3)}-${input.clip.endSeconds.toFixed(3)} (${clipDuration.toFixed(3)}s)`,
       `seekMode=${usedSeekMode}`,
       `subtitleBurnIn=${usedSubtitleBurnIn}`,
+      `visualOverlayBurnIn=${usedVisualOverlayBurnIn}`,
       `subtitleChunks=${input.subtitleChunks?.length ?? 0}`,
       `source=${input.sourceFilename}`,
     ].join(", ");
