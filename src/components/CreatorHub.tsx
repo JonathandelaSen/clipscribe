@@ -53,7 +53,6 @@ import {
 import {
   secondsToClock,
   type CreatorGenerationSourceInput,
-  type CreatorLLMRunRecord,
   type CreatorShortEditorState,
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
@@ -108,7 +107,6 @@ import { cn } from "@/lib/utils";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -135,7 +133,6 @@ import {
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 function copyText(text: string, label: string) {
@@ -184,38 +181,6 @@ function formatBytes(bytes: number): string {
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** power;
   return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
-}
-
-function formatDurationMs(durationMs?: number): string {
-  if (!Number.isFinite(durationMs) || durationMs == null) return "n/a";
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
-  return `${(durationMs / 1000).toFixed(durationMs >= 10_000 ? 0 : 1)} s`;
-}
-
-function formatUsd(value?: number | null): string {
-  if (value == null || !Number.isFinite(value)) return "n/a";
-  if (value === 0) return "$0.00";
-  return `$${value.toFixed(value >= 0.01 ? 4 : 6)}`;
-}
-
-function stringifyForDebug(value: unknown): string {
-  if (value == null) return "null";
-  if (typeof value === "string") return value;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function downloadJson(filename: string, value: unknown) {
-  const blob = new Blob([JSON.stringify(value, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
 }
 
 function clampNumber(value: number, min: number, max: number): number {
@@ -482,13 +447,8 @@ export function CreatorHub({
   const [selectedTranscriptId, setSelectedTranscriptId] = useState<string>("");
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
   const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
-  const [isLlmHistoryOpen, setIsLlmHistoryOpen] = useState(false);
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
   const [isRegenerateAiSuggestionsDialogOpen, setIsRegenerateAiSuggestionsDialogOpen] = useState(false);
-  const [selectedLlmRunId, setSelectedLlmRunId] = useState<string>("");
-  const [llmFeatureFilter, setLlmFeatureFilter] = useState<"all" | "shorts" | "video_info">("all");
-  const [llmStatusFilter, setLlmStatusFilter] = useState<"all" | CreatorLLMRunRecord["status"]>("all");
-  const [llmModelFilter, setLlmModelFilter] = useState<string>("all");
 
   const [niche, setNiche] = useState("");
   const [audience, setAudience] = useState("");
@@ -602,13 +562,8 @@ export function CreatorHub({
   } = useCreatorShortsLibrary(selectedProjectRootId);
   const {
     runs: llmRuns,
-    isLoading: isLoadingLlmRuns,
-    error: llmRunsError,
     refresh: refreshLlmRuns,
-    deleteRun: deleteLlmRun,
-    deleteRuns: deleteLlmRuns,
-    clearRuns: clearLlmRuns,
-  } = useCreatorLlmRuns();
+  } = useCreatorLlmRuns(projectId);
 
   const beginShortExportSession = useCallback(() => {
     return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
@@ -658,6 +613,8 @@ export function CreatorHub({
     if (!selectedTranscript) return undefined;
     return getSubtitleById(selectedTranscript, effectiveSubtitleId) ?? subtitleOptions[0];
   }, [effectiveSubtitleId, selectedTranscript, subtitleOptions]);
+
+  const aiRunsHref = projectId ? `/creator/runs?projectId=${projectId}` : "/creator/runs";
 
   const sourceDurationSeconds = useMemo(() => {
     if (selectedProject && selectedTranscript) {
@@ -1027,33 +984,6 @@ export function CreatorHub({
     }),
     []
   );
-
-  const llmModels = useMemo(() => {
-    return Array.from(new Set(llmRuns.map((run) => run.model))).sort((left, right) => left.localeCompare(right));
-  }, [llmRuns]);
-
-  const filteredLlmRuns = useMemo(() => {
-    return llmRuns.filter((run) => {
-      if (llmFeatureFilter !== "all" && run.feature !== llmFeatureFilter) return false;
-      if (llmStatusFilter !== "all" && run.status !== llmStatusFilter) return false;
-      if (llmModelFilter !== "all" && run.model !== llmModelFilter) return false;
-      return true;
-    });
-  }, [llmFeatureFilter, llmModelFilter, llmRuns, llmStatusFilter]);
-
-  const selectedLlmRun = useMemo(() => {
-    return filteredLlmRuns.find((run) => run.id === selectedLlmRunId) ?? filteredLlmRuns[0] ?? null;
-  }, [filteredLlmRuns, selectedLlmRunId]);
-
-  useEffect(() => {
-    if (!selectedLlmRun) {
-      if (selectedLlmRunId) setSelectedLlmRunId("");
-      return;
-    }
-    if (selectedLlmRun.id !== selectedLlmRunId) {
-      setSelectedLlmRunId(selectedLlmRun.id);
-    }
-  }, [selectedLlmRun, selectedLlmRunId]);
 
   const openAiSettingsDialog = useCallback(() => {
     setOpenAIApiKeyDraft(openAIApiKey);
@@ -1884,11 +1814,13 @@ export function CreatorHub({
                       <Button
                         type="button"
                         variant="ghost"
+                        asChild
                         className="bg-white/5 text-white/85 hover:bg-white/10"
-                        onClick={() => setIsLlmHistoryOpen(true)}
                       >
-                        <CalendarClock className="mr-2 h-4 w-4" />
-                        AI Runs
+                        <Link href={aiRunsHref}>
+                          <CalendarClock className="mr-2 h-4 w-4" />
+                          AI Runs
+                        </Link>
                       </Button>
                       <Button
                         type="button"
@@ -3570,277 +3502,6 @@ export function CreatorHub({
           </>
         )}
       </div>
-
-      <Dialog open={isLlmHistoryOpen} onOpenChange={setIsLlmHistoryOpen}>
-        <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-6xl">
-          <DialogHeader>
-            <DialogTitle>AI Runs</DialogTitle>
-            <DialogDescription className="text-white/55">
-              Prompt, response, latency, and model traces stored in this browser.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-[1fr_1fr_1fr_auto_auto]">
-              <Select value={llmFeatureFilter} onValueChange={(value) => setLlmFeatureFilter(value as typeof llmFeatureFilter)}>
-                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
-                  <SelectValue placeholder="Feature" />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                  <SelectItem value="all">All features</SelectItem>
-                  <SelectItem value="shorts">Shorts</SelectItem>
-                  <SelectItem value="video_info">Video info</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={llmStatusFilter} onValueChange={(value) => setLlmStatusFilter(value as typeof llmStatusFilter)}>
-                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
-                  <SelectValue placeholder="Status" />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                  <SelectItem value="all">All statuses</SelectItem>
-                  <SelectItem value="success">Success</SelectItem>
-                  <SelectItem value="provider_error">Provider error</SelectItem>
-                  <SelectItem value="parse_error">Parse error</SelectItem>
-                  <SelectItem value="validation_error">Validation error</SelectItem>
-                </SelectContent>
-              </Select>
-
-              <Select value={llmModelFilter} onValueChange={setLlmModelFilter}>
-                <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
-                  <SelectValue placeholder="Model" />
-                </SelectTrigger>
-                <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                  <SelectItem value="all">All models</SelectItem>
-                  {llmModels.map((model) => (
-                    <SelectItem key={model} value={model}>
-                      {model}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Button
-                type="button"
-                variant="ghost"
-                className="bg-white/5 text-white/80 hover:bg-white/10"
-                onClick={() => downloadJson(`clipscribe-ai-runs-${Date.now()}.json`, filteredLlmRuns)}
-                disabled={filteredLlmRuns.length === 0}
-              >
-                <Download className="mr-2 h-4 w-4" />
-                Export JSON
-              </Button>
-
-              <Button
-                type="button"
-                variant="ghost"
-                className="bg-white/5 text-white/80 hover:bg-red-500/10 hover:text-red-100"
-                onClick={() => {
-                  const targetIds = filteredLlmRuns.map((run) => run.id);
-                  if (targetIds.length === 0) return;
-                  if (!window.confirm(`Delete ${targetIds.length} AI run${targetIds.length === 1 ? "" : "s"}?`)) return;
-                  if (targetIds.length === llmRuns.length) {
-                    void clearLlmRuns();
-                    return;
-                  }
-                  void deleteLlmRuns(targetIds);
-                }}
-                disabled={filteredLlmRuns.length === 0}
-              >
-                <Trash2 className="mr-2 h-4 w-4" />
-                Delete Visible
-              </Button>
-            </div>
-
-            <div className="grid gap-4 lg:grid-cols-[minmax(0,340px)_minmax(0,1fr)]">
-              <div className="max-h-[60vh] space-y-3 overflow-auto pr-1">
-                {isLoadingLlmRuns && (
-                  <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/60">
-                    Loading runs...
-                  </div>
-                )}
-                {!isLoadingLlmRuns && filteredLlmRuns.length === 0 && (
-                  <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-6 text-sm text-white/60">
-                    No runs match the current filters.
-                  </div>
-                )}
-                {filteredLlmRuns.map((run) => {
-                  const isActive = selectedLlmRun?.id === run.id;
-                  return (
-                    <div
-                      key={run.id}
-                      role="button"
-                      tabIndex={0}
-                      className={cn(
-                        "w-full rounded-xl border p-4 text-left transition",
-                        isActive
-                          ? "border-cyan-400/30 bg-cyan-500/10 shadow-[0_0_0_1px_rgba(34,211,238,0.15)]"
-                          : "border-white/10 bg-black/20 hover:border-white/20 hover:bg-white/[0.06]"
-                      )}
-                      onClick={() => setSelectedLlmRunId(run.id)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") {
-                          event.preventDefault();
-                          setSelectedLlmRunId(run.id);
-                        }
-                      }}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <Badge variant="outline" className="border-white/15 bg-white/5 text-white/80">
-                              {run.feature === "video_info" ? "Video Info" : "Shorts"}
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className={cn(
-                                "border-white/15",
-                                run.status === "success"
-                                  ? "bg-emerald-400/10 text-emerald-100"
-                                  : "bg-amber-400/10 text-amber-100"
-                              )}
-                            >
-                              {run.status}
-                            </Badge>
-                          </div>
-                          <div className="text-sm font-semibold text-white/90 break-all">{run.model}</div>
-                          <div className="text-xs text-white/50">
-                            {new Date(run.startedAt).toLocaleString()} · {formatDurationMs(run.durationMs)}
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="h-8 px-2 text-white/60 hover:bg-white/10 hover:text-red-100"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            if (!window.confirm("Delete this AI run?")) return;
-                            void deleteLlmRun(run.id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="max-h-[60vh] overflow-auto rounded-2xl border border-white/10 bg-black/20 p-4">
-                {selectedLlmRun ? (
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="outline" className="border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
-                        {selectedLlmRun.feature === "video_info" ? "Video Info" : "Shorts"}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className={cn(
-                          "border-white/15",
-                          selectedLlmRun.status === "success"
-                            ? "bg-emerald-400/10 text-emerald-100"
-                            : "bg-amber-400/10 text-amber-100"
-                        )}
-                      >
-                        {selectedLlmRun.status}
-                      </Badge>
-                      <Badge variant="outline" className="border-white/15 bg-white/5 text-white/75">
-                        {selectedLlmRun.promptVersion}
-                      </Badge>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Model</div>
-                        <div className="mt-1 text-sm font-medium text-white/90 break-all">{selectedLlmRun.model}</div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Duration</div>
-                        <div className="mt-1 text-sm font-medium text-white/90">{formatDurationMs(selectedLlmRun.durationMs)}</div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Tokens</div>
-                        <div className="mt-1 text-sm font-medium text-white/90">{selectedLlmRun.usage?.totalTokens ?? "n/a"}</div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Estimated Cost</div>
-                        <div className="mt-1 text-sm font-medium text-white/90">{formatUsd(selectedLlmRun.estimatedCostUsd)}</div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/75">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Input Summary</div>
-                        <div className="mt-2 space-y-1">
-                          <div>Transcript chars: {selectedLlmRun.inputSummary.transcriptCharCount}</div>
-                          <div>Transcript chunks: {selectedLlmRun.inputSummary.transcriptChunkCount}</div>
-                          <div>Subtitle chunks: {selectedLlmRun.inputSummary.subtitleChunkCount}</div>
-                          {selectedLlmRun.inputSummary.niche && <div>Niche: {selectedLlmRun.inputSummary.niche}</div>}
-                          {selectedLlmRun.inputSummary.audience && <div>Audience: {selectedLlmRun.inputSummary.audience}</div>}
-                          {selectedLlmRun.inputSummary.tone && <div>Tone: {selectedLlmRun.inputSummary.tone}</div>}
-                          {selectedLlmRun.inputSummary.videoInfoBlocks?.length ? (
-                            <div>Blocks: {selectedLlmRun.inputSummary.videoInfoBlocks.join(", ")}</div>
-                          ) : null}
-                        </div>
-                      </div>
-                      <div className="rounded-xl border border-white/10 bg-white/5 p-3 text-sm text-white/75">
-                        <div className="text-[11px] uppercase tracking-wider text-white/45">Trace Meta</div>
-                        <div className="mt-2 space-y-1 break-all">
-                          <div>Operation: {selectedLlmRun.operation}</div>
-                          <div>Fingerprint: {selectedLlmRun.requestFingerprint}</div>
-                          <div>Fetch: {formatDurationMs(selectedLlmRun.fetchDurationMs)}</div>
-                          <div>Parse: {formatDurationMs(selectedLlmRun.parseDurationMs)}</div>
-                          <div>Exportable: {selectedLlmRun.exportable ? "yes" : "no"}</div>
-                          <div>Redaction: {selectedLlmRun.redactionState}</div>
-                          {selectedLlmRun.errorMessage && <div>Error: {selectedLlmRun.errorMessage}</div>}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-                      <div className="space-y-2 xl:col-span-1">
-                        <div className="text-xs uppercase tracking-wider text-white/45">Request Payload</div>
-                        <Textarea
-                          readOnly
-                          value={stringifyForDebug(selectedLlmRun.requestPayloadRaw)}
-                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
-                        />
-                      </div>
-                      <div className="space-y-2 xl:col-span-1">
-                        <div className="text-xs uppercase tracking-wider text-white/45">Provider Response</div>
-                        <Textarea
-                          readOnly
-                          value={stringifyForDebug(selectedLlmRun.responsePayloadRaw)}
-                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
-                        />
-                      </div>
-                      <div className="space-y-2 xl:col-span-1">
-                        <div className="text-xs uppercase tracking-wider text-white/45">Parsed Output</div>
-                        <Textarea
-                          readOnly
-                          value={stringifyForDebug(selectedLlmRun.parsedOutputSnapshot)}
-                          className="min-h-[260px] border-white/10 bg-white/5 font-mono text-[11px] text-white/80"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex min-h-[240px] items-center justify-center text-sm text-white/55">
-                    {isLoadingLlmRuns ? "Loading runs..." : "Select a run to inspect its trace."}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {llmRunsError && (
-              <Alert className="border-red-400/20 bg-red-500/10 text-red-100">
-                <AlertTitle>Failed to load AI runs</AlertTitle>
-                <AlertDescription>{llmRunsError}</AlertDescription>
-              </Alert>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
 
       <Dialog open={isAiSettingsOpen} onOpenChange={setIsAiSettingsOpen}>
         <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-lg">

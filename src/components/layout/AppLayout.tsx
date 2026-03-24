@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { 
+  CalendarClock,
   ChevronLeft, 
   ChevronRight, 
   FolderKanban, 
@@ -32,6 +33,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const currentTab = searchParams.get("tab") || "assets";
 
   const isProjectView = !!projectId;
+  const isAiRunsView = pathname === "/creator/runs";
 
   const projectLinks = [
     { id: "assets", label: "Assets", icon: Film },
@@ -72,13 +74,25 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
               href="/"
               className={cn(
                 "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
-                !isProjectView 
+                !isProjectView && !isAiRunsView 
                   ? "bg-white/10 text-white" 
                   : "text-white/60 hover:bg-white/5 hover:text-white"
               )}
             >
-              <FolderKanban className={cn("h-5 w-5", !isProjectView ? "text-cyan-400" : "text-white/50 group-hover:text-white")} />
+              <FolderKanban className={cn("h-5 w-5", !isProjectView && !isAiRunsView ? "text-cyan-400" : "text-white/50 group-hover:text-white")} />
               {!isCollapsed && <span>Library</span>}
+            </Link>
+            <Link
+              href="/creator/runs"
+              className={cn(
+                "group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-colors",
+                isAiRunsView
+                  ? "bg-white/10 text-white"
+                  : "text-white/60 hover:bg-white/5 hover:text-white"
+              )}
+            >
+              <CalendarClock className={cn("h-5 w-5", isAiRunsView ? "text-cyan-400" : "text-white/50 group-hover:text-white")} />
+              {!isCollapsed && <span>AI Runs</span>}
             </Link>
           </nav>
 
@@ -146,6 +160,10 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
                    )}
                  </SelectContent>
               </Select>
+            ) : isAiRunsView ? (
+              <h2 className="text-sm font-medium text-white/70 px-2 flex items-center gap-2 h-8">
+                <CalendarClock className="w-4 h-4 text-cyan-400" /> AI Runs Workbench
+              </h2>
             ) : (
               <h2 className="text-sm font-medium text-white/70 px-2 flex items-center gap-2 h-8">
                 <FolderKanban className="w-4 h-4 text-cyan-400" /> Dashboard Overview
