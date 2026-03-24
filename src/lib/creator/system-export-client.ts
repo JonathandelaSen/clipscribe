@@ -16,6 +16,7 @@ import { assertExportGeometryInvariants } from "@/lib/creator/core/export-contra
 import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
 import { resolveCreatorSuggestedShort } from "@/lib/creator/shorts-compat";
 import { renderSubtitlesToPngs } from "@/lib/creator/subtitle-canvas";
+import { trimSourceForExport } from "@/lib/creator/source-trim";
 import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
 import type {
   CreatorShortEditorState,
@@ -31,9 +32,10 @@ const OUTPUT_HEIGHT = 1920;
 const FAST_SEEK_CUSHION_SECONDS = 3;
 const PROGRESS = {
   init: 2,
-  geometryReady: 6,
-  introReady: 10,
-  outroReady: 14,
+  geometryReady: 5,
+  trimReady: 12,
+  introReady: 14,
+  outroReady: 16,
   subtitlesReady: 20,
   renderStart: 20,
   renderMax: 92,
@@ -132,8 +134,6 @@ export async function requestSystemCreatorShortExport(
     plan: input.plan,
   });
   const clipDurationSeconds = Math.max(0.5, short.endSeconds - short.startSeconds);
-  const inputSeekSeconds = Math.max(0, short.startSeconds - FAST_SEEK_CUSHION_SECONDS);
-  const exactTrimAfterSeekSeconds = Math.max(0, short.startSeconds - inputSeekSeconds);
 
   let lastProgressPct = 0;
   const emitProgress = (pct: number) => {
@@ -169,6 +169,31 @@ export async function requestSystemCreatorShortExport(
   );
   emitProgress(PROGRESS.geometryReady);
 
+  // Pre-trim source video to just the needed segment using -c copy (no re-encoding).
+  // This dramatically reduces upload size from potentially GBs to a few MB.
+  const trimResult = await trimSourceForExport({
+    sourceFile: input.sourceFile,
+    clipStartSeconds: short.startSeconds,
+    clipEndSeconds: short.endSeconds,
+    signal: input.renderLifecycle?.signal,
+  });
+  throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+  emitProgress(PROGRESS.trimReady);
+
+  // Adjust the short timestamps to be relative to the trimmed file
+  const trimOffset = trimResult.trimmedOffsetSeconds;
+  const adjustedShort = trimOffset > 0
+    ? {
+        ...short,
+        startSeconds: short.startSeconds - trimOffset,
+        endSeconds: short.endSeconds - trimOffset,
+      }
+    : short;
+
+  // Recompute seek values for the adjusted short
+  const adjustedInputSeekSeconds = Math.max(0, adjustedShort.startSeconds - FAST_SEEK_CUSHION_SECONDS);
+  const adjustedExactTrimAfterSeekSeconds = Math.max(0, adjustedShort.startSeconds - adjustedInputSeekSeconds);
+
   const introOverlayFrames = await renderTextOverlayToPngFrames({
     overlay: input.editor.introOverlay ?? {
       enabled: false,
@@ -182,7 +207,7 @@ export async function requestSystemCreatorShortExport(
     },
     slot: "intro",
     clipDurationSeconds: short.durationSeconds,
-    timeOffsetSeconds: exactTrimAfterSeekSeconds,
+    timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
     signal: input.renderLifecycle?.signal,
   });
   emitProgress(PROGRESS.introReady);
@@ -200,16 +225,16 @@ export async function requestSystemCreatorShortExport(
     },
     slot: "outro",
     clipDurationSeconds: short.durationSeconds,
-    timeOffsetSeconds: exactTrimAfterSeekSeconds,
+    timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
     signal: input.renderLifecycle?.signal,
   });
   emitProgress(PROGRESS.outroReady);
 
   const subtitleFrames = await renderSubtitlesToPngs(
     input.subtitleChunks ?? [],
-    short,
+    adjustedShort,
     input.editor,
-    exactTrimAfterSeekSeconds,
+    adjustedExactTrimAfterSeekSeconds,
     input.renderLifecycle?.signal
   );
   emitProgress(PROGRESS.subtitlesReady);
@@ -220,7 +245,7 @@ export async function requestSystemCreatorShortExport(
   const formData = new FormData();
   const payload: CreatorShortSystemExportPayload = {
     sourceFilename: input.sourceFilename,
-    short,
+    short: adjustedShort,
     editor: input.editor,
     sourceVideoSize: input.sourceVideoSize,
     geometry,
@@ -236,7 +261,7 @@ export async function requestSystemCreatorShortExport(
 
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.engine, "system");
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.payload, JSON.stringify(payload));
-  formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.sourceFile, input.sourceFile, input.sourceFile.name);
+  formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.sourceFile, trimResult.trimmedFile, trimResult.trimmedFile.name);
 
   overlayFrames.forEach((frame, index) => {
     const fileField = `overlay_${index}`;
