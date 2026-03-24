@@ -732,7 +732,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const deferredLibrarySearch = useDeferredValue(librarySearch);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [exportResolution, setExportResolution] = useState<EditorResolution>("1080p");
-  const [exportEngine, setExportEngine] = useState<EditorExportEngine>("browser");
+  const [exportEngine, setExportEngine] = useState<EditorExportEngine>("system");
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState<ExportDestination | null>(null);
   const [isPickingExportDestination, setIsPickingExportDestination] = useState(false);

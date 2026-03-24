@@ -87,7 +87,6 @@ import {
   buildAiSuggestionProjectRecords,
   buildAiSuggestionSourceSignature,
   buildCompletedShortExportRecord,
-  buildLocalBrowserRenderResponse,
   buildShortProjectRecord,
   markShortProjectExported,
   markShortProjectFailed,
@@ -96,8 +95,8 @@ import {
 } from "@/lib/creator/core/short-lifecycle";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { createEditorAssetRecord } from "@/lib/editor/storage";
-import { resetFFmpeg } from "@/lib/ffmpeg";
-import { exportShortVideoLocally } from "@/lib/creator/local-render";
+import { buildCompletedCreatorShortRenderResponse } from "@/lib/creator/system-export-contract";
+import { requestSystemCreatorShortExport } from "@/lib/creator/system-export-client";
 import {
   COMMON_SUBTITLE_STYLE_PRESETS,
   CREATOR_SUBTITLE_STYLE_LABELS,
@@ -1996,7 +1995,7 @@ export function CreatorHub({
       return;
     }
     if (!isVideoMedia) {
-      toast.error("Local export currently requires a video source.", {
+      toast.error("Short export requires a video source.", {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
       });
       return;
@@ -2033,7 +2032,6 @@ export function CreatorHub({
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
           session.controller.abort();
-          resetFFmpeg();
           shortExportSessionRef.current = null;
           setIsExportingShort(false);
           setShortExportStage("preparing");
@@ -2148,7 +2146,7 @@ export function CreatorHub({
           const frameRect = previewFrameElRef.current?.getBoundingClientRect();
           const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
 
-          const localExport = await exportShortVideoLocally({
+          const systemExport = await requestSystemCreatorShortExport({
             sourceFile: mediaFile,
             sourceFilename: mediaFilename || selectedProject.filename,
             clip: exportClip,
@@ -2181,9 +2179,6 @@ export function CreatorHub({
           });
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           bumpExportProgress(97);
-
-          const exportedVideoMetadata = await readVideoMetadata(localExport.file);
-          if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           const now = Date.now();
           const outputAsset = createEditorAssetRecord({
             projectId: currentShortTaskProjectId || selectedProject.id,
@@ -2191,16 +2186,16 @@ export function CreatorHub({
             origin: "short-export",
             derivedFromAssetId: selectedSourceAssetId || selectedProject.id,
             kind: "video",
-            filename: localExport.file.name,
-            mimeType: localExport.file.type || "video/mp4",
-            sizeBytes: localExport.file.size,
-            durationSeconds: exportedVideoMetadata.durationSeconds ?? exportClip.durationSeconds,
-            width: exportedVideoMetadata.width,
-            height: exportedVideoMetadata.height,
+            filename: systemExport.file.name,
+            mimeType: systemExport.file.type || "video/mp4",
+            sizeBytes: systemExport.file.size,
+            durationSeconds: systemExport.durationSeconds || exportClip.durationSeconds,
+            width: systemExport.width,
+            height: systemExport.height,
             hasAudio: true,
             sourceType: "upload",
             captionSource: { kind: "none" },
-            fileBlob: localExport.file,
+            fileBlob: systemExport.file,
             now,
           });
 
@@ -2229,12 +2224,12 @@ export function CreatorHub({
             clip: exportClip,
             editor: currentEditorState,
             createdAt: now,
-            filename: localExport.file.name,
-            mimeType: localExport.file.type || "video/mp4",
-            sizeBytes: localExport.file.size,
-            fileBlob: localExport.file,
-            debugFfmpegCommand: localExport.ffmpegCommandPreview,
-            debugNotes: localExport.notes,
+            filename: systemExport.file.name,
+            mimeType: systemExport.file.type || "video/mp4",
+            sizeBytes: systemExport.file.size,
+            fileBlob: systemExport.file,
+            debugFfmpegCommand: systemExport.ffmpegCommandPreview,
+            debugNotes: systemExport.notes,
           });
 
           await upsertExport(exportRecord);
@@ -2249,14 +2244,15 @@ export function CreatorHub({
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           bumpExportProgress(99);
 
-          const renderResult = buildLocalBrowserRenderResponse({
+          const renderResult = buildCompletedCreatorShortRenderResponse({
+            providerMode: "system",
             jobId: exportRecord.id,
             createdAt: exportRecord.createdAt,
-            plan: selectedPlan,
             filename: exportRecord.filename,
-            subtitleBurnedIn: localExport.subtitleBurnedIn,
-            ffmpegCommandPreview: localExport.ffmpegCommandPreview,
-            notes: localExport.notes,
+            subtitleBurnedIn: systemExport.subtitleBurnedIn,
+            ffmpegCommandPreview: systemExport.ffmpegCommandPreview,
+            notes: systemExport.notes,
+            durationSeconds: systemExport.durationSeconds,
           });
           syncShortExportStage(session.id, "complete");
           setLastRender(renderResult);
@@ -4204,7 +4200,7 @@ export function CreatorHub({
                             {!isVideoMedia && mediaFilename && (
                               <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 flex items-start gap-2">
                                 <TriangleAlert className="w-4 h-4 mt-0.5 shrink-0" />
-                                Current source is audio-only. Save config is available, local MP4 export needs a video source.
+                                Current source is audio-only. Save config is available, MP4 export needs a video source.
                               </div>
                             )}
                             {!canRender && !isActiveShortExportTask && (
@@ -4234,7 +4230,7 @@ export function CreatorHub({
                                   ? activeShortExportTask?.status === "finalizing"
                                     ? `Finalizing ${Math.round(activeShortExportTask.progress ?? exportProgressPct)}%`
                                     : `Exporting ${Math.round(activeShortExportTask?.progress ?? exportProgressPct)}%`
-                                  : "Export Short (Local)"}
+                                  : "Export Short"}
                               </Button>
                               {canCancelShortExport && (
                                 <Button
@@ -4302,7 +4298,7 @@ export function CreatorHub({
                                 </div>
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="text-xs text-white/55">
-                                    {activeShortExportTask?.message || "Local ffmpeg.wasm render in progress… keep this tab open."}
+                                    {activeShortExportTask?.message || "System short render in progress... keep this tab open."}
                                   </div>
                                   {canCancelShortExport ? (
                                     <Button

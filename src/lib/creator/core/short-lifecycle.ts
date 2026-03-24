@@ -1,12 +1,12 @@
 import type {
   CreatorShortPlan,
-  CreatorShortRenderResponse,
   CreatorSuggestedShort,
   CreatorShortsGenerateRequest,
   CreatorShortsGenerateResponse,
   CreatorShortEditorState,
   CreatorViralClip,
 } from "@/lib/creator/types";
+import { buildCompletedCreatorShortRenderResponse } from "../system-export-contract";
 import type {
   CreatorAISuggestionInputSummary,
   CreatorShortExportRecord,
@@ -362,24 +362,14 @@ export function buildLocalBrowserRenderResponse(input: {
   subtitleBurnedIn: boolean;
   ffmpegCommandPreview: string[];
   notes: string[];
-}): CreatorShortRenderResponse {
-  return {
-    ok: true,
+}) {
+  return buildCompletedCreatorShortRenderResponse({
     providerMode: "local-browser",
     jobId: input.jobId,
-    status: "completed",
     createdAt: input.createdAt,
-    estimatedSeconds: 0,
-    output: {
-
-      filename: input.filename,
-      aspectRatio: "9:16",
-      resolution: "1080x1920",
-      subtitleBurnedIn: input.subtitleBurnedIn,
-    },
-    debugPreview: {
-      ffmpegCommandPreview: input.ffmpegCommandPreview,
-      notes: input.notes,
-    },
-  };
+    filename: input.filename,
+    subtitleBurnedIn: input.subtitleBurnedIn,
+    ffmpegCommandPreview: input.ffmpegCommandPreview,
+    notes: input.notes,
+  });
 }

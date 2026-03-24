@@ -2,12 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { CreatorViralClip } from "../../../src/lib/creator/types";
+import { buildCompletedCreatorShortRenderResponse } from "../../../src/lib/creator/system-export-contract";
 import {
   buildAiSuggestionInputSummary,
   buildAiSuggestionProjectRecords,
   buildAiSuggestionSourceSignature,
   buildCompletedShortExportRecord,
-  buildLocalBrowserRenderResponse,
   buildShortProjectRecord,
   deriveDefaultShortProjectName,
   markShortProjectExported,
@@ -306,7 +306,7 @@ test("restoreShortProjectAfterCanceledExport keeps current config and restores p
   assert.equal(restored.updatedAt, 250);
 });
 
-test("buildCompletedShortExportRecord and render response produce stable local-browser payloads", () => {
+test("buildCompletedShortExportRecord and render response produce stable system payloads", () => {
   const exportRecord = buildCompletedShortExportRecord({
     id: "exp_1",
     shortProjectId: "sp_1",
@@ -327,17 +327,17 @@ test("buildCompletedShortExportRecord and render response produce stable local-b
   assert.equal(exportRecord.status, "completed");
   assert.equal(exportRecord.filename, "out.mp4");
 
-  const response = buildLocalBrowserRenderResponse({
+  const response = buildCompletedCreatorShortRenderResponse({
+    providerMode: "system",
     jobId: exportRecord.id,
     createdAt: exportRecord.createdAt,
-    plan: samplePlan,
     filename: exportRecord.filename,
     subtitleBurnedIn: true,
     ffmpegCommandPreview: exportRecord.debugFfmpegCommand || [],
     notes: exportRecord.debugNotes || [],
   });
 
-  assert.equal(response.providerMode, "local-browser");
+  assert.equal(response.providerMode, "system");
   assert.equal(response.output.filename, "out.mp4");
   assert.equal(response.output.subtitleBurnedIn, true);
   assert.deepEqual(response.debugPreview.notes, ["note 1"]);

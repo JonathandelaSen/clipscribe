@@ -196,7 +196,7 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
     latestExport: project.latestExport
       ? {
           ...(project.latestExport as LegacyEditorExportSummary),
-          engine: project.latestExport.engine === "system" ? "system" : "browser",
+          engine: project.latestExport.engine === "browser" ? "browser" : "system",
         }
       : undefined,
     timeline: {
@@ -222,7 +222,7 @@ export function normalizeLegacyEditorExportRecord(
 ): EditorExportRecord {
   return {
     ...record,
-    engine: record.engine === "system" ? "system" : "browser",
+    engine: record.engine === "browser" ? "browser" : "system",
   };
 }
 

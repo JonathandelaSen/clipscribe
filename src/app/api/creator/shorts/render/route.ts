@@ -1,33 +1,60 @@
-import { renderCreatorShort } from "@/lib/server/creator/shorts/render-service";
-import type { CreatorShortRenderRequest } from "@/lib/creator/types";
+import { buildCreatorShortSystemExportResponseHeaders } from "@/lib/creator/system-export-contract";
+import {
+  parseCreatorShortSystemExportFormData,
+  renderCreatorShortSystemExport,
+} from "@/lib/server/creator/shorts/render-service";
+import { isCreatorSystemRenderCanceledError } from "@/lib/server/creator/shorts/system-render";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type LooseRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is LooseRecord {
-  return !!value && typeof value === "object";
-}
-
-function badRequest(message: string) {
-  return Response.json({ ok: false, error: message }, { status: 400 });
+function errorJson(message: string, status: number) {
+  return Response.json({ ok: false, error: message }, { status });
 }
 
 export async function POST(request: Request) {
-  let body: unknown;
+  let formData: FormData;
   try {
-    body = (await request.json()) as unknown;
+    formData = await request.formData();
   } catch {
-    return badRequest("Invalid JSON body");
+    return errorJson("Invalid form data body", 400);
   }
 
-  if (!isRecord(body)) return badRequest("Request body must be an object");
-  if (typeof body.filename !== "string" || !body.filename.trim()) return badRequest("filename is required");
-  if (!isRecord(body.short)) return badRequest("short is required");
-  if (!isRecord(body.editor)) return badRequest("editor is required");
+  let payload;
+  try {
+    payload = parseCreatorShortSystemExportFormData(formData);
+  } catch (error) {
+    return errorJson(error instanceof Error ? error.message : "Invalid export request", 400);
+  }
 
-  const payload = body as unknown as CreatorShortRenderRequest;
-  const result = await renderCreatorShort(payload);
-  return Response.json(result);
+  try {
+    const result = await renderCreatorShortSystemExport({
+      payload: payload.payload,
+      sourceFile: payload.sourceFile,
+      overlays: payload.overlays,
+      signal: request.signal,
+    });
+
+    return new Response(result.bytes, {
+      status: 200,
+      headers: {
+        "content-type": result.mimeType,
+        ...buildCreatorShortSystemExportResponseHeaders({
+          filename: result.filename,
+          width: result.width,
+          height: result.height,
+          sizeBytes: result.sizeBytes,
+          durationSeconds: result.durationSeconds,
+          subtitleBurnedIn: result.subtitleBurnedIn,
+          debugNotes: result.debugNotes,
+          debugFfmpegCommand: result.debugFfmpegCommand,
+        }),
+      },
+    });
+  } catch (error) {
+    if (isCreatorSystemRenderCanceledError(error) || request.signal.aborted) {
+      return new Response(null, { status: 499 });
+    }
+    return errorJson(error instanceof Error ? error.message : "System short export failed", 422);
+  }
 }
