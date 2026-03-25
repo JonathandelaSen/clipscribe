@@ -213,6 +213,7 @@ export interface CreatorVerticalEditorPreset {
 }
 
 export type CreatorSubtitleTextCase = "original" | "uppercase";
+export type CreatorSubtitleTimingMode = "segment" | "word" | "pair";
 export type CreatorTextOverlayTextCase = "original" | "uppercase";
 export type CreatorTextOverlayPreset = "headline_bold" | "glass_card" | "neon_punch";
 
@@ -270,6 +271,7 @@ export interface CreatorShortEditorState {
   subtitleScale: number;
   subtitleXPositionPct: number;
   subtitleYOffsetPct: number;
+  subtitleTimingMode?: CreatorSubtitleTimingMode;
   showSubtitles?: boolean;
   showSafeZones?: boolean;
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;

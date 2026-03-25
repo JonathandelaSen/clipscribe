@@ -5,6 +5,7 @@ import {
   getLatestTranscript,
   getSubtitleById,
   getTranscriptById,
+  shiftSubtitleChunks,
   sortSubtitleVersions,
   sortTranscriptVersions,
   type HistoryItem,
@@ -164,6 +165,7 @@ export function HistoryItemCard({
 
   const [expandedText, setExpandedText] = useState(autoExpand);
   const [expandedChunks, setExpandedChunks] = useState(autoExpand);
+  const [subtitleDisplayMode, setSubtitleDisplayMode] = useState<"readable" | "original">("readable");
   const [copiedTxt, setCopiedTxt] = useState(false);
   const [copiedSrt, setCopiedSrt] = useState(false);
 
@@ -328,6 +330,24 @@ export function HistoryItemCard({
 
   const selectedTranscriptText = selectedTranscript?.transcript || "";
   const selectedTranscriptChunks = selectedTranscript?.chunks || [];
+  const selectedSubtitleShiftSeconds = selectedSubtitle?.shiftSeconds ?? 0;
+  const originalWordTimingChunks = useMemo(() => {
+    if (!selectedTranscript?.wordChunks?.length) return [];
+    const shiftSeconds = selectedSubtitleShiftSeconds;
+    return shiftSeconds !== 0
+      ? shiftSubtitleChunks(selectedTranscript.wordChunks, shiftSeconds)
+      : selectedTranscript.wordChunks;
+  }, [selectedSubtitleShiftSeconds, selectedTranscript]);
+  const canViewOriginalWordTiming = originalWordTimingChunks.length > 0;
+  const effectiveSubtitleDisplayMode =
+    subtitleDisplayMode === "original" && canViewOriginalWordTiming ? "original" : "readable";
+  const displayedSubtitleChunks = useMemo(() => {
+    if (!selectedSubtitle) return [];
+    if (effectiveSubtitleDisplayMode === "original" && originalWordTimingChunks.length > 0) {
+      return originalWordTimingChunks;
+    }
+    return selectedSubtitle.chunks;
+  }, [effectiveSubtitleDisplayMode, originalWordTimingChunks, selectedSubtitle]);
 
   const canTranslate = !!selectedSubtitle && !!selectedTranscript && TRANSLATION_LANG_SET.has(effectiveTranslationSourceLang);
   const translationWouldBeNoop = selectedSubtitle
@@ -752,6 +772,25 @@ export function HistoryItemCard({
                 <MessageSquare className="w-4 h-4 mr-2" />
                 {expandedChunks ? "Hide Subtitles" : "View Subtitles"}
               </Button>
+              {selectedSubtitle && (
+                <Select
+                  value={effectiveSubtitleDisplayMode}
+                  onValueChange={(value) => setSubtitleDisplayMode(value as "readable" | "original")}
+                  disabled={!canViewOriginalWordTiming}
+                >
+                  <SelectTrigger className="w-full sm:w-[240px] bg-white/5 border-white/10 text-white/80">
+                    <SelectValue placeholder="Subtitle view" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10 text-white/90">
+                    <SelectItem value="readable" className="focus:bg-fuchsia-500/20 cursor-pointer">
+                      Readable
+                    </SelectItem>
+                    <SelectItem value="original" className="focus:bg-fuchsia-500/20 cursor-pointer">
+                      Original word timing
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <div className="flex items-center bg-white/[0.03] rounded-lg p-1 border border-white/5">
                 <Button
                   variant="ghost"
@@ -790,6 +829,9 @@ export function HistoryItemCard({
               <span className="px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/70">
                 Shift: {formatShiftSeconds(selectedSubtitle.shiftSeconds)}
               </span>
+              <span className="px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/70">
+                View: {effectiveSubtitleDisplayMode === "original" ? "Original word timing" : "Readable"}
+              </span>
               {selectedSubtitle.sourceLanguage && (
                 <span className="px-2 py-1 rounded-md bg-white/5 border border-white/10 text-white/70">
                   Source: {selectedSubtitle.sourceLanguage.toUpperCase()}
@@ -804,6 +846,11 @@ export function HistoryItemCard({
             </div>
           ) : (
             <div className="text-sm text-white/50">No subtitle versions yet. They will appear when transcript chunks are available.</div>
+          )}
+          {selectedSubtitle && effectiveSubtitleDisplayMode === "original" && canViewOriginalWordTiming && (
+            <div className="text-xs text-amber-100/85 rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2">
+              Showing the source-language word-timed subtitle track derived from the transcript. This is the precise timing layer used for pop captions.
+            </div>
           )}
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -916,7 +963,7 @@ export function HistoryItemCard({
 
         {expandedChunks && selectedSubtitle && (
           <div className="space-y-3 bg-black/20 border border-white/5 rounded-2xl p-6 animate-in fade-in slide-in-from-top-4 max-h-[28rem] overflow-auto">
-            {selectedSubtitle.chunks.map((chunk, i) => (
+            {displayedSubtitleChunks.map((chunk, i) => (
               <div
                 key={`${selectedSubtitle.id}-${i}`}
                 className="flex gap-4 p-3 hover:bg-white/5 rounded-xl transition-colors cursor-pointer group"

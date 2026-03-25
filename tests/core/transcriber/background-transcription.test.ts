@@ -119,7 +119,10 @@ test("startBackgroundTranscriptionTask persists progress and final transcript ou
         output: {
           text: "hola mundo",
           language: "es",
-          chunks: [{ text: "hola mundo", timestamp: [0, 1] }],
+          chunks: [
+            { text: "hola", timestamp: [0, 0.45] },
+            { text: "mundo", timestamp: [0.45, 1] },
+          ],
         },
       });
     });
@@ -151,6 +154,13 @@ test("startBackgroundTranscriptionTask persists progress and final transcript ou
   assert.equal(transcriptRecord?.transcripts[0].status, "completed");
   assert.equal(transcriptRecord?.transcripts[0].transcript, "hola mundo");
   assert.equal(transcriptRecord?.transcripts[0].detectedLanguage, "es");
+  assert.deepEqual(transcriptRecord?.transcripts[0].wordChunks, [
+    { text: "hola", timestamp: [0, 0.45] },
+    { text: "mundo", timestamp: [0.45, 1] },
+  ]);
+  assert.deepEqual(transcriptRecord?.transcripts[0].chunks, [
+    { text: "hola mundo", timestamp: [0, 1] },
+  ]);
   assert.equal(transcriptRecord?.transcripts[0].subtitles[0].kind, "original");
   assert.equal(updates.some((update) => update.progress === 42), true);
   assert.equal(worker.terminated, true);

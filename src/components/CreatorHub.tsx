@@ -45,6 +45,7 @@ import {
   getSubtitleById,
   getTranscriptById,
   makeId,
+  shiftSubtitleChunks,
   sortSubtitleVersions,
   sortTranscriptVersions,
   type HistoryItem,
@@ -58,6 +59,7 @@ import {
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
   type CreatorSubtitleStyleSettings,
+  type CreatorSubtitleTimingMode,
   type CreatorTextOverlayState,
   type CreatorTextOverlayStyleSettings,
   type CreatorVideoInfoGenerateRequest,
@@ -70,6 +72,7 @@ import {
   createManualFallbackPlan,
   deriveTrimNudgesFromSavedClip,
 } from "@/lib/creator/core/clip-editing";
+import { buildPopCaptionChunks } from "@/lib/creator/core/pop-captions";
 import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/clip-windowing";
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
@@ -1106,6 +1109,7 @@ export function CreatorHub({
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
+  const [subtitleTimingMode, setSubtitleTimingMode] = useState<CreatorSubtitleTimingMode>("pair");
   const [subtitleStyleOverrides, setSubtitleStyleOverrides] = useState<Partial<CreatorSubtitleStyleSettings>>({});
   const [showSubtitles, setShowSubtitles] = useState(true);
   const [showSafeZones, setShowSafeZones] = useState(true);
@@ -1370,6 +1374,7 @@ export function CreatorHub({
     setExportProgressPct(0);
     setIsPlaying(false);
     setShortProjectNameDraft("");
+    setSubtitleTimingMode("pair");
     setSubtitleStyleOverrides({});
     setShowSubtitles(true);
     setShowSafeZones(true);
@@ -1496,10 +1501,43 @@ export function CreatorHub({
     setIsMuted(video.muted);
   }, []);
 
+  const selectedWordLevelSubtitleChunks = useMemo(() => {
+    if (!selectedTranscript || !selectedSubtitle) return [];
+    if (subtitleTimingMode === "segment" || selectedSubtitle.kind === "translation") return [];
+
+    const sourceLanguage = (selectedSubtitle.sourceLanguage ?? selectedSubtitle.language ?? "").toLowerCase();
+    const transcriptLanguage = (
+      selectedTranscript.detectedLanguage ??
+      selectedTranscript.requestedLanguage ??
+      ""
+    ).toLowerCase();
+    if (!selectedTranscript.wordChunks?.length || !sourceLanguage || sourceLanguage !== transcriptLanguage) {
+      return [];
+    }
+
+    const shiftedWordChunks =
+      selectedSubtitle.shiftSeconds !== 0
+        ? shiftSubtitleChunks(selectedTranscript.wordChunks, selectedSubtitle.shiftSeconds)
+        : selectedTranscript.wordChunks;
+
+    return buildPopCaptionChunks(shiftedWordChunks, subtitleTimingMode);
+  }, [selectedSubtitle, selectedTranscript, subtitleTimingMode]);
+
+  const effectiveSubtitleTimingMode = useMemo<CreatorSubtitleTimingMode>(() => {
+    if (subtitleTimingMode !== "segment" && selectedWordLevelSubtitleChunks.length === 0) {
+      return "segment";
+    }
+    return subtitleTimingMode;
+  }, [selectedWordLevelSubtitleChunks.length, subtitleTimingMode]);
+
   const selectedClipSubtitleChunks = useMemo(() => {
     if (!editedClip || !selectedSubtitle) return [];
-    return clipSubtitleChunks(editedClip, selectedSubtitle.chunks);
-  }, [editedClip, selectedSubtitle]);
+    const sourceChunks =
+      effectiveSubtitleTimingMode === "segment"
+        ? selectedSubtitle.chunks
+        : selectedWordLevelSubtitleChunks;
+    return clipSubtitleChunks(editedClip, sourceChunks);
+  }, [editedClip, effectiveSubtitleTimingMode, selectedSubtitle, selectedWordLevelSubtitleChunks]);
 
   const activePreviewSubtitleChunk = useMemo(
     () => findSubtitleChunkAtTime(selectedClipSubtitleChunks, currentTime),
@@ -1533,6 +1571,7 @@ export function CreatorHub({
       subtitleScale,
       subtitleXPositionPct,
       subtitleYOffsetPct,
+      subtitleTimingMode,
       showSubtitles,
       subtitleStyle: subtitleStyleOverrides,
       showSafeZones,
@@ -1548,6 +1587,7 @@ export function CreatorHub({
       showSubtitles,
       subtitleScale,
       subtitleStyleOverrides,
+      subtitleTimingMode,
       subtitleXPositionPct,
       subtitleYOffsetPct,
       zoom,
@@ -1738,6 +1778,7 @@ export function CreatorHub({
       subtitleScale: 1,
       subtitleXPositionPct: 50,
       subtitleYOffsetPct: 78,
+      subtitleTimingMode: "pair",
       showSubtitles: true,
       subtitleStyle: {},
       showSafeZones: true,
@@ -1998,6 +2039,7 @@ export function CreatorHub({
     setSubtitleScale(hydratedEditor.subtitleScale);
     setSubtitleXPositionPct(hydratedEditor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(hydratedEditor.subtitleYOffsetPct);
+    setSubtitleTimingMode(hydratedEditor.subtitleTimingMode ?? "pair");
     setSubtitleStyleOverrides(resolveCreatorSubtitleStyle(project.plan.editorPreset.subtitleStyle, hydratedEditor.subtitleStyle));
     setShowSubtitles(hydratedEditor.showSubtitles ?? true);
     setShowSafeZones(hydratedEditor.showSafeZones ?? true);
@@ -2189,7 +2231,10 @@ export function CreatorHub({
           );
           const prepared = prepareShortExport({
             requestedClip: editedClip,
-            allSubtitleChunks: selectedSubtitle.chunks,
+            allSubtitleChunks:
+              effectiveSubtitleTimingMode === "segment"
+                ? selectedSubtitle.chunks
+                : selectedWordLevelSubtitleChunks,
             sourceDurationSeconds: sourceVideoMeta.durationSeconds,
             minClipDurationSeconds: 0.25,
           });
@@ -3752,6 +3797,9 @@ export function CreatorHub({
                             <div>Score: {selectedClip?.score ?? "n/a"}</div>
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
                             <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
+                            <div>
+                              Subtitle timing: {effectiveSubtitleTimingMode === "segment" ? "standard chunks" : effectiveSubtitleTimingMode === "word" ? "1 word pop" : "2 word pop"}
+                            </div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
                             {activeSavedShortProject && (
                               <div className={cn("font-medium", activeSavedShortProject.origin === "ai_suggestion" ? "text-fuchsia-200/90" : "text-emerald-200/90")}>
@@ -4028,6 +4076,33 @@ export function CreatorHub({
                             </label>
                             {showSubtitles ? (
                               <>
+                                <div className="space-y-2">
+                                  <label className="text-xs text-white/70 block">Subtitle display</label>
+                                  <Select
+                                    value={subtitleTimingMode}
+                                    onValueChange={(value) => setSubtitleTimingMode(value as CreatorSubtitleTimingMode)}
+                                  >
+                                    <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                                      <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                      <SelectItem value="segment" className="focus:bg-cyan-500/20 cursor-pointer">
+                                        Normal subtitles
+                                      </SelectItem>
+                                      <SelectItem value="word" className="focus:bg-cyan-500/20 cursor-pointer">
+                                        1 word
+                                      </SelectItem>
+                                      <SelectItem value="pair" className="focus:bg-cyan-500/20 cursor-pointer">
+                                        2 words
+                                      </SelectItem>
+                                    </SelectContent>
+                                  </Select>
+                                  {effectiveSubtitleTimingMode !== subtitleTimingMode && (
+                                    <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
+                                      Word-timed pop captions are only available for source-language subtitles with saved word timestamps. Preview/export is using standard subtitle chunks for this selection.
+                                    </div>
+                                  )}
+                                </div>
                                 <label className="text-xs text-white/70 block">Subtitle scale: {subtitleScale.toFixed(2)}x</label>
                                 <input type="range" min={0.7} max={1.8} step={0.01} value={subtitleScale} onChange={(e) => setSubtitleScale(Number(e.target.value))} className="w-full" />
                                 <label className="text-xs text-white/70 block">Subtitle horizontal position: {subtitleXPositionPct.toFixed(0)}%</label>

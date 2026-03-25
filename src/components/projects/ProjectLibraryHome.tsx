@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Film, Sparkles, Trash2 } from "lucide-react";
@@ -23,6 +24,18 @@ function formatRelativeDate(timestamp: number) {
 export function ProjectLibraryHome() {
   const router = useRouter();
   const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createProjectFromFile, deleteProject } = useProjectLibrary();
+
+  useEffect(() => {
+    if (!isLoading) {
+      if (projects.length > 0 && !sessionStorage.getItem("hasAutoRedirected")) {
+        sessionStorage.setItem("hasAutoRedirected", "true");
+        const latestProject = [...projects].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+        router.push(`/projects/${latestProject.id}`);
+      } else if (projects.length === 0 && !sessionStorage.getItem("hasAutoRedirected")) {
+        sessionStorage.setItem("hasAutoRedirected", "true");
+      }
+    }
+  }, [isLoading, projects, router]);
 
   const handleCreateProject = async (file: File) => {
     try {

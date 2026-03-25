@@ -28,7 +28,7 @@ type WhisperPipelineOptions = {
   task: "transcribe";
   chunk_length_s: number;
   stride_length_s: number;
-  return_timestamps: true;
+  return_timestamps: true | "word";
   language?: string;
 };
 
@@ -67,22 +67,37 @@ function getDetectedLanguage(output: WhisperOutput | WhisperOutput[], fallbackLa
 
 class PipelineSingleton {
   static task = "automatic-speech-recognition" as const;
-  static model = "Xenova/whisper-tiny";
+  static models = [
+    "onnx-community/whisper-base_timestamped",
+    "onnx-community/whisper-tiny_timestamped",
+  ] as const;
   static instance: WhisperPipeline | null = null;
+  static model: string | null = null;
 
   static async getInstance(progress_callback: (progress: WorkerProgressPayload) => void): Promise<WhisperPipeline> {
     if (this.instance === null) {
       const device = hasWebGpuSupport(navigator) ? "webgpu" : "wasm";
+      let lastError: unknown = null;
 
-      // Use FP32 for WebGPU/WASM compatibility
-      this.instance = await createWhisperPipeline(this.task, this.model, {
-        progress_callback,
-        device,
-        dtype: {
-          encoder_model: "fp32",
-          decoder_model_merged: "q4",
-        },
-      });
+      for (const modelName of this.models) {
+        try {
+          this.instance = await createWhisperPipeline(this.task, modelName, {
+            progress_callback,
+            device,
+            dtype: {
+              encoder_model: "fp32",
+              decoder_model_merged: "q4",
+            },
+          });
+          this.model = modelName;
+          break;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      if (this.instance === null) {
+        throw lastError instanceof Error ? lastError : new Error("Failed to load a Whisper transcription model.");
+      }
     }
     return this.instance;
   }
@@ -100,7 +115,7 @@ self.addEventListener("message", async (event: MessageEvent<TranscribeMessage>) 
       self.postMessage({ status: "ready" });
       self.postMessage({
         status: "info",
-        message: `Starting transcription of ${Math.round(duration)}s audio on ${hasWebGpuSupport(navigator) ? "WebGPU" : "WASM"}.`,
+        message: `Starting transcription of ${Math.round(duration)}s audio on ${hasWebGpuSupport(navigator) ? "WebGPU" : "WASM"} using ${PipelineSingleton.model ?? "Whisper"}.`,
       });
 
       // Transformers.js chunking jump is (chunk_length - 2 * stride_length)
@@ -125,7 +140,7 @@ self.addEventListener("message", async (event: MessageEvent<TranscribeMessage>) 
         task: "transcribe",
         chunk_length_s: 30,
         stride_length_s: 5,
-        return_timestamps: true,
+        return_timestamps: "word",
       };
 
       if (language) {

@@ -2,6 +2,7 @@ import { makeId, syncOriginalSubtitleVersion, type SubtitleChunk, type Transcrip
 import { updateTranscriptInHistoryItems, upsertTranscribingTranscriptProject } from "./history-updates";
 import { ensureProjectAssetForTranscription, type TranscribeProjectAssetOptions } from "./project-asset";
 import { historyItemToTranscriptRecord } from "./history-records";
+import { buildTranscriptChunksFromWordChunks } from "./word-timestamps";
 import type { ProjectRepository } from "../../repositories/project-repo";
 
 type WorkerProgressPayload = {
@@ -287,19 +288,24 @@ export function startBackgroundTranscriptionTask(
             void updateTranscriptVersion(dependencies.repository, activeTask!, (transcript) => {
               const now = Date.now();
               const textOutput = getTextOutput(payload.output);
-              const chunkOutput = getChunkOutput(payload.output);
+              const wordChunkOutput = getChunkOutput(payload.output);
+              const segmentChunkOutput =
+                wordChunkOutput && wordChunkOutput.length > 0
+                  ? buildTranscriptChunksFromWordChunks(wordChunkOutput)
+                  : transcript.chunks;
               const detectedLanguage = getDetectedLanguage(payload.output, options.language);
               let updated: TranscriptVersion = {
                 ...transcript,
                 status: "completed",
                 transcript: textOutput ?? transcript.transcript,
-                chunks: chunkOutput ?? transcript.chunks,
+                chunks: segmentChunkOutput ?? transcript.chunks,
+                wordChunks: wordChunkOutput ?? transcript.wordChunks,
                 detectedLanguage,
                 error: undefined,
                 updatedAt: now,
               };
               updated = syncOriginalSubtitleVersion(updated, {
-                chunks: (chunkOutput ?? transcript.chunks ?? []) as SubtitleChunk[],
+                chunks: (segmentChunkOutput ?? transcript.chunks ?? []) as SubtitleChunk[],
                 language: detectedLanguage,
                 now,
               });

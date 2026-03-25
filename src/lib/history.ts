@@ -33,6 +33,7 @@ export interface TranscriptVersion {
   detectedLanguage?: string;
   transcript?: string;
   chunks?: SubtitleChunk[];
+  wordChunks?: SubtitleChunk[];
   error?: string;
   subtitles: SubtitleVersion[];
 }
@@ -234,6 +235,7 @@ function normalizeTranscriptVersion(raw: unknown, index: number): TranscriptVers
     detectedLanguage: detectedLanguage ? String(detectedLanguage) : undefined,
     transcript: record.transcript ? String(record.transcript) : undefined,
     chunks: normalizeSubtitleChunkArray(record.chunks),
+    wordChunks: normalizeSubtitleChunkArray(record.wordChunks),
     error: record.error ? String(record.error) : undefined,
     subtitles: subtitlesRaw.map((sub, subIdx) =>
       normalizeSubtitleVersion(sub, subIdx, String(record.detectedLanguage ?? record.requestedLanguage ?? "unknown"))

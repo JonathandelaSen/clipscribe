@@ -172,6 +172,12 @@ export function hydrateCreatorShortEditorState(
       typeof input?.subtitleYOffsetPct === "number" && Number.isFinite(input.subtitleYOffsetPct)
         ? input.subtitleYOffsetPct
         : 78,
+    subtitleTimingMode:
+      input?.subtitleTimingMode === "segment" ||
+      input?.subtitleTimingMode === "word" ||
+      input?.subtitleTimingMode === "pair"
+        ? input.subtitleTimingMode
+        : "pair",
     showSubtitles: input?.showSubtitles ?? true,
     showSafeZones: input?.showSafeZones ?? true,
     subtitleStyle:
