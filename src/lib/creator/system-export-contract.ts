@@ -1,6 +1,10 @@
 import type { ShortExportGeometryResult } from "@/lib/creator/core/export-geometry";
+import type { CreatorShortSemanticSubtitlePayload } from "@/lib/creator/semantic-subtitles";
 import type {
+  CreatorShortSystemExportCounts,
+  CreatorShortSystemExportTimingsMs,
   CreatorShortEditorState,
+  CreatorShortRasterOverlayKind,
   CreatorShortRenderResponse,
   CreatorSuggestedShort,
 } from "@/lib/creator/types";
@@ -19,6 +23,10 @@ const CREATOR_SYSTEM_EXPORT_HEADER_NAMES = {
   sizeBytes: "x-clipscribe-short-export-size-bytes",
   durationSeconds: "x-clipscribe-short-export-duration-seconds",
   subtitleBurnedIn: "x-clipscribe-short-export-subtitle-burned-in",
+  renderModeUsed: "x-clipscribe-short-export-render-mode-used",
+  encoderUsed: "x-clipscribe-short-export-encoder-used",
+  timingsMs: "x-clipscribe-short-export-timings-ms",
+  counts: "x-clipscribe-short-export-counts",
   debugNotes: "x-clipscribe-short-export-debug-notes",
   debugFfmpegCommand: "x-clipscribe-short-export-debug-ffmpeg-command",
 } as const;
@@ -28,6 +36,14 @@ export interface CreatorShortSystemExportOverlayDescriptor {
   end: number;
   fileField: string;
   filename: string;
+  kind?: CreatorShortRasterOverlayKind;
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+  /** FFmpeg crop expression for atlas overlays. When set, the server applies
+   *  `crop=1080:1920:0:EXPR` before the overlay filter. */
+  cropExpression?: string;
 }
 
 export interface CreatorShortSystemExportOverlaySummary {
@@ -37,6 +53,7 @@ export interface CreatorShortSystemExportOverlaySummary {
 }
 
 export interface CreatorShortSystemExportPayload {
+  renderRequestId?: string;
   sourceFilename: string;
   short: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
@@ -44,8 +61,11 @@ export interface CreatorShortSystemExportPayload {
   geometry: ShortExportGeometryResult;
   previewViewport?: { width: number; height: number } | null;
   previewVideoRect?: { width: number; height: number } | null;
+  subtitleRenderMode: "fast_ass" | "png_parity";
+  semanticSubtitles?: CreatorShortSemanticSubtitlePayload | null;
   subtitleBurnedIn: boolean;
   overlaySummary: CreatorShortSystemExportOverlaySummary;
+  clientTimingsMs?: Partial<CreatorShortSystemExportTimingsMs["client"]>;
 }
 
 export interface CreatorShortSystemExportResponseMetadata {
@@ -55,6 +75,10 @@ export interface CreatorShortSystemExportResponseMetadata {
   sizeBytes: number;
   durationSeconds: number;
   subtitleBurnedIn: boolean;
+  renderModeUsed: "fast_ass" | "png_parity";
+  encoderUsed: string;
+  timingsMs?: CreatorShortSystemExportTimingsMs;
+  counts?: CreatorShortSystemExportCounts;
   debugNotes: string[];
   debugFfmpegCommand: string[];
 }
@@ -78,6 +102,15 @@ function parseStringArrayHeader(value: string | null): string[] {
   }
 }
 
+function parseJsonHeader<T>(value: string | null): T | undefined {
+  if (!value) return undefined;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildCreatorShortSystemExportResponseHeaders(
   metadata: CreatorShortSystemExportResponseMetadata
 ): HeadersInit {
@@ -88,6 +121,10 @@ export function buildCreatorShortSystemExportResponseHeaders(
     [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.sizeBytes]: String(metadata.sizeBytes),
     [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.durationSeconds]: String(metadata.durationSeconds),
     [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.subtitleBurnedIn]: metadata.subtitleBurnedIn ? "1" : "0",
+    [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.renderModeUsed]: metadata.renderModeUsed,
+    [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.encoderUsed]: metadata.encoderUsed,
+    [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.timingsMs]: JSON.stringify(metadata.timingsMs ?? {}),
+    [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.counts]: JSON.stringify(metadata.counts ?? {}),
     [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.debugNotes]: JSON.stringify(metadata.debugNotes),
     [CREATOR_SYSTEM_EXPORT_HEADER_NAMES.debugFfmpegCommand]: JSON.stringify(metadata.debugFfmpegCommand),
   };
@@ -106,6 +143,11 @@ export function parseCreatorShortSystemExportResponseHeaders(
     sizeBytes: parseNumericHeader(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.sizeBytes)),
     durationSeconds: parseNumericHeader(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.durationSeconds)),
     subtitleBurnedIn: parseBooleanHeader(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.subtitleBurnedIn)),
+    renderModeUsed:
+      headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.renderModeUsed) === "png_parity" ? "png_parity" : "fast_ass",
+    encoderUsed: headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.encoderUsed) || "libx264",
+    timingsMs: parseJsonHeader<CreatorShortSystemExportTimingsMs>(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.timingsMs)),
+    counts: parseJsonHeader<CreatorShortSystemExportCounts>(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.counts)),
     debugNotes: parseStringArrayHeader(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.debugNotes)),
     debugFfmpegCommand: parseStringArrayHeader(headers.get(CREATOR_SYSTEM_EXPORT_HEADER_NAMES.debugFfmpegCommand)),
   };
@@ -120,6 +162,10 @@ export function buildCompletedCreatorShortRenderResponse(input: {
   ffmpegCommandPreview: string[];
   notes: string[];
   durationSeconds?: number;
+  renderModeUsed?: "fast_ass" | "png_parity";
+  encoderUsed?: string;
+  timingsMs?: CreatorShortSystemExportTimingsMs;
+  counts?: CreatorShortSystemExportCounts;
 }): CreatorShortRenderResponse {
   return {
     ok: true,
@@ -137,6 +183,10 @@ export function buildCompletedCreatorShortRenderResponse(input: {
     debugPreview: {
       ffmpegCommandPreview: input.ffmpegCommandPreview,
       notes: input.notes,
+      renderModeUsed: input.renderModeUsed,
+      encoderUsed: input.encoderUsed,
+      timingsMs: input.timingsMs,
+      counts: input.counts,
     },
   };
 }

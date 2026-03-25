@@ -358,8 +358,10 @@ export async function exportShortVideoLocally(input: LocalShortExportInput): Pro
       overlayFrames.forEach((frame, i) => {
         const inLabel  = i === 0 ? "base" : `v${i - 1}`;
         const outLabel = i === overlayFrames.length - 1 ? "vout" : `v${i}`;
+        const x = typeof frame.x === "number" ? Math.max(0, Math.round(frame.x)) : 0;
+        const y = typeof frame.y === "number" ? Math.max(0, Math.round(frame.y)) : 0;
         filterParts.push(
-          `[${inLabel}][${i + 1}:v]overlay=enable='between(t,${frame.start.toFixed(3)},${frame.end.toFixed(3)})'[${outLabel}]`
+          `[${inLabel}][${i + 1}:v]overlay=x=${x}:y=${y}:enable='between(t,${frame.start.toFixed(3)},${frame.end.toFixed(3)})'[${outLabel}]`
         );
       });
       const overlayFilter = filterParts.join(";");

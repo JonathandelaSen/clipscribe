@@ -75,6 +75,8 @@ export async function trimSourceForExport(input: {
 
     await ff.exec(
       [
+        "-fflags",
+        "+genpts",
         "-ss",
         String(trimStart),
         "-i",
@@ -83,6 +85,8 @@ export async function trimSourceForExport(input: {
         String(trimDuration),
         "-c",
         "copy",
+        "-avoid_negative_ts",
+        "make_zero",
         "-movflags",
         "+faststart",
         outputName,

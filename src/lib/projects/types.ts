@@ -1,6 +1,13 @@
 import type { HistoryItem, TranscriptVersion } from "@/lib/history";
 import type { EditorAssetRecord, EditorExportEngine, EditorProjectRecord } from "@/lib/editor/types";
-import type { CreatorShortEditorState, CreatorShortPlan, CreatorSuggestedShort, CreatorViralClip } from "@/lib/creator/types";
+import type {
+  CreatorShortEditorState,
+  CreatorShortPlan,
+  CreatorShortSystemExportCounts,
+  CreatorShortSystemExportTimingsMs,
+  CreatorSuggestedShort,
+  CreatorViralClip,
+} from "@/lib/creator/types";
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
@@ -51,6 +58,10 @@ export interface ProjectExportRecord {
   error?: string;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  renderModeUsed?: "fast_ass" | "png_parity";
+  encoderUsed?: string;
+  timingsMs?: CreatorShortSystemExportTimingsMs;
+  counts?: CreatorShortSystemExportCounts;
   clip?: CreatorViralClip;
   plan?: CreatorShortPlan;
   short?: CreatorSuggestedShort;

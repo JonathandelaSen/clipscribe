@@ -322,6 +322,10 @@ export function buildCompletedShortExportRecord(input: {
   fileBlob?: Blob;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  renderModeUsed?: "fast_ass" | "png_parity";
+  encoderUsed?: string;
+  timingsMs?: CreatorShortExportRecord["timingsMs"];
+  counts?: CreatorShortExportRecord["counts"];
   clip?: CreatorViralClip;
   plan?: CreatorShortPlan;
 }): CreatorShortExportRecord {
@@ -345,6 +349,10 @@ export function buildCompletedShortExportRecord(input: {
     fileBlob: input.fileBlob,
     debugFfmpegCommand: input.debugFfmpegCommand,
     debugNotes: input.debugNotes,
+    renderModeUsed: input.renderModeUsed,
+    encoderUsed: input.encoderUsed,
+    timingsMs: input.timingsMs,
+    counts: input.counts,
     clip: toCreatorViralClip(short),
     plan: toCreatorShortPlan(short),
     short,
@@ -362,6 +370,10 @@ export function buildLocalBrowserRenderResponse(input: {
   subtitleBurnedIn: boolean;
   ffmpegCommandPreview: string[];
   notes: string[];
+  renderModeUsed?: "fast_ass" | "png_parity";
+  encoderUsed?: string;
+  timingsMs?: CreatorShortExportRecord["timingsMs"];
+  counts?: CreatorShortExportRecord["counts"];
 }) {
   return buildCompletedCreatorShortRenderResponse({
     providerMode: "local-browser",
@@ -371,5 +383,9 @@ export function buildLocalBrowserRenderResponse(input: {
     subtitleBurnedIn: input.subtitleBurnedIn,
     ffmpegCommandPreview: input.ffmpegCommandPreview,
     notes: input.notes,
+    renderModeUsed: input.renderModeUsed,
+    encoderUsed: input.encoderUsed,
+    timingsMs: input.timingsMs,
+    counts: input.counts,
   });
 }

@@ -1,4 +1,8 @@
 import { throwIfBrowserRenderCanceled } from "@/lib/browser-render";
+import {
+  computeCreatorTextOverlayRasterBounds,
+  type CreatorTextOverlayRasterBounds,
+} from "@/lib/creator/text-overlay-bounds";
 import { cssRgbaFromHex } from "@/lib/creator/subtitle-style";
 import {
   getCreatorTextOverlayFontSize,
@@ -15,8 +19,9 @@ import {
 import type { CreatorTextOverlayState } from "@/lib/creator/types";
 import type { SubtitlePngFrame } from "@/lib/creator/subtitle-canvas";
 
+export { computeCreatorTextOverlayRasterBounds } from "@/lib/creator/text-overlay-bounds";
+
 const CANVAS_WIDTH = 1080;
-const CANVAS_HEIGHT = 1920;
 const FONT_URL =
   "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf";
 
@@ -73,32 +78,31 @@ function drawRoundedRect(
 function renderOverlayCanvas(
   text: string[],
   overlay: CreatorTextOverlayState,
-  slot: CreatorTextOverlaySlot
+  slot: CreatorTextOverlaySlot,
+  lineWidths: readonly number[],
+  bounds: CreatorTextOverlayRasterBounds
 ): OffscreenCanvas {
   const style = resolveCreatorTextOverlayStyle(getCreatorTextOverlayFallbackPreset(slot), overlay.style);
   const fontSize = getCreatorTextOverlayFontSize(slot, overlay.scale);
-  const lineHeight = Math.round(fontSize * 1.02);
-  const canvas = new OffscreenCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+  const canvas = new OffscreenCanvas(bounds.width, bounds.height);
   const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  ctx.clearRect(0, 0, bounds.width, bounds.height);
+  ctx.translate(-bounds.x, -bounds.y);
 
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.font = `800 ${fontSize}px InterOverlay, Inter, sans-serif`;
 
-  const maxLineWidth = text.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
-  const blockHeight = text.length * lineHeight;
-  const anchorX = Math.round(CANVAS_WIDTH * (overlay.positionXPercent / 100));
-  const anchorY = Math.round(CANVAS_HEIGHT * (overlay.positionYPercent / 100));
-  const top = anchorY - blockHeight / 2;
+  const maxLineWidth = lineWidths.reduce((max, lineWidth) => Math.max(max, lineWidth), 0);
+  const top = bounds.top;
 
   if (style.backgroundEnabled && style.backgroundOpacity > 0) {
     drawRoundedRect(
       ctx,
-      anchorX - maxLineWidth / 2 - style.backgroundPaddingX,
+      bounds.anchorX - maxLineWidth / 2 - style.backgroundPaddingX,
       top - style.backgroundPaddingY,
       maxLineWidth + style.backgroundPaddingX * 2,
-      blockHeight + style.backgroundPaddingY * 2,
+      bounds.blockHeight + style.backgroundPaddingY * 2,
       style.backgroundRadius
     );
     ctx.fillStyle = cssRgbaFromHex(style.backgroundColor, style.backgroundOpacity);
@@ -109,7 +113,7 @@ function renderOverlayCanvas(
   const shadowMatch = shadowValue.match(/^([\d.]+)px ([\d.]+)px 0 (.+)$/);
 
   text.forEach((line, index) => {
-    const y = top + index * lineHeight;
+    const y = top + index * bounds.lineHeight;
 
     if (shadowMatch) {
       ctx.save();
@@ -118,7 +122,7 @@ function renderOverlayCanvas(
       ctx.shadowBlur = 0;
       ctx.shadowColor = shadowMatch[3];
       ctx.fillStyle = cssRgbaFromHex(style.textColor, 1);
-      ctx.fillText(line, anchorX, y);
+      ctx.fillText(line, bounds.anchorX, y);
       ctx.restore();
     }
 
@@ -127,13 +131,13 @@ function renderOverlayCanvas(
       ctx.strokeStyle = cssRgbaFromHex(style.borderColor, 0.95);
       ctx.lineWidth = style.borderWidth * 2;
       ctx.lineJoin = "round";
-      ctx.strokeText(line, anchorX, y);
+      ctx.strokeText(line, bounds.anchorX, y);
       ctx.restore();
     }
 
     ctx.save();
     ctx.fillStyle = cssRgbaFromHex(style.textColor, 1);
-    ctx.fillText(line, anchorX, y);
+    ctx.fillText(line, bounds.anchorX, y);
     ctx.restore();
   });
 
@@ -163,7 +167,26 @@ export async function renderTextOverlayToPngFrames(input: {
 
   await ensureCanvasFont(input.signal);
   throwIfBrowserRenderCanceled(input.signal);
-  const canvas = renderOverlayCanvas(lines, input.overlay, input.slot);
+  const measureCanvas = new OffscreenCanvas(1, 1);
+  const measureCtx = measureCanvas.getContext("2d")!;
+  measureCtx.font = `800 ${fontSize}px InterOverlay, Inter, sans-serif`;
+  const lineWidths = lines.map((line) => measureCtx.measureText(line).width);
+  const bounds = computeCreatorTextOverlayRasterBounds({
+    positionXPercent: input.overlay.positionXPercent,
+    positionYPercent: input.overlay.positionYPercent,
+    fontSize,
+    lineWidths,
+    style: {
+      backgroundEnabled: style.backgroundEnabled,
+      backgroundOpacity: style.backgroundOpacity,
+      backgroundPaddingX: style.backgroundPaddingX,
+      backgroundPaddingY: style.backgroundPaddingY,
+      borderWidth: style.borderWidth,
+      shadowOpacity: style.shadowOpacity,
+      shadowDistance: style.shadowDistance,
+    },
+  });
+  const canvas = renderOverlayCanvas(lines, input.overlay, input.slot, lineWidths, bounds);
   const blob = await canvas.convertToBlob({ type: "image/png" });
   throwIfBrowserRenderCanceled(input.signal);
   const pngBytes = new Uint8Array(await blob.arrayBuffer());
@@ -174,6 +197,11 @@ export async function renderTextOverlayToPngFrames(input: {
       start: effectiveWindow.startOffsetSeconds + input.timeOffsetSeconds,
       end: effectiveWindow.endOffsetSeconds + input.timeOffsetSeconds,
       vfsPath: `/tmp/${input.slot}_overlay.png`,
+      kind: input.slot === "intro" ? "intro_overlay" : "outro_overlay",
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
     },
   ];
 }

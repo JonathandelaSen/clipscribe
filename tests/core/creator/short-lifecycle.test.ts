@@ -322,10 +322,26 @@ test("buildCompletedShortExportRecord and render response produce stable system 
     sizeBytes: 9876,
     debugFfmpegCommand: ["ffmpeg", "-i", "source.mp4"],
     debugNotes: ["note 1"],
+    renderModeUsed: "fast_ass",
+    encoderUsed: "h264_videotoolbox",
+    timingsMs: {
+      server: {
+        ffmpeg: 42,
+      },
+    },
+    counts: {
+      subtitleChunkCount: 6,
+      pngOverlayCount: 1,
+      overlayRasterPixelArea: 245760,
+      overlayRasterAreaPct: 11.85,
+      introOverlayCount: 1,
+      outroOverlayCount: 0,
+    },
   });
 
   assert.equal(exportRecord.status, "completed");
   assert.equal(exportRecord.filename, "out.mp4");
+  assert.equal(exportRecord.renderModeUsed, "fast_ass");
 
   const response = buildCompletedCreatorShortRenderResponse({
     providerMode: "system",
@@ -335,10 +351,16 @@ test("buildCompletedShortExportRecord and render response produce stable system 
     subtitleBurnedIn: true,
     ffmpegCommandPreview: exportRecord.debugFfmpegCommand || [],
     notes: exportRecord.debugNotes || [],
+    renderModeUsed: exportRecord.renderModeUsed,
+    encoderUsed: exportRecord.encoderUsed,
+    timingsMs: exportRecord.timingsMs,
+    counts: exportRecord.counts,
   });
 
   assert.equal(response.providerMode, "system");
   assert.equal(response.output.filename, "out.mp4");
   assert.equal(response.output.subtitleBurnedIn, true);
   assert.deepEqual(response.debugPreview.notes, ["note 1"]);
+  assert.equal(response.debugPreview.renderModeUsed, "fast_ass");
+  assert.equal(response.debugPreview.encoderUsed, "h264_videotoolbox");
 });

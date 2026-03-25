@@ -1,5 +1,7 @@
 import type {
   CreatorShortEditorState,
+  CreatorShortSystemExportCounts,
+  CreatorShortSystemExportTimingsMs,
   CreatorShortPlan,
   CreatorViralClip,
   CreatorSuggestedShort,
@@ -62,6 +64,10 @@ export interface CreatorShortExportRecord {
   fileBlob?: Blob;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  renderModeUsed?: "fast_ass" | "png_parity";
+  encoderUsed?: string;
+  timingsMs?: CreatorShortSystemExportTimingsMs;
+  counts?: CreatorShortSystemExportCounts;
   clip: CreatorViralClip;
   plan: CreatorShortPlan;
   short?: CreatorSuggestedShort;

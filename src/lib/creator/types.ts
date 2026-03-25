@@ -293,7 +293,56 @@ export interface CreatorShortRenderResponse {
   debugPreview: {
     ffmpegCommandPreview: string[];
     notes: string[];
+    renderModeUsed?: "fast_ass" | "png_parity";
+    encoderUsed?: string;
+    timingsMs?: CreatorShortSystemExportTimingsMs;
+    counts?: CreatorShortSystemExportCounts;
   };
+}
+
+export type CreatorShortRasterOverlayKind =
+  | "intro_overlay"
+  | "outro_overlay"
+  | "subtitle_atlas"
+  | "subtitle_frame";
+
+export interface CreatorShortSystemExportCounts {
+  subtitleChunkCount: number;
+  pngOverlayCount: number;
+  overlayRasterPixelArea: number;
+  overlayRasterAreaPct: number;
+  introOverlayCount: number;
+  outroOverlayCount: number;
+}
+
+export interface CreatorShortClientExportTimingsMs {
+  introOverlayRender: number;
+  outroOverlayRender: number;
+  subtitlePreparation: number;
+  requestAssembly: number;
+  post: number;
+  responseRead: number;
+  total: number;
+}
+
+export interface CreatorShortServerExportTimingsMs {
+  formDataParse: number;
+  tempFileWrite: number;
+  ffmpeg: number;
+  outputReadback: number;
+  total: number;
+}
+
+export interface CreatorShortFfmpegBenchmarkTimingsMs {
+  user: number;
+  system: number;
+  real: number;
+}
+
+export interface CreatorShortSystemExportTimingsMs {
+  client?: Partial<CreatorShortClientExportTimingsMs>;
+  server?: Partial<CreatorShortServerExportTimingsMs>;
+  ffmpegBenchmarkMs?: Record<string, CreatorShortFfmpegBenchmarkTimingsMs>;
 }
 
 export function secondsToClock(totalSeconds: number): string {

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   exportCreatorShortWithSystemFfmpeg,
+  type CreatorSystemRenderOverlayInput,
 } from "../../../src/lib/server/creator/shorts/system-render";
 import { buildShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
 import type { CreatorSuggestedShort } from "../../../src/lib/creator/types";
@@ -65,8 +66,11 @@ function createRenderInput(tempDir: string) {
     }),
     previewViewport: { width: 400, height: 800 },
     previewVideoRect: null,
-    overlays: [] as Array<{ absolutePath: string; filename: string; start: number; end: number }>,
+    overlays: [] as CreatorSystemRenderOverlayInput[],
     subtitleBurnedIn: false,
+    subtitleTrackPath: null as string | null,
+    sourcePlaybackMode: "normal" as "normal" | "still",
+    renderModeUsed: "fast_ass" as "fast_ass" | "png_parity",
     overlaySummary: {
       subtitleFrameCount: 0,
       introOverlayFrameCount: 0,
@@ -87,7 +91,7 @@ test("exportCreatorShortWithSystemFfmpeg returns render details for a successful
   const result = await exportCreatorShortWithSystemFfmpeg({
     ...input,
     commandRunner: async (command, args) => {
-      assert.equal(command, "ffmpeg");
+      assert.match(command, /ffmpeg$/);
       assert.ok(args.includes("-vf"));
       assert.ok(args.includes(input.outputPath));
       await writeFile(input.outputPath, Buffer.alloc(2048, 1));
@@ -104,6 +108,7 @@ test("exportCreatorShortWithSystemFfmpeg returns render details for a successful
   assert.equal(result.height, 1920);
   assert.equal(result.sizeBytes, 2048);
   assert.equal(result.subtitleBurnedIn, false);
+  assert.equal(result.renderModeUsed, "fast_ass");
 });
 
 test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG overlays are present", async (t) => {
@@ -119,9 +124,15 @@ test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG
       filename: "overlay_0.png",
       start: 3,
       end: 5,
+      kind: "intro_overlay",
+      x: 148,
+      y: 320,
+      width: 784,
+      height: 236,
     },
   ];
   input.subtitleBurnedIn = true;
+  input.renderModeUsed = "png_parity";
   input.overlaySummary.subtitleFrameCount = 1;
 
   await exportCreatorShortWithSystemFfmpeg({
@@ -129,7 +140,9 @@ test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG
     commandRunner: async (_, args) => {
       const filterIndex = args.indexOf("-filter_complex");
       assert.notEqual(filterIndex, -1);
-      assert.match(args[filterIndex + 1] ?? "", /overlay=enable='between/);
+      assert.match(args[filterIndex + 1] ?? "", /\[0:v\]setpts=PTS-STARTPTS,/);
+      assert.match(args[filterIndex + 1] ?? "", /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+      assert.match(args[filterIndex + 1] ?? "", /overlay=x=148:y=320:enable='between/);
       await writeFile(input.outputPath, Buffer.alloc(2048, 1));
       return {
         code: 0,
@@ -138,6 +151,116 @@ test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG
       };
     },
   });
+});
+
+test("exportCreatorShortWithSystemFfmpeg keeps fullscreen legacy overlays at 0,0", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.overlays = [
+    {
+      absolutePath: "/media/overlay_legacy.png",
+      filename: "overlay_legacy.png",
+      start: 0,
+      end: 2,
+    },
+  ];
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      const filterIndex = args.indexOf("-filter_complex");
+      assert.notEqual(filterIndex, -1);
+      assert.match(args[filterIndex + 1] ?? "", /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+      assert.match(args[filterIndex + 1] ?? "", /overlay=x=0:y=0:enable='between/);
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg appends ASS subtitles in the fast path", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.subtitleBurnedIn = true;
+  input.subtitleTrackPath = path.join(tempDir, "subtitles.ass");
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      const vfIndex = args.indexOf("-vf");
+      assert.notEqual(vfIndex, -1);
+      assert.match(args[vfIndex + 1] ?? "", /ass=/);
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg builds a static-video render path for still sources", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.short = {
+    ...input.short,
+    startSeconds: 44,
+    endSeconds: 65,
+    durationSeconds: 21,
+  };
+  input.overlays = [
+    {
+      absolutePath: "/media/overlay_0.png",
+      filename: "overlay_0.png",
+      start: 0,
+      end: 3,
+      kind: "intro_overlay",
+      x: 148,
+      y: 320,
+      width: 784,
+      height: 236,
+    },
+  ];
+  input.sourcePlaybackMode = "still";
+
+  const result = await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      const filterIndex = args.indexOf("-filter_complex");
+      assert.notEqual(filterIndex, -1);
+      assert.equal(args.filter((arg) => arg === "-i").length, 3);
+      assert.equal(args.filter((arg) => arg === "-ss").length, 1);
+      assert.match(args[filterIndex + 1] ?? "", /tpad=stop_mode=clone:stop_duration=21\.000/);
+      assert.match(args[filterIndex + 1] ?? "", /\[2:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+      assert.ok(args.includes("1:a?"));
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+
+  assert.match(result.notes.join("\n"), /still-video compatibility path/);
+  assert.equal(result.encoderUsed, "libx264");
 });
 
 test("exportCreatorShortWithSystemFfmpeg retries with exact seek after a hybrid seek failure", async (t) => {

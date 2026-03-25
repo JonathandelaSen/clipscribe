@@ -160,10 +160,54 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { BackgroundTaskBanner } from "@/components/tasks/BackgroundTaskBanner";
 
-function copyText(text: string, label: string) {
-  navigator.clipboard.writeText(text);
-  toast.success(`${label} copied`, {
-    className: "bg-green-500/20 border-green-500/50 text-green-100",
+function legacyCopyText(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.append(textarea);
+  textarea.focus();
+  textarea.select();
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  } finally {
+    textarea.remove();
+  }
+
+  return copied;
+}
+
+async function copyText(text: string, label: string) {
+  const content = String(text ?? "");
+  let copied = false;
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(content);
+      copied = true;
+    } catch {}
+  }
+
+  if (!copied) {
+    copied = legacyCopyText(content);
+  }
+
+  if (copied) {
+    toast.success(`${label} copied`, {
+      className: "bg-green-500/20 border-green-500/50 text-green-100",
+    });
+    return;
+  }
+
+  toast.error(`Couldn't copy ${label.toLowerCase()}`, {
+    className: "bg-red-500/20 border-red-500/50 text-red-100",
   });
 }
 
@@ -1078,6 +1122,7 @@ export function CreatorHub({
   const [exportProgressPct, setExportProgressPct] = useState(0);
   const [localRenderError, setLocalRenderError] = useState<string | null>(null);
   const [localRenderDiagnostics, setLocalRenderDiagnostics] = useState<string | null>(null);
+  const [shortExportLogLines, setShortExportLogLines] = useState<string[]>([]);
   const [shortProjectNameDraft, setShortProjectNameDraft] = useState("");
 
   const isToolLocked = !!lockedTool;
@@ -1097,6 +1142,11 @@ export function CreatorHub({
   const shortExportSessionCounterRef = useRef(0);
   const shortExportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
   const shortExportRestoreSnapshotRef = useRef<Pick<CreatorShortProjectRecord, "status" | "lastExportId" | "lastError"> | null>(null);
+  const shortExportLogStartedAtRef = useRef<number | null>(null);
+  const shortExportLastLoggedProgressRef = useRef(-1);
+  const shortExportHeartbeatStageRef = useRef<BrowserRenderStage>("preparing");
+  const shortExportHeartbeatStatusRef = useRef("idle");
+  const shortExportHeartbeatProgressRef = useRef(0);
   // useCallback ref: stores element in previewFrameElRef AND sets up ResizeObserver for previewFrameWidth.
   const previewFrameRef = useCallback((el: HTMLDivElement | null) => {
     previewFrameElRef.current = el;
@@ -1164,12 +1214,42 @@ export function CreatorHub({
     return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
   }, []);
 
+  const beginShortExportLogSession = useCallback((message: string) => {
+    const startedAt = Date.now();
+    shortExportLogStartedAtRef.current = startedAt;
+    shortExportLastLoggedProgressRef.current = -1;
+    const line = `[${new Date(startedAt).toISOString()} | +0.00s] ${message}`;
+    setShortExportLogLines([line]);
+    console.info("[ShortExportLog]", line);
+  }, []);
+
+  const appendShortExportLog = useCallback((message: string) => {
+    const now = Date.now();
+    const startedAt = shortExportLogStartedAtRef.current ?? now;
+    const elapsedSeconds = ((now - startedAt) / 1000).toFixed(2);
+    const line = `[${new Date(now).toISOString()} | +${elapsedSeconds}s] ${message}`;
+    setShortExportLogLines((prev) => {
+      if (prev[prev.length - 1] === line) return prev;
+      const next = prev.length >= 250 ? [...prev.slice(prev.length - 249), line] : [...prev, line];
+      return next;
+    });
+    console.info("[ShortExportLog]", line);
+  }, []);
+
+  const shortExportLogText = useMemo(() => shortExportLogLines.join("\n"), [shortExportLogLines]);
+
   const syncShortExportStage = useCallback((sessionId: number, stage: BrowserRenderStage) => {
     const session = shortExportSessionRef.current;
     if (!session || session.id !== sessionId) return;
     session.stage = stage;
+    shortExportHeartbeatStageRef.current = stage;
     setShortExportStage(stage);
-  }, []);
+    appendShortExportLog(`Stage -> ${stage}.`);
+  }, [appendShortExportLog]);
+
+  useEffect(() => {
+    shortExportHeartbeatStageRef.current = shortExportStage;
+  }, [shortExportStage]);
 
   const transcriptOptions = useMemo(() => {
     if (!selectedProject) return [];
@@ -1565,6 +1645,8 @@ export function CreatorHub({
           (task) => task.kind === "short-export" && task.scope.projectId === currentShortTaskProjectId
         );
   const isActiveShortExportTask = Boolean(activeShortExportTask && isBackgroundTaskActive(activeShortExportTask));
+  shortExportHeartbeatStatusRef.current = activeShortExportTask?.status ?? "idle";
+  shortExportHeartbeatProgressRef.current = Math.round(activeShortExportTask?.progress ?? exportProgressPct);
 
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
   const canAnalyzeWithAI = canAnalyze && hasOpenAIApiKey;
@@ -1573,6 +1655,20 @@ export function CreatorHub({
   const canCancelShortExport =
     Boolean(activeShortExportTask?.canCancel) &&
     (isActiveShortExportTask || isBrowserRenderCancelableStage(shortExportStage));
+
+  useEffect(() => {
+    if (!isActiveShortExportTask || !shortExportLogStartedAtRef.current) return;
+
+    const timerId = window.setInterval(() => {
+      appendShortExportLog(
+        `Heartbeat: stage=${shortExportHeartbeatStageRef.current}, task=${shortExportHeartbeatStatusRef.current}, progress=${shortExportHeartbeatProgressRef.current}%.`
+      );
+    }, 4000);
+
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [appendShortExportLog, isActiveShortExportTask, activeShortExportTask?.id]);
   const activeAnalysisMeta = activeTool === "video_info" ? videoInfoAnalysis : shortsAnalysis;
   const isAnalyzing = activeTool === "video_info" ? isGeneratingVideoInfo : isGeneratingShorts;
   const analyzeError = activeTool === "video_info" ? videoInfoError : shortsError;
@@ -2024,6 +2120,10 @@ export function CreatorHub({
         setExportProgressPct(0);
         setLocalRenderError(null);
         setLocalRenderDiagnostics(null);
+        beginShortExportLogSession(
+          `Export started for ${mediaFilename || selectedProject.filename}: ${secondsToClock(editedClip.startSeconds)} -> ${secondsToClock(editedClip.endSeconds)}.`
+        );
+        shortExportHeartbeatStageRef.current = session.stage;
         task.update({
           status: "preparing",
           progress: 1,
@@ -2031,6 +2131,7 @@ export function CreatorHub({
         });
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
+          appendShortExportLog("Cancel requested by user.");
           session.controller.abort();
           shortExportSessionRef.current = null;
           setIsExportingShort(false);
@@ -2045,11 +2146,21 @@ export function CreatorHub({
           setExportProgressPct((prev) => {
             const next = Math.round(clampNumber(nextPct, 0, 100));
             if (next <= prev) return prev;
+            shortExportHeartbeatProgressRef.current = next;
             task.update({
               status: next >= 96 ? "finalizing" : "running",
               progress: next,
               message: next >= 96 ? "Finalizing short export" : "Rendering short export",
             });
+            const minDelta = next >= 80 ? 2 : 5;
+            if (
+              next === 100 ||
+              shortExportLastLoggedProgressRef.current < 0 ||
+              next >= shortExportLastLoggedProgressRef.current + minDelta
+            ) {
+              appendShortExportLog(`Progress ${next}%.`);
+              shortExportLastLoggedProgressRef.current = next;
+            }
             return next;
           });
         };
@@ -2070,8 +2181,12 @@ export function CreatorHub({
           });
 
         try {
+          appendShortExportLog("Reading source video metadata.");
           sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          appendShortExportLog(
+            `Source metadata ready: ${sourceVideoMeta.width}x${sourceVideoMeta.height}, duration=${sourceVideoMeta.durationSeconds?.toFixed(2) ?? "unknown"}s.`
+          );
           const prepared = prepareShortExport({
             requestedClip: editedClip,
             allSubtitleChunks: selectedSubtitle.chunks,
@@ -2099,6 +2214,9 @@ export function CreatorHub({
             progress: 8,
             message: "Preparing short export",
           });
+          appendShortExportLog(
+            `Prepared clip ${exportClip.startSeconds.toFixed(2)}s -> ${exportClip.endSeconds.toFixed(2)}s with ${exportSubtitleChunks.length} subtitle chunk(s).`
+          );
           console.info("[ShortExport] diagnostics pre-render\n" + buildDiagnosticsSnapshot());
         } catch (metadataError) {
           if (isBrowserRenderCanceledError(metadataError) || session.controller.signal.aborted || task.isCanceled()) {
@@ -2112,6 +2230,7 @@ export function CreatorHub({
           }
           console.error(metadataError);
           const message = metadataError instanceof Error ? metadataError.message : "Failed to read source video metadata";
+          appendShortExportLog(`Metadata preparation failed: ${message}.`);
           setLocalRenderError(message);
           setLocalRenderDiagnostics(buildDiagnosticsSnapshot(message));
           toast.error(message, {
@@ -2135,6 +2254,7 @@ export function CreatorHub({
         try {
           await upsertProject(shortProjectRecord);
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          appendShortExportLog(`Saved export snapshot for short project ${shortProjectRecord.id}.`);
           setActiveSavedShortProjectId(shortProjectRecord.id);
           setDetachedShortSelection({ clip: shortProjectRecord.clip, plan: shortProjectRecord.plan });
           setShortProjectNameDraft(shortProjectRecord.name);
@@ -2145,6 +2265,9 @@ export function CreatorHub({
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           const frameRect = previewFrameElRef.current?.getBoundingClientRect();
           const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
+          appendShortExportLog(
+            `Starting system export request${previewViewport ? ` with preview viewport ${Math.round(previewViewport.width)}x${Math.round(previewViewport.height)}` : ""}.`
+          );
 
           const systemExport = await requestSystemCreatorShortExport({
             sourceFile: mediaFile,
@@ -2157,6 +2280,7 @@ export function CreatorHub({
             previewViewport,
             previewVideoRect: null,
             onProgress: bumpExportProgress,
+            onDebugLog: appendShortExportLog,
             renderLifecycle: {
               signal: session.controller.signal,
               onStageChange: (stage) => {
@@ -2178,6 +2302,14 @@ export function CreatorHub({
             },
           });
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+          appendShortExportLog(
+            `Render complete: mode=${systemExport.renderModeUsed}, encoder=${systemExport.encoderUsed}, size=${formatBytes(systemExport.file.size)}.`
+          );
+          if (systemExport.timingsMs) {
+            appendShortExportLog(
+              `Timing summary: client=${systemExport.timingsMs.client?.total ?? 0}ms, server=${systemExport.timingsMs.server?.total ?? 0}ms, ffmpeg=${systemExport.timingsMs.server?.ffmpeg ?? 0}ms.`
+            );
+          }
           bumpExportProgress(97);
           const now = Date.now();
           const outputAsset = createEditorAssetRecord({
@@ -2230,6 +2362,10 @@ export function CreatorHub({
             fileBlob: systemExport.file,
             debugFfmpegCommand: systemExport.ffmpegCommandPreview,
             debugNotes: systemExport.notes,
+            renderModeUsed: systemExport.renderModeUsed,
+            encoderUsed: systemExport.encoderUsed,
+            timingsMs: systemExport.timingsMs,
+            counts: systemExport.counts,
           });
 
           await upsertExport(exportRecord);
@@ -2253,9 +2389,14 @@ export function CreatorHub({
             ffmpegCommandPreview: systemExport.ffmpegCommandPreview,
             notes: systemExport.notes,
             durationSeconds: systemExport.durationSeconds,
+            renderModeUsed: systemExport.renderModeUsed,
+            encoderUsed: systemExport.encoderUsed,
+            timingsMs: systemExport.timingsMs,
+            counts: systemExport.counts,
           });
           syncShortExportStage(session.id, "complete");
           setLastRender(renderResult);
+          appendShortExportLog("Export saved to the library and download started.");
 
           handleDownloadSavedExport(exportRecord);
           bumpExportProgress(100);
@@ -2275,6 +2416,7 @@ export function CreatorHub({
           console.error(error);
           const rawMessage = error instanceof Error ? error.message : "Short export failed";
           const toastMessage = rawMessage.split("\n")[0] || "Short export failed";
+          appendShortExportLog(`Export failed: ${toastMessage}.`);
           const diagnostics = buildDiagnosticsSnapshot(rawMessage);
           setLocalRenderError(toastMessage);
           setLocalRenderDiagnostics(diagnostics);
@@ -4317,6 +4459,22 @@ export function CreatorHub({
                                 <div className="text-[11px] uppercase tracking-[0.24em] text-white/35">
                                   {activeShortExportTask?.status ?? "Running"}
                                 </div>
+                              </div>
+                            )}
+                            {shortExportLogText && (
+                              <div className="rounded-lg border border-white/10 bg-black/40 p-2 space-y-2">
+                                <div className="flex items-center justify-between gap-2">
+                                  <div className="text-[11px] uppercase tracking-wider text-white/45">Export logs</div>
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-6 px-2 text-[11px] bg-white/5 hover:bg-white/10 text-white/75"
+                                    onClick={() => copyText(shortExportLogText, "Export logs")}
+                                  >
+                                    <Copy className="w-3 h-3 mr-1" /> Copy
+                                  </Button>
+                                </div>
+                                <pre className="max-h-56 overflow-auto text-[11px] text-white/70 whitespace-pre-wrap break-words">{shortExportLogText}</pre>
                               </div>
                             )}
                             {localRenderError && (
