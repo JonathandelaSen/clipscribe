@@ -3798,7 +3798,13 @@ export function CreatorHub({
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
                             <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
                             <div>
-                              Subtitle timing: {effectiveSubtitleTimingMode === "segment" ? "standard chunks" : effectiveSubtitleTimingMode === "word" ? "1 word pop" : "2 word pop"}
+                              Subtitle timing: {effectiveSubtitleTimingMode === "segment"
+                                ? "standard chunks"
+                                : effectiveSubtitleTimingMode === "word"
+                                  ? "1 word pop"
+                                  : effectiveSubtitleTimingMode === "pair"
+                                    ? "2 word pop"
+                                    : "3 word pop"}
                             </div>
                             <div>Subtitle chunks in clip: {selectedClipSubtitleChunks.length}</div>
                             {activeSavedShortProject && (
@@ -4094,6 +4100,9 @@ export function CreatorHub({
                                       </SelectItem>
                                       <SelectItem value="pair" className="focus:bg-cyan-500/20 cursor-pointer">
                                         2 words
+                                      </SelectItem>
+                                      <SelectItem value="triple" className="focus:bg-cyan-500/20 cursor-pointer">
+                                        3 words
                                       </SelectItem>
                                     </SelectContent>
                                   </Select>

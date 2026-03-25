@@ -213,7 +213,7 @@ export interface CreatorVerticalEditorPreset {
 }
 
 export type CreatorSubtitleTextCase = "original" | "uppercase";
-export type CreatorSubtitleTimingMode = "segment" | "word" | "pair";
+export type CreatorSubtitleTimingMode = "segment" | "word" | "pair" | "triple";
 export type CreatorTextOverlayTextCase = "original" | "uppercase";
 export type CreatorTextOverlayPreset = "headline_bold" | "glass_card" | "neon_punch";
 

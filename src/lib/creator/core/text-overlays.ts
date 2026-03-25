@@ -175,7 +175,8 @@ export function hydrateCreatorShortEditorState(
     subtitleTimingMode:
       input?.subtitleTimingMode === "segment" ||
       input?.subtitleTimingMode === "word" ||
-      input?.subtitleTimingMode === "pair"
+      input?.subtitleTimingMode === "pair" ||
+      input?.subtitleTimingMode === "triple"
         ? input.subtitleTimingMode
         : "pair",
     showSubtitles: input?.showSubtitles ?? true,

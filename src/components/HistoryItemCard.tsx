@@ -414,9 +414,10 @@ export function HistoryItemCard({
   const handleDownloadSrt = () => {
     if (!selectedSubtitle || !selectedTranscript) return;
     const baseName = item.filename.replace(/\.[^/.]+$/, "");
+    const viewSuffix = effectiveSubtitleDisplayMode === "original" ? "__original-word-timing" : "";
     downloadFile(
-      generateSrt(selectedSubtitle.chunks),
-      `${baseName}__t${selectedTranscript.versionNumber}__${selectedSubtitle.language}__s${selectedSubtitle.versionNumber}.srt`
+      generateSrt(displayedSubtitleChunks),
+      `${baseName}__t${selectedTranscript.versionNumber}__${selectedSubtitle.language}__s${selectedSubtitle.versionNumber}${viewSuffix}.srt`
     );
   };
 
@@ -432,7 +433,7 @@ export function HistoryItemCard({
 
   const copySrt = () => {
     if (!selectedSubtitle) return;
-    navigator.clipboard.writeText(generateSrt(selectedSubtitle.chunks));
+    navigator.clipboard.writeText(generateSrt(displayedSubtitleChunks));
     setCopiedSrt(true);
     toast("Copied subtitles", {
       className: "bg-green-500/20 border-green-500/50 text-green-100",

@@ -30,3 +30,17 @@ test("buildPopCaptionChunks pairs words but respects sentence boundaries", () =>
     { text: "mismo", timestamp: [1.2, 1.5] },
   ]);
 });
+
+test("buildPopCaptionChunks groups triples in triple mode", () => {
+  const chunks = buildPopCaptionChunks([
+    { text: "uno", timestamp: [0, 0.2] },
+    { text: "dos", timestamp: [0.2, 0.4] },
+    { text: "tres", timestamp: [0.4, 0.6] },
+    { text: "cuatro", timestamp: [0.7, 0.9] },
+  ], "triple");
+
+  assert.deepEqual(chunks, [
+    { text: "uno dos tres", timestamp: [0, 0.6] },
+    { text: "cuatro", timestamp: [0.7, 0.9] },
+  ]);
+});

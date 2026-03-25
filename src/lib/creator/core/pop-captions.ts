@@ -42,6 +42,7 @@ export function buildPopCaptionChunks(
 
   const words = normalizeWordChunks(wordChunks);
   if (mode === "word") return words;
+  const targetWordsPerChunk = mode === "triple" ? 3 : 2;
 
   const grouped: SubtitleChunk[] = [];
   let current: SubtitleChunk[] = [];
@@ -79,7 +80,7 @@ export function buildPopCaptionChunks(
     }
 
     current.push(word);
-    if (current.length >= 2 || hasSentenceBoundary(word.text)) {
+    if (current.length >= targetWordsPerChunk || hasSentenceBoundary(word.text)) {
       flush();
     }
   }
