@@ -12,7 +12,9 @@ import type {
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
+  /** @deprecated Use youtubeVideoInfoHistory instead. Kept for migration from legacy single-record shape. */
   youtubeVideoInfo?: CreatorVideoInfoProjectRecord;
+  youtubeVideoInfoHistory?: CreatorVideoInfoProjectRecord[];
 };
 
 export type ProjectAssetRole = "source" | "derived" | "support";

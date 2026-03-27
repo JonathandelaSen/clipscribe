@@ -9,7 +9,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
   AlertTriangle,
@@ -17,11 +16,9 @@ import {
   CheckCircle2,
   ChevronRight,
   CloudUpload,
-  Copy,
   FileImage,
   FileText,
   FileVideo,
-  KeyRound,
   Languages,
   Link2,
   Loader2,
@@ -36,34 +33,14 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
-import { useCreatorLlmRuns } from "@/hooks/useCreatorLlmRuns";
-import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
-import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
+import { resolveProjectVideoInfoHistory } from "@/lib/creator/video-info-storage";
 import {
-  buildProjectVideoInfoRecord,
-  resolveProjectVideoInfoAnalysis,
-} from "@/lib/creator/video-info-storage";
-import {
-  DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS,
-  appendChapterBlockToDescription,
-  applySuggestedDescription,
-  applySuggestedTags,
-  applySuggestedTitle,
   getEligibleYouTubeProjectExports,
   resolveInitialYouTubePublishSelection,
   type YouTubePublishDraft,
   type YouTubePublishSourceMode,
 } from "@/lib/creator/youtube-publish";
-import type {
-  CreatorVideoInfoBlock,
-  CreatorVideoInfoGenerateRequest,
-  CreatorVideoInfoGenerateResponse,
-} from "@/lib/creator/types";
-import {
-  getLatestTranscript,
-} from "@/lib/history";
 import { normalizeYouTubeRegionCode, parseYouTubeTagsInput } from "@/lib/youtube/drafts";
 import { publishToYouTubeFromBrowser } from "@/lib/youtube/browser-upload";
 import type {
@@ -82,6 +59,7 @@ import type {
 } from "@/lib/youtube/types";
 import { cn } from "@/lib/utils";
 
+import { AiAutoloadPicker, AiAutoloadButton, type AutoloadField } from "@/components/creator/AiAutoloadPicker";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -114,67 +92,6 @@ type OptionsPayload = {
   categories: YouTubeOptionCatalog["categories"];
   languages: YouTubeOptionCatalog["languages"];
 };
-
-type VideoInfoBlockOption = {
-  value: CreatorVideoInfoBlock;
-  label: string;
-  description: string;
-  accent: string;
-};
-
-const PRIMARY_VIDEO_INFO_BLOCK_OPTIONS: VideoInfoBlockOption[] = [
-  {
-    value: "titleIdeas",
-    label: "Title Ideas",
-    description: "Generate multiple headline options for the final upload.",
-    accent: "bg-cyan-400/10 text-cyan-100 border-cyan-300/30",
-  },
-  {
-    value: "description",
-    label: "Description",
-    description: "Produce a full YouTube description draft grounded in the transcript.",
-    accent: "bg-emerald-400/10 text-emerald-100 border-emerald-300/30",
-  },
-  {
-    value: "hashtagsSeo",
-    label: "Hashtags + SEO",
-    description: "Generate hashtags and keyword phrases that can feed the upload tags field.",
-    accent: "bg-sky-400/10 text-sky-100 border-sky-300/30",
-  },
-  {
-    value: "thumbnailHooks",
-    label: "Thumbnail Hooks",
-    description: "Surface short packaging hooks for thumbnails or overlays.",
-    accent: "bg-orange-400/10 text-orange-100 border-orange-300/30",
-  },
-  {
-    value: "chapters",
-    label: "Chapters",
-    description: "Return timestamped chapter text ready to append into the description.",
-    accent: "bg-amber-400/10 text-amber-100 border-amber-300/30",
-  },
-  {
-    value: "pinnedComment",
-    label: "Pinned Comment",
-    description: "Draft a discussion starter for the pinned comment slot.",
-    accent: "bg-fuchsia-400/10 text-fuchsia-100 border-fuchsia-300/30",
-  },
-];
-
-const ADVANCED_VIDEO_INFO_BLOCK_OPTIONS: VideoInfoBlockOption[] = [
-  {
-    value: "contentPack",
-    label: "Content Pack",
-    description: "Return summary, hooks, CTAs, and repurpose ideas for adjacent channels.",
-    accent: "bg-violet-400/10 text-violet-100 border-violet-300/30",
-  },
-  {
-    value: "insights",
-    label: "Insights",
-    description: "Return transcript metrics, repeated terms, and theme detection.",
-    accent: "bg-white/10 text-white border-white/20",
-  },
-];
 
 function makeRowId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -289,63 +206,7 @@ function ProgressBadge({ progress }: { progress: YouTubeBrowserUploadProgress | 
   return <Badge className={cn("capitalize", tone)}>{progress.phase.replace(/_/g, " ")}</Badge>;
 }
 
-function BlockToggle({
-  option,
-  enabled,
-  onToggle,
-}: {
-  option: VideoInfoBlockOption;
-  enabled: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={cn(
-        "rounded-2xl border p-3 text-left transition-colors",
-        enabled
-          ? option.accent
-          : "border-white/10 bg-white/5 text-white/70 hover:border-white/20 hover:bg-white/10"
-      )}
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="text-sm font-medium">{option.label}</div>
-        <div
-          className={cn(
-            "h-4 w-4 rounded border transition-colors",
-            enabled ? "border-white/90 bg-white/90" : "border-white/30 bg-transparent"
-          )}
-        />
-      </div>
-      <div className="mt-2 text-xs leading-relaxed opacity-80">{option.description}</div>
-    </button>
-  );
-}
 
-function AiResultCard({
-  title,
-  description,
-  children,
-}: {
-  title: string;
-  description: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-      <div className="space-y-1">
-        <div className="text-sm font-semibold text-white">{title}</div>
-        <div className="text-xs leading-relaxed text-zinc-500">{description}</div>
-      </div>
-      <div className="mt-4 space-y-3">{children}</div>
-    </div>
-  );
-}
-
-function toggleBlock(blocks: CreatorVideoInfoBlock[], value: CreatorVideoInfoBlock) {
-  return blocks.includes(value) ? blocks.filter((block) => block !== value) : [...blocks, value];
-}
 
 export function YouTubeUploadHub({
   projectId,
@@ -366,31 +227,21 @@ export function YouTubeUploadHub({
   } = useProjectLibrary();
   const isProjectLocked = !!projectId;
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? "");
-  const [selectedSourceAssetId, setSelectedSourceAssetId] = useState("");
-  const {
-    history,
-    isLoading: isLoadingHistory,
-    error: historyError,
-  } = useHistoryLibrary(selectedProjectId || undefined);
   const [sourceMode, setSourceMode] = useState<YouTubePublishSourceMode>("local_file");
   const [selectedExportId, setSelectedExportId] = useState(initialExportId ?? "");
 
-  const {
-    openAIApiKey,
-    hasOpenAIApiKey,
-    maskedOpenAIApiKey,
-    saveOpenAIApiKey,
-    clearOpenAIApiKey,
-  } = useCreatorAiSettings();
-  const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
-  const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>(
-    DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS
-  );
-  const [showAdvancedAiBlocks, setShowAdvancedAiBlocks] = useState(false);
+  // Autoload picker state
+  const [autoloadField, setAutoloadField] = useState<AutoloadField>("all");
+  const [autoloadPickerOpen, setAutoloadPickerOpen] = useState(false);
 
-  const { videoInfoAnalysis, setVideoInfoAnalysis, isGeneratingVideoInfo, videoInfoError, generateVideoInfo } =
-    useCreatorVideoInfoGenerator();
-  const { runs: llmRuns, refresh: refreshLlmRuns } = useCreatorLlmRuns(selectedProjectId || undefined);
+  const selectedProject = useMemo(
+    () => projects.find((project) => project.id === selectedProjectId),
+    [projects, selectedProjectId]
+  );
+  const hasAiGenerations = useMemo(
+    () => resolveProjectVideoInfoHistory(selectedProject).length > 0,
+    [selectedProject]
+  );
 
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [channels, setChannels] = useState<YouTubeChannelSummary[]>([]);
@@ -452,9 +303,6 @@ export function YouTubeUploadHub({
     );
   }, [assetsByProjectId, exportsByProjectId, projects]);
 
-  useEffect(() => {
-    setOpenAIApiKeyDraft(openAIApiKey);
-  }, [openAIApiKey]);
 
   useEffect(() => {
     if (initialSelectionAppliedRef.current || isLoadingProjects || projects.length === 0) {
@@ -487,43 +335,7 @@ export function YouTubeUploadHub({
     setSourceMode("project_export");
   }, [initialExportId]);
 
-  const selectedProject = useMemo(
-    () => projects.find((project) => project.id === selectedProjectId),
-    [projects, selectedProjectId]
-  );
 
-  const projectHistory = useMemo(() => (selectedProjectId ? history : []), [history, selectedProjectId]);
-
-  useEffect(() => {
-    if (!selectedProjectId) {
-      setSelectedSourceAssetId("");
-      return;
-    }
-
-    if (projectHistory.length === 0) {
-      setSelectedSourceAssetId("");
-      return;
-    }
-
-    const preferredSourceId =
-      selectedProject?.activeSourceAssetId && projectHistory.some((item) => item.id === selectedProject.activeSourceAssetId)
-        ? selectedProject.activeSourceAssetId
-        : projectHistory[0]?.id ?? "";
-
-    if (!selectedSourceAssetId || !projectHistory.some((item) => item.id === selectedSourceAssetId)) {
-      setSelectedSourceAssetId(preferredSourceId);
-    }
-  }, [projectHistory, selectedProject?.activeSourceAssetId, selectedProjectId, selectedSourceAssetId]);
-
-  const selectedHistoryItem = useMemo(
-    () => projectHistory.find((item) => item.id === selectedSourceAssetId),
-    [projectHistory, selectedSourceAssetId]
-  );
-
-  const selectedTranscript = useMemo(
-    () => (selectedHistoryItem ? getLatestTranscript(selectedHistoryItem) : undefined),
-    [selectedHistoryItem]
-  );
 
   const projectAssets = useMemo(
     () => (selectedProjectId ? assetsByProjectId.get(selectedProjectId) ?? [] : []),
@@ -687,32 +499,6 @@ export function YouTubeUploadHub({
       publishDraft.description.trim()
   );
 
-  const videoInfoBlocksSet = useMemo(() => new Set(videoInfoBlocks), [videoInfoBlocks]);
-
-  const creatorVideoInfoRequest = useMemo<CreatorVideoInfoGenerateRequest | null>(() => {
-    if (!selectedProject || !selectedTranscript?.transcript || !selectedTranscript.chunks?.length) {
-      return null;
-    }
-
-    return {
-      projectId: selectedProject.id,
-      sourceAssetId: selectedSourceAssetId || undefined,
-      transcriptId: selectedTranscript.id,
-      sourceSignature: `${selectedProject.id}:${selectedSourceAssetId || "source"}:${selectedTranscript.id}`,
-      transcriptText: selectedTranscript.transcript,
-      transcriptChunks: selectedTranscript.chunks,
-      transcriptVersionLabel: selectedTranscript.label,
-      videoInfoBlocks,
-    };
-  }, [selectedProject, selectedSourceAssetId, selectedTranscript, videoInfoBlocks]);
-
-  useEffect(() => {
-    const persistedAnalysis = resolveProjectVideoInfoAnalysis(
-      selectedProject,
-      creatorVideoInfoRequest?.sourceSignature
-    );
-    setVideoInfoAnalysis(persistedAnalysis);
-  }, [creatorVideoInfoRequest?.sourceSignature, selectedProject, setVideoInfoAnalysis]);
 
   const handleLocalVideoSelection = useCallback((file: File | null) => {
     setPublishResult(null);
@@ -757,65 +543,6 @@ export function YouTubeUploadHub({
     }
   };
 
-  const handleSaveOpenAIApiKey = useCallback(() => {
-    const trimmed = openAIApiKeyDraft.trim();
-    if (!trimmed) {
-      toast.error("Paste an OpenAI API key first.");
-      return;
-    }
-    saveOpenAIApiKey(trimmed);
-    toast.success("OpenAI key saved in this browser.");
-  }, [openAIApiKeyDraft, saveOpenAIApiKey]);
-
-  const handleClearOpenAIApiKey = useCallback(() => {
-    clearOpenAIApiKey();
-    setOpenAIApiKeyDraft("");
-    toast.success("OpenAI key removed from this browser.");
-  }, [clearOpenAIApiKey]);
-
-  const handleGenerateVideoInfo = useCallback(async () => {
-    if (!creatorVideoInfoRequest) {
-      toast.error("This project needs a transcript before metadata can be generated.");
-      return;
-    }
-    if (!hasOpenAIApiKey) {
-      toast.error("Add your OpenAI API key first.");
-      return;
-    }
-    if (videoInfoBlocks.length === 0) {
-      toast.error("Select at least one metadata block to generate.");
-      return;
-    }
-
-    try {
-      const result = await generateVideoInfo(creatorVideoInfoRequest, { openAIApiKey });
-      if (selectedProject) {
-        await saveProject({
-          ...selectedProject,
-          youtubeVideoInfo: buildProjectVideoInfoRecord({
-            request: creatorVideoInfoRequest,
-            response: result,
-          }),
-          updatedAt: Date.now(),
-          lastOpenedAt: Date.now(),
-        });
-      }
-      toast.success(`Metadata generated (${result.providerMode})`);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      void refreshLlmRuns();
-    }
-  }, [
-    creatorVideoInfoRequest,
-    generateVideoInfo,
-    hasOpenAIApiKey,
-    openAIApiKey,
-    refreshLlmRuns,
-    saveProject,
-    selectedProject,
-    videoInfoBlocks.length,
-  ]);
 
   const addLocalization = () => {
     setLocalizations((prev) => [...prev, createEmptyLocalization()]);
@@ -829,29 +556,9 @@ export function YouTubeUploadHub({
     setLocalizations((prev) => prev.filter((row) => row.id !== id));
   };
 
-  const applyTitleIdea = (title: string) => {
-    setPublishDraft((prev) => applySuggestedTitle(prev, title));
-    toast.success("Title applied to the draft");
-  };
-
-  const applyDescriptionDraft = (description: string) => {
-    setPublishDraft((prev) => applySuggestedDescription(prev, description));
-    toast.success("Description applied to the draft");
-  };
-
-  const applyTagsDraft = (result: CreatorVideoInfoGenerateResponse) => {
-    setPublishDraft((prev) => applySuggestedTags(prev, result));
-    toast.success("Tags filled from AI output");
-  };
-
-  const appendChaptersToDraft = (chapterText: string) => {
-    setPublishDraft((prev) => appendChapterBlockToDescription(prev, chapterText));
-    toast.success("Chapter block appended to the description");
-  };
-
-  const replaceDescriptionWithChapters = (chapterText: string) => {
-    setPublishDraft((prev) => applySuggestedDescription(prev, chapterText));
-    toast.success("Description replaced with the chapter block");
+  const openAutoloadPicker = (field: AutoloadField) => {
+    setAutoloadField(field);
+    setAutoloadPickerOpen(true);
   };
 
   const handleUpload = async () => {
@@ -911,15 +618,10 @@ export function YouTubeUploadHub({
     ? `${selectedExportOption.kind === "timeline" ? "Timeline" : "Short"} export • ${formatRelativeDate(selectedExportOption.createdAt)}`
     : "No export selected";
 
-  const hasTranscriptContext =
-    Boolean(selectedProject) &&
-    Boolean(selectedTranscript?.transcript) &&
-    Boolean(selectedTranscript?.chunks?.length);
 
-  const showContentPack = videoInfoBlocksSet.has("contentPack");
-  const showInsights = videoInfoBlocksSet.has("insights");
 
   return (
+    <>
     <div className={cn(
       "relative overflow-hidden",
       embedded ? "min-h-0 bg-transparent px-0 py-0" : "min-h-[calc(100vh-var(--header-height,4rem))] bg-zinc-950 px-4 py-6 sm:px-8 lg:px-12"
@@ -974,9 +676,6 @@ export function YouTubeUploadHub({
                       </Badge>
                     )}
                     <ProgressBadge progress={uploadProgress} />
-                    <Badge className="border-white/10 bg-white/5 text-white/70">
-                      {llmRuns.length} AI run{llmRuns.length === 1 ? "" : "s"}
-                    </Badge>
                   </div>
                 </div>
 
@@ -1017,7 +716,7 @@ export function YouTubeUploadHub({
           </Alert>
         )}
 
-        <div className="grid gap-6 xl:grid-cols-[0.98fr_1.02fr]">
+        <div className="grid gap-6 w-full">
           <div className="space-y-6">
             <Card className="overflow-hidden border-white/8 bg-white/[0.035] text-white shadow-[0_22px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
               <CardHeader className="border-b border-white/6">
@@ -1224,361 +923,8 @@ export function YouTubeUploadHub({
               </CardContent>
             </Card>
 
-            <Card className="overflow-hidden border-white/8 bg-white/[0.035] text-white shadow-[0_22px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-              <CardHeader className="border-b border-white/6">
-                <CardTitle className="flex items-center gap-2">
-                  <WandSparkles className="h-5 w-5 text-emerald-300" />
-                  AI metadata assistant
-                </CardTitle>
-                <CardDescription className="text-zinc-400">
-                  Use the existing <code>video_info</code> pipeline for upload-ready packaging. Suggestions stay separate until you explicitly apply them into the draft.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-6 p-6">
-                <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div>
-                      <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">OpenAI key</div>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Badge className="border-cyan-300/20 bg-cyan-400/10 text-cyan-100">OpenAI</Badge>
-                        <Badge
-                          className={cn(
-                            hasOpenAIApiKey
-                              ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
-                              : "border-amber-400/20 bg-amber-400/10 text-amber-100"
-                          )}
-                        >
-                          {hasOpenAIApiKey ? `Saved ${maskedOpenAIApiKey}` : "Missing"}
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
-                    <Input
-                      value={openAIApiKeyDraft}
-                      onChange={(event) => setOpenAIApiKeyDraft(event.target.value)}
-                      placeholder="Paste the OpenAI key used for creator metadata"
-                      className="border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
-                    />
-                    <Button
-                      type="button"
-                      className="bg-white text-black hover:bg-zinc-200"
-                      onClick={handleSaveOpenAIApiKey}
-                    >
-                      <KeyRound className="mr-2 h-4 w-4" />
-                      Save key
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
-                      onClick={handleClearOpenAIApiKey}
-                      disabled={!hasOpenAIApiKey}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-sm font-semibold text-white">Metadata blocks</div>
-                      <div className="text-xs text-zinc-500">
-                        Upload-focused blocks are enabled by default. Advanced blocks stay optional.
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      className="bg-white/5 text-white hover:bg-white/10"
-                      onClick={() => setShowAdvancedAiBlocks((prev) => !prev)}
-                    >
-                      {showAdvancedAiBlocks ? "Hide advanced" : "Show advanced"}
-                    </Button>
-                  </div>
-
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {PRIMARY_VIDEO_INFO_BLOCK_OPTIONS.map((option) => (
-                      <BlockToggle
-                        key={option.value}
-                        option={option}
-                        enabled={videoInfoBlocksSet.has(option.value)}
-                        onToggle={() => setVideoInfoBlocks((prev) => toggleBlock(prev, option.value))}
-                      />
-                    ))}
-                  </div>
-
-                  {showAdvancedAiBlocks ? (
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {ADVANCED_VIDEO_INFO_BLOCK_OPTIONS.map((option) => (
-                        <BlockToggle
-                          key={option.value}
-                          option={option}
-                          enabled={videoInfoBlocksSet.has(option.value)}
-                          onToggle={() => setVideoInfoBlocks((prev) => toggleBlock(prev, option.value))}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-
-                <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="text-sm font-semibold text-white">Project metadata generation</div>
-                      <div className="text-xs leading-relaxed text-zinc-500">
-                        {historyError
-                          ? historyError
-                          : hasTranscriptContext
-                            ? `Using the latest transcript from ${selectedHistoryItem?.filename || "the active project source"}.`
-                            : "Metadata generation unlocks automatically when this project has a transcript."}
-                      </div>
-                    </div>
-                    <Button
-                      type="button"
-                      onClick={() => void handleGenerateVideoInfo()}
-                      disabled={!hasTranscriptContext || !hasOpenAIApiKey || isGeneratingVideoInfo || videoInfoBlocks.length === 0}
-                      className="bg-[linear-gradient(135deg,rgba(34,211,238,0.95),rgba(16,185,129,0.95))] font-semibold text-black hover:opacity-95"
-                    >
-                      {isGeneratingVideoInfo ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      ) : (
-                        <WandSparkles className="mr-2 h-4 w-4" />
-                      )}
-                      Generate metadata
-                    </Button>
-                  </div>
-                </div>
-
-                {selectedProjectId && !isLoadingHistory && projectHistory.length === 0 ? (
-                  <Alert className="border-white/10 bg-black/20 text-zinc-200">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>No transcript available yet</AlertTitle>
-                    <AlertDescription className="text-zinc-400">
-                      You can upload manually right now. AI metadata will unlock as soon as this project has a transcript.
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-
-                {videoInfoError ? (
-                  <Alert className="border-red-400/25 bg-red-400/10 text-red-50">
-                    <AlertTriangle className="h-4 w-4" />
-                    <AlertTitle>Metadata generation failed</AlertTitle>
-                    <AlertDescription className="text-red-50/80">{videoInfoError}</AlertDescription>
-                  </Alert>
-                ) : null}
-
-                {videoInfoAnalysis ? (
-                  <div className="space-y-4">
-                    {videoInfoBlocksSet.has("titleIdeas") ? (
-                      <AiResultCard
-                        title="Title ideas"
-                        description="Pick one suggestion or copy the full set into another workflow."
-                      >
-                        <div className="space-y-2">
-                          {videoInfoAnalysis.youtube.titleIdeas.map((title, index) => (
-                            <div
-                              key={`${index}-${title}`}
-                              className="rounded-2xl border border-white/10 bg-white/[0.03] p-3"
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="text-sm text-white/90">
-                                  <span className="mr-2 text-cyan-300">{index + 1}.</span>
-                                  {title}
-                                </div>
-                                <div className="flex gap-2">
-                                  <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(title, "Title idea")}>
-                                    <Copy className="mr-2 h-3.5 w-3.5" />
-                                    Copy
-                                  </Button>
-                                  <Button size="sm" className="bg-white text-black hover:bg-zinc-200" onClick={() => applyTitleIdea(title)}>
-                                    Use
-                                  </Button>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </AiResultCard>
-                    ) : null}
-
-                    {videoInfoBlocksSet.has("description") ? (
-                      <AiResultCard
-                        title="Description draft"
-                        description="Use the full draft as-is, or keep it separate while you finalize the form manually."
-                      >
-                        <Textarea
-                          readOnly
-                          value={videoInfoAnalysis.youtube.description}
-                          className="min-h-44 border-white/10 bg-black/25 text-white"
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(videoInfoAnalysis.youtube.description, "Description")}>
-                            <Copy className="mr-2 h-3.5 w-3.5" />
-                            Copy
-                          </Button>
-                          <Button size="sm" className="bg-white text-black hover:bg-zinc-200" onClick={() => applyDescriptionDraft(videoInfoAnalysis.youtube.description)}>
-                            Use description
-                          </Button>
-                        </div>
-                      </AiResultCard>
-                    ) : null}
-
-                    {videoInfoBlocksSet.has("hashtagsSeo") ? (
-                      <AiResultCard
-                        title="Hashtags + SEO"
-                        description="Fill the upload tags field from the combined AI hashtag and keyword output."
-                      >
-                        <div className="flex flex-wrap gap-2">
-                          {videoInfoAnalysis.youtube.hashtags.map((tag) => (
-                            <button
-                              key={tag}
-                              type="button"
-                              onClick={() => void copyText(tag, "Hashtag")}
-                              className="rounded-full border border-cyan-300/20 bg-cyan-400/5 px-2.5 py-1 text-xs text-cyan-100 transition-colors hover:bg-cyan-400/10"
-                            >
-                              {tag}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/80">
-                          {videoInfoAnalysis.youtube.seoKeywords.join(", ")}
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(videoInfoAnalysis.youtube.seoKeywords.join(", "), "SEO keywords")}>
-                            <Copy className="mr-2 h-3.5 w-3.5" />
-                            Copy keywords
-                          </Button>
-                          <Button size="sm" className="bg-white text-black hover:bg-zinc-200" onClick={() => applyTagsDraft(videoInfoAnalysis)}>
-                            Use tags in form
-                          </Button>
-                        </div>
-                      </AiResultCard>
-                    ) : null}
-
-                    {videoInfoBlocksSet.has("chapters") ? (
-                      <AiResultCard
-                        title="Chapter block"
-                        description="Keep chapters adjacent to the description draft and decide how aggressively to merge them."
-                      >
-                        <Textarea
-                          readOnly
-                          value={videoInfoAnalysis.youtube.chapterText}
-                          className="min-h-32 border-white/10 bg-black/25 text-white"
-                        />
-                        <div className="flex flex-wrap gap-2">
-                          <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(videoInfoAnalysis.youtube.chapterText, "Chapter block")}>
-                            <Copy className="mr-2 h-3.5 w-3.5" />
-                            Copy
-                          </Button>
-                          <Button size="sm" className="bg-white text-black hover:bg-zinc-200" onClick={() => appendChaptersToDraft(videoInfoAnalysis.youtube.chapterText)}>
-                            Append to description
-                          </Button>
-                          <Button size="sm" variant="outline" className="border-white/10 bg-white/5 text-white hover:bg-white/10" onClick={() => replaceDescriptionWithChapters(videoInfoAnalysis.youtube.chapterText)}>
-                            Replace with chapters
-                          </Button>
-                        </div>
-                      </AiResultCard>
-                    ) : null}
-
-                    {videoInfoBlocksSet.has("pinnedComment") || videoInfoBlocksSet.has("thumbnailHooks") ? (
-                      <AiResultCard
-                        title="Packaging extras"
-                        description="Keep the pinned comment and thumbnail hooks nearby without forcing them into upload metadata."
-                      >
-                        {videoInfoBlocksSet.has("pinnedComment") ? (
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/85">
-                            {videoInfoAnalysis.youtube.pinnedComment}
-                          </div>
-                        ) : null}
-                        {videoInfoBlocksSet.has("thumbnailHooks") ? (
-                          <div className="grid gap-2">
-                            {videoInfoAnalysis.youtube.thumbnailHooks.map((hook) => (
-                              <div key={hook} className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/85">
-                                {hook}
-                              </div>
-                            ))}
-                          </div>
-                        ) : null}
-                        <div className="flex flex-wrap gap-2">
-                          {videoInfoBlocksSet.has("pinnedComment") ? (
-                            <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(videoInfoAnalysis.youtube.pinnedComment, "Pinned comment")}>
-                              <Copy className="mr-2 h-3.5 w-3.5" />
-                              Copy pinned comment
-                            </Button>
-                          ) : null}
-                          {videoInfoBlocksSet.has("thumbnailHooks") ? (
-                            <Button size="sm" variant="ghost" className="bg-white/5 text-white hover:bg-white/10" onClick={() => void copyText(videoInfoAnalysis.youtube.thumbnailHooks.join("\n"), "Thumbnail hooks")}>
-                              <Copy className="mr-2 h-3.5 w-3.5" />
-                              Copy hooks
-                            </Button>
-                          ) : null}
-                        </div>
-                      </AiResultCard>
-                    ) : null}
-
-                    {showContentPack || showInsights ? (
-                      <AiResultCard
-                        title="Advanced analysis"
-                        description="These blocks stay optional and never write directly into the upload draft."
-                      >
-                        {showContentPack ? (
-                          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/85">
-                            <div className="font-medium text-white">Summary</div>
-                            <div className="mt-2 leading-relaxed text-zinc-300">{videoInfoAnalysis.content.videoSummary}</div>
-                            <div className="mt-4 grid gap-2 md:grid-cols-2">
-                              <div>
-                                <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Hooks</div>
-                                <div className="mt-2 space-y-2">
-                                  {videoInfoAnalysis.content.hookIdeas.map((hook) => (
-                                    <div key={hook} className="rounded-xl border border-white/8 bg-black/20 p-2.5">
-                                      {hook}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                              <div>
-                                <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Repurpose</div>
-                                <div className="mt-2 space-y-2">
-                                  {videoInfoAnalysis.content.repurposeIdeas.map((idea) => (
-                                    <div key={idea} className="rounded-xl border border-white/8 bg-black/20 p-2.5">
-                                      {idea}
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                        {showInsights ? (
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                              <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Words</div>
-                              <div className="mt-2 text-2xl font-semibold text-white">{videoInfoAnalysis.insights.transcriptWordCount}</div>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-                              <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">WPM</div>
-                              <div className="mt-2 text-2xl font-semibold text-white">{videoInfoAnalysis.insights.estimatedSpeakingRateWpm}</div>
-                            </div>
-                            <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 sm:col-span-2">
-                              <div className="text-xs uppercase tracking-[0.2em] text-zinc-500">Theme</div>
-                              <div className="mt-2 text-sm text-white/85">{videoInfoAnalysis.insights.detectedTheme}</div>
-                            </div>
-                          </div>
-                        ) : null}
-                      </AiResultCard>
-                    ) : null}
-                  </div>
-                ) : (
-                  <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-5 text-sm text-zinc-400">
-                    Generated metadata will land here. The final publish draft on the right stays untouched until you explicitly apply a suggestion.
-                  </div>
-                )}
-              </CardContent>
-            </Card>
           </div>
+
 
           <div className="space-y-6">
             <Card className="overflow-hidden border-white/8 bg-white/[0.035] text-white shadow-[0_22px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
@@ -1692,9 +1038,22 @@ export function YouTubeUploadHub({
 
             <Card className="overflow-hidden border-white/8 bg-white/[0.035] text-white shadow-[0_22px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
               <CardHeader className="border-b border-white/6">
-                <CardTitle className="flex items-center gap-2">
-                  <FileText className="h-5 w-5 text-emerald-300" />
-                  Publish draft
+                <CardTitle className="flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-emerald-300" />
+                    Publish draft
+                  </div>
+                  {hasAiGenerations ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openAutoloadPicker("all")}
+                      className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
+                    >
+                      <WandSparkles className="mr-2 h-3.5 w-3.5" />
+                      Autoload all
+                    </Button>
+                  ) : null}
                 </CardTitle>
                 <CardDescription className="text-zinc-400">
                   Manual inputs stay authoritative. AI only fills these fields when you explicitly tell it to.
@@ -1703,9 +1062,15 @@ export function YouTubeUploadHub({
               <CardContent className="space-y-6 p-6">
                 <div className="grid gap-5">
                   <div className="grid gap-2">
-                    <Label htmlFor="yt-title" className="text-zinc-200">
-                      Title
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="yt-title" className="text-zinc-200">
+                        Title
+                      </Label>
+                      <AiAutoloadButton 
+                        disabled={!hasAiGenerations} 
+                        onClick={() => openAutoloadPicker("title")} 
+                      />
+                    </div>
                     <Input
                       id="yt-title"
                       value={publishDraft.title}
@@ -1721,9 +1086,15 @@ export function YouTubeUploadHub({
                   </div>
 
                   <div className="grid gap-2">
-                    <Label htmlFor="yt-description" className="text-zinc-200">
-                      Description
-                    </Label>
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="yt-description" className="text-zinc-200">
+                        Description
+                      </Label>
+                      <AiAutoloadButton 
+                        disabled={!hasAiGenerations} 
+                        onClick={() => openAutoloadPicker("description")} 
+                      />
+                    </div>
                     <Textarea
                       id="yt-description"
                       value={publishDraft.description}
@@ -1819,9 +1190,15 @@ export function YouTubeUploadHub({
                         </div>
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="yt-tags" className="text-zinc-200">
-                          Tags
-                        </Label>
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="yt-tags" className="text-zinc-200">
+                            Tags
+                          </Label>
+                          <AiAutoloadButton 
+                            disabled={!hasAiGenerations} 
+                            onClick={() => openAutoloadPicker("tags")} 
+                          />
+                        </div>
                         <Input
                           id="yt-tags"
                           value={publishDraft.tagsInput}
@@ -2253,5 +1630,26 @@ export function YouTubeUploadHub({
         </div>
       </div>
     </div>
+
+      {selectedProject && (
+        <AiAutoloadPicker
+          project={selectedProject}
+          field={autoloadField}
+          open={autoloadPickerOpen}
+          onOpenChange={setAutoloadPickerOpen}
+          onApplyTitle={(title) => setPublishDraft(p => ({ ...p, title }))}
+          onApplyDescription={(description) => setPublishDraft(p => ({ ...p, description }))}
+          onApplyTags={(tags) => setPublishDraft(p => ({ ...p, tagsInput: tags }))}
+          onApplyAll={(values) => {
+            setPublishDraft(p => ({ 
+              ...p, 
+              title: values.title,
+              description: values.description,
+              tagsInput: values.tags 
+            }));
+          }}
+        />
+      )}
+    </>
   );
 }

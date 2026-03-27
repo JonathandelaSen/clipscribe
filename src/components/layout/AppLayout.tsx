@@ -13,7 +13,8 @@ import {
   Clapperboard, 
   Scissors, 
   Download,
-  Upload
+  Upload,
+  WandSparkles
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     { id: "transcripts", label: "Transcripts", icon: Languages },
     { id: "shorts", label: "Shorts", icon: Clapperboard },
     { id: "timeline", label: "Editor", icon: Scissors },
+    { id: "ai_metadata", label: "AI Metadata", icon: WandSparkles },
     { id: "publish", label: "Publish", icon: Upload },
     { id: "exports", label: "Exports", icon: Download },
   ];

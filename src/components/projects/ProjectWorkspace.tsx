@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Clapperboard, Download, Film, Languages, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
+import { AiMetadataHub } from "@/components/creator/AiMetadataHub";
 import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
@@ -22,7 +23,7 @@ import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
 import type { ProjectExportRecord } from "@/lib/projects/types";
 
-type WorkspaceTab = "assets" | "transcripts" | "shorts" | "timeline" | "publish" | "exports";
+type WorkspaceTab = "assets" | "transcripts" | "shorts" | "timeline" | "ai_metadata" | "publish" | "exports";
 
 function formatRelativeDate(timestamp: number) {
   return new Intl.DateTimeFormat("es", {
@@ -72,7 +73,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const tabParam = searchParams.get("tab");
   const initialExportId = searchParams.get("exportId") ?? undefined;
   const currentTab: WorkspaceTab =
-    tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
+    tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
 
   const {
     project,
@@ -417,6 +418,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
           {currentTab === "timeline" && (
             <TimelineEditorWorkspace projectId={project.id} />
+          )}
+
+          {currentTab === "ai_metadata" && (
+            <AiMetadataHub projectId={project.id} />
           )}
 
           {currentTab === "publish" && (
