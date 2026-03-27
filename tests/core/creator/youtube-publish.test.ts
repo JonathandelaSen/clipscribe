@@ -1,0 +1,185 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import type { ProjectAssetRecord, ProjectExportRecord } from "../../../src/lib/projects/types";
+import {
+  DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS,
+  appendChapterBlockToDescription,
+  applySuggestedDescription,
+  applySuggestedTags,
+  applySuggestedTitle,
+  getEligibleYouTubeProjectExports,
+  resolveInitialYouTubePublishSelection,
+} from "../../../src/lib/creator/youtube-publish";
+
+function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetRecord {
+  return {
+    id: overrides.id ?? "asset_1",
+    projectId: overrides.projectId ?? "project_1",
+    role: overrides.role ?? "derived",
+    origin: overrides.origin ?? "short-export",
+    sourceType: overrides.sourceType ?? "upload",
+    kind: overrides.kind ?? "video",
+    filename: overrides.filename ?? "clip.mp4",
+    mimeType: overrides.mimeType ?? "video/mp4",
+    sizeBytes: overrides.sizeBytes ?? 1024,
+    durationSeconds: overrides.durationSeconds ?? 15,
+    captionSource: overrides.captionSource ?? { kind: "none" },
+    createdAt: overrides.createdAt ?? 1_000,
+    updatedAt: overrides.updatedAt ?? 1_000,
+    fileBlob: Object.prototype.hasOwnProperty.call(overrides, "fileBlob")
+      ? overrides.fileBlob
+      : new File(["video"], "clip.mp4", { type: "video/mp4" }),
+  };
+}
+
+function createExport(overrides: Partial<ProjectExportRecord> = {}): ProjectExportRecord {
+  return {
+    id: overrides.id ?? "export_1",
+    projectId: overrides.projectId ?? "project_1",
+    kind: overrides.kind ?? "short",
+    createdAt: overrides.createdAt ?? 2_000,
+    status: overrides.status ?? "completed",
+    filename: overrides.filename ?? "export.mp4",
+    mimeType: overrides.mimeType ?? "video/mp4",
+    sizeBytes: overrides.sizeBytes ?? 2048,
+    outputAssetId: overrides.outputAssetId ?? "asset_1",
+  };
+}
+
+test("DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS keeps the upload-focused defaults", () => {
+  assert.deepEqual(DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS, [
+    "titleIdeas",
+    "description",
+    "hashtagsSeo",
+    "thumbnailHooks",
+    "chapters",
+    "pinnedComment",
+  ]);
+});
+
+test("apply suggestion helpers only update the targeted draft fields", () => {
+  const draft = {
+    title: "Original title",
+    description: "Original description",
+    tagsInput: "already, here",
+  };
+
+  const withTitle = applySuggestedTitle(draft, "  New title  ");
+  assert.equal(withTitle.title, "New title");
+  assert.equal(withTitle.description, draft.description);
+  assert.equal(withTitle.tagsInput, draft.tagsInput);
+
+  const withDescription = applySuggestedDescription(draft, "  Better description  ");
+  assert.equal(withDescription.title, draft.title);
+  assert.equal(withDescription.description, "Better description");
+  assert.equal(withDescription.tagsInput, draft.tagsInput);
+});
+
+test("applySuggestedTags merges hashtags and keywords into a deduplicated tags input", () => {
+  const result = applySuggestedTags(
+    {
+      title: "",
+      description: "",
+      tagsInput: "",
+    },
+    {
+      youtube: {
+        titleIdeas: [],
+        description: "",
+        pinnedComment: "",
+        hashtags: ["#workflow", "#Workflow", "#clipscribe"],
+        seoKeywords: ["youtube upload", "workflow"],
+        thumbnailHooks: [],
+        chapterText: "",
+      },
+    }
+  );
+
+  assert.equal(result.tagsInput, "workflow, clipscribe, youtube upload");
+});
+
+test("appendChapterBlockToDescription appends chapters once and preserves existing copy", () => {
+  const initial = {
+    title: "",
+    description: "Intro copy",
+    tagsInput: "",
+  };
+
+  const next = appendChapterBlockToDescription(initial, "0:00 Intro\n0:20 Demo");
+  assert.equal(next.description, "Intro copy\n\n0:00 Intro\n0:20 Demo");
+
+  const deduped = appendChapterBlockToDescription(next, "0:00 Intro\n0:20 Demo");
+  assert.equal(deduped.description, next.description);
+});
+
+test("getEligibleYouTubeProjectExports only returns completed video exports backed by blobs", () => {
+  const asset = createAsset();
+  const assetsById = new Map<string, ProjectAssetRecord>([[asset.id, asset]]);
+  const eligible = createExport({ id: "export_ok", outputAssetId: asset.id, createdAt: 3_000 });
+  const failed = createExport({ id: "export_failed", status: "failed", createdAt: 4_000 });
+  const missingBlobAsset = createAsset({ id: "asset_missing", fileBlob: undefined });
+  const imageAsset = createAsset({ id: "asset_image", kind: "image", fileBlob: new File(["x"], "cover.png", { type: "image/png" }) });
+
+  assetsById.set(missingBlobAsset.id, missingBlobAsset);
+  assetsById.set(imageAsset.id, imageAsset);
+
+  const results = getEligibleYouTubeProjectExports(
+    [
+      eligible,
+      failed,
+      createExport({ id: "export_no_blob", outputAssetId: missingBlobAsset.id, createdAt: 2_000 }),
+      createExport({ id: "export_image", outputAssetId: imageAsset.id, createdAt: 1_000 }),
+    ],
+    assetsById
+  );
+
+  assert.deepEqual(results.map((item) => item.exportId), ["export_ok"]);
+});
+
+test("resolveInitialYouTubePublishSelection honors valid deep links and falls back safely", () => {
+  const exportOptionsByProjectId = new Map([
+    [
+      "project_1",
+      [
+        {
+          exportId: "export_1",
+          projectId: "project_1",
+          outputAssetId: "asset_1",
+          filename: "clip.mp4",
+          createdAt: 1_000,
+          kind: "short" as const,
+          file: new File(["video"], "clip.mp4", { type: "video/mp4" }),
+        },
+      ],
+    ],
+  ]);
+
+  assert.deepEqual(
+    resolveInitialYouTubePublishSelection({
+      projectId: "project_1",
+      exportId: "export_1",
+      availableProjectIds: ["project_1", "project_2"],
+      exportOptionsByProjectId,
+    }),
+    {
+      projectId: "project_1",
+      exportId: "export_1",
+      sourceMode: "project_export",
+    }
+  );
+
+  assert.deepEqual(
+    resolveInitialYouTubePublishSelection({
+      projectId: "missing",
+      exportId: "export_1",
+      availableProjectIds: ["project_1", "project_2"],
+      exportOptionsByProjectId,
+    }),
+    {
+      projectId: "",
+      exportId: "",
+      sourceMode: "local_file",
+    }
+  );
+});

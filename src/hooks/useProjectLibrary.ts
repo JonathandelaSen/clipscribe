@@ -85,6 +85,11 @@ export function useProjectLibrary() {
     await refresh();
   }, [refresh]);
 
+  const saveProject = useCallback(async (record: ContentProjectRecord) => {
+    await projectRepository.putProject(record);
+    await refresh();
+  }, [refresh]);
+
   return {
     projects,
     assetsByProjectId,
@@ -93,6 +98,7 @@ export function useProjectLibrary() {
     error,
     refresh,
     createProjectFromFile,
+    saveProject,
     deleteProject,
   };
 }

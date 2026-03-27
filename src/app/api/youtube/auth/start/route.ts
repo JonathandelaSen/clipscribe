@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import {
+  YOUTUBE_RETURN_TO_COOKIE,
   YOUTUBE_STATE_COOKIE,
   YOUTUBE_STATE_MAX_AGE_SECONDS,
 } from "@/lib/youtube/constants";
@@ -46,6 +47,19 @@ export async function GET(request: NextRequest) {
     path: "/",
     maxAge: YOUTUBE_STATE_MAX_AGE_SECONDS,
   });
+
+  const returnTo = request.nextUrl.searchParams.get("returnTo");
+  if (returnTo) {
+    response.cookies.set({
+      name: YOUTUBE_RETURN_TO_COOKIE,
+      value: returnTo,
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isSecureCookie(request),
+      path: "/",
+      maxAge: YOUTUBE_STATE_MAX_AGE_SECONDS,
+    });
+  }
 
   return response;
 }

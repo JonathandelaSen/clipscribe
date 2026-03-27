@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import {
+  YOUTUBE_RETURN_TO_COOKIE,
   YOUTUBE_SESSION_COOKIE,
   YOUTUBE_SESSION_MAX_AGE_SECONDS,
   YOUTUBE_STATE_COOKIE,
@@ -17,7 +18,8 @@ function isSecureCookie(request: NextRequest) {
 }
 
 function redirectToTool(request: NextRequest, status: string, detail?: string) {
-  const target = new URL("/creator/youtube", request.nextUrl.origin);
+  const returnToCookie = request.cookies.get(YOUTUBE_RETURN_TO_COOKIE)?.value;
+  const target = new URL(returnToCookie || "/", request.nextUrl.origin);
   target.searchParams.set("youtube", status);
   if (detail) target.searchParams.set("detail", detail);
   return NextResponse.redirect(target);
@@ -64,6 +66,15 @@ export async function GET(request: NextRequest) {
     });
     response.cookies.set({
       name: YOUTUBE_STATE_COOKIE,
+      value: "",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isSecureCookie(request),
+      path: "/",
+      maxAge: 0,
+    });
+    response.cookies.set({
+      name: YOUTUBE_RETURN_TO_COOKIE,
       value: "",
       httpOnly: true,
       sameSite: "lax",

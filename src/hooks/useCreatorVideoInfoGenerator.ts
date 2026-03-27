@@ -1,7 +1,10 @@
 import { useState } from "react";
 import type { CreatorVideoInfoGenerateRequest, CreatorVideoInfoGenerateResponse } from "@/lib/creator/types";
+import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
 import { CREATOR_OPENAI_API_KEY_HEADER } from "@/lib/creator/user-ai-settings";
 import { postJson } from "@/hooks/creator-api";
+
+const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v2";
 
 export function useCreatorVideoInfoGenerator() {
   const [videoInfoAnalysis, setVideoInfoAnalysis] = useState<CreatorVideoInfoGenerateResponse | null>(null);
@@ -15,11 +18,22 @@ export function useCreatorVideoInfoGenerator() {
       const result = await postJson<CreatorVideoInfoGenerateResponse>(
         "/api/creator/video-info/generate",
         payload,
-        options?.openAIApiKey
-          ? {
-              [CREATOR_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
-            }
-          : undefined
+        {
+          headers: options?.openAIApiKey
+            ? {
+                [CREATOR_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
+              }
+            : undefined,
+          pendingLlmRun: buildPendingCreatorLlmRun({
+            feature: "video_info",
+            operation: "generate_video_info",
+            promptVersion: VIDEO_INFO_PENDING_PROMPT_VERSION,
+            request: payload,
+            inputSummary: {
+              videoInfoBlocks: payload.videoInfoBlocks?.slice(),
+            },
+          }),
+        }
       );
       setVideoInfoAnalysis(result);
       return result;

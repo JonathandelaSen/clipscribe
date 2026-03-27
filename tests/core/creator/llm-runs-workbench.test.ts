@@ -89,14 +89,15 @@ test("computeAiRunsWorkbenchMetrics aggregates totals and error rate", () => {
   const metrics = computeAiRunsWorkbenchMetrics([
     makeRun({ id: "run_1", durationMs: 1000, usage: { totalTokens: 100 } }),
     makeRun({ id: "run_2", durationMs: 3000, usage: { totalTokens: 300 }, status: "parse_error" }),
+    makeRun({ id: "run_3", durationMs: 250, usage: { totalTokens: 0 }, status: "processing" }),
   ]);
 
-  assert.equal(metrics.totalRuns, 2);
+  assert.equal(metrics.totalRuns, 3);
   assert.equal(metrics.errorRuns, 1);
   assert.equal(metrics.successRuns, 1);
   assert.equal(metrics.uniqueModels, 1);
   assert.equal(metrics.totalTokens, 400);
-  assert.equal(metrics.averageDurationMs, 2000);
+  assert.equal(metrics.averageDurationMs, 1416.6666666666667);
   assert.equal(metrics.errorRate, 0.5);
 });
 

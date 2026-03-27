@@ -130,8 +130,14 @@ export function filterAiRunsWorkbenchRecords(
 
 export function computeAiRunsWorkbenchMetrics(runs: CreatorLLMRunRecord[]): AiRunsWorkbenchMetrics {
   const totalRuns = runs.length;
-  const errorRuns = runs.filter((run) => run.status !== "success").length;
-  const successRuns = totalRuns - errorRuns;
+  const errorRuns = runs.filter(
+    (run) =>
+      run.status === "provider_error" ||
+      run.status === "parse_error" ||
+      run.status === "validation_error"
+  ).length;
+  const successRuns = runs.filter((run) => run.status === "success").length;
+  const settledRuns = successRuns + errorRuns;
   const totalDuration = runs.reduce((sum, run) => sum + (run.durationMs ?? 0), 0);
   const durationCount = runs.filter((run) => Number.isFinite(run.durationMs)).length;
   const totalTokens = runs.reduce((sum, run) => sum + (run.usage?.totalTokens ?? 0), 0);
@@ -141,7 +147,7 @@ export function computeAiRunsWorkbenchMetrics(runs: CreatorLLMRunRecord[]): AiRu
     totalRuns,
     errorRuns,
     successRuns,
-    errorRate: totalRuns > 0 ? errorRuns / totalRuns : 0,
+    errorRate: settledRuns > 0 ? errorRuns / settledRuns : 0,
     uniqueModels,
     averageDurationMs: durationCount > 0 ? totalDuration / durationCount : null,
     totalTokens,

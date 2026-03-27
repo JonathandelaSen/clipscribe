@@ -1,4 +1,8 @@
 import type { CreatorLLMRunRecord } from "@/lib/creator/types";
+import {
+  markCreatorLlmRunProcessing,
+  markCreatorLlmRunRequestFailed,
+} from "@/lib/creator/llm-run-pending";
 import { createDexieCreatorLLMRunsRepository } from "@/lib/repositories/creator-llm-runs-repo";
 
 interface ApiErrorResponse {
@@ -13,6 +17,11 @@ interface ApiResponseMeta {
 type ApiEnvelope<TResponse> = TResponse & {
   _meta?: ApiResponseMeta;
 };
+
+interface PostJsonOptions {
+  headers?: HeadersInit;
+  pendingLlmRun?: CreatorLLMRunRecord;
+}
 
 const creatorLlmRunsRepository = createDexieCreatorLLMRunsRepository();
 
@@ -34,23 +43,62 @@ function unwrapApiEnvelope<TResponse>(value: ApiEnvelope<TResponse> | ApiErrorRe
   return rest as TResponse | ApiErrorResponse;
 }
 
-export async function postJson<TResponse>(url: string, payload: unknown, headers?: HeadersInit): Promise<TResponse> {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(headers ?? {}),
-    },
-    body: JSON.stringify(payload),
-  });
+export async function postJson<TResponse>(url: string, payload: unknown, options?: PostJsonOptions): Promise<TResponse> {
+  let pendingRun = options?.pendingLlmRun;
 
-  const data = (await response.json()) as ApiEnvelope<TResponse> | ApiErrorResponse;
-  const meta = data && typeof data === "object" && "_meta" in data ? data._meta : undefined;
-  await persistResponseMeta(meta);
-  const unwrapped = unwrapApiEnvelope<TResponse>(data);
-  if (!response.ok) {
-    const message = (unwrapped as ApiErrorResponse).error || `Request failed (${response.status})`;
-    throw new Error(message);
+  if (pendingRun) {
+    try {
+      await creatorLlmRunsRepository.putRun(pendingRun);
+      pendingRun = markCreatorLlmRunProcessing(pendingRun);
+      await creatorLlmRunsRepository.putRun(pendingRun);
+    } catch (error) {
+      console.error("Failed to persist pending creator LLM run locally", error);
+    }
   }
-  return unwrapped as TResponse;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options?.headers ?? {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data = (await response.json()) as ApiEnvelope<TResponse> | ApiErrorResponse;
+    const meta = data && typeof data === "object" && "_meta" in data ? data._meta : undefined;
+    await persistResponseMeta(meta);
+
+    if (pendingRun && meta?.creatorLlmRun && meta.creatorLlmRun.id !== pendingRun.id) {
+      await creatorLlmRunsRepository.deleteRun(pendingRun.id).catch((error) => {
+        console.error("Failed to remove pending creator LLM run locally", error);
+      });
+      pendingRun = undefined;
+    }
+
+    const unwrapped = unwrapApiEnvelope<TResponse>(data);
+    if (!response.ok) {
+      const message = (unwrapped as ApiErrorResponse).error || `Request failed (${response.status})`;
+      throw new Error(message);
+    }
+
+    if (pendingRun) {
+      await creatorLlmRunsRepository.deleteRun(pendingRun.id).catch((error) => {
+        console.error("Failed to remove pending creator LLM run locally", error);
+      });
+    }
+
+    return unwrapped as TResponse;
+  } catch (error) {
+    if (pendingRun) {
+      const message = error instanceof Error ? error.message : "Creator request failed";
+      await creatorLlmRunsRepository
+        .putRun(markCreatorLlmRunRequestFailed(pendingRun, message))
+        .catch((persistError) => {
+          console.error("Failed to persist failed creator LLM run locally", persistError);
+        });
+    }
+    throw error;
+  }
 }

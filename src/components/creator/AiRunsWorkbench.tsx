@@ -145,7 +145,7 @@ function previewPrimitive(value: unknown): string {
 }
 
 function ErrorSpotlight({ run }: { run: CreatorLLMRunRecord }) {
-  if (run.status === "success") return null;
+  if (run.status === "success" || run.status === "queued" || run.status === "processing") return null;
 
   const title =
     run.status === "provider_error"
@@ -591,7 +591,9 @@ function RunListRow({
                 "border-white/12",
                 run.status === "success"
                   ? "bg-emerald-400/10 text-emerald-100"
-                  : "bg-amber-400/10 text-amber-100"
+                  : run.status === "queued" || run.status === "processing"
+                    ? "bg-cyan-400/10 text-cyan-100"
+                    : "bg-amber-400/10 text-amber-100"
               )}
             >
               {run.status}
@@ -663,6 +665,8 @@ export function AiRunsWorkbench() {
       projectId: searchParams.get("projectId") ?? "all",
       feature: feature === "shorts" || feature === "video_info" ? feature : "all",
       status:
+        status === "queued" ||
+        status === "processing" ||
         status === "success" ||
         status === "provider_error" ||
         status === "parse_error" ||
@@ -958,6 +962,8 @@ export function AiRunsWorkbench() {
                         </SelectTrigger>
                         <SelectContent className="border-white/10 bg-zinc-950 text-white">
                           <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="queued">Queued</SelectItem>
+                          <SelectItem value="processing">Processing</SelectItem>
                           <SelectItem value="success">Success</SelectItem>
                           <SelectItem value="provider_error">Provider error</SelectItem>
                           <SelectItem value="parse_error">Parse error</SelectItem>
@@ -1090,6 +1096,8 @@ export function AiRunsWorkbench() {
                             "border-white/12",
                             selectedRun.status === "success"
                               ? "bg-emerald-400/10 text-emerald-100"
+                              : selectedRun.status === "queued" || selectedRun.status === "processing"
+                                ? "bg-cyan-400/10 text-cyan-100"
                               : "bg-amber-400/10 text-amber-100"
                           )}
                         >

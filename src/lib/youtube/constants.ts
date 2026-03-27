@@ -15,6 +15,7 @@ export const YOUTUBE_LANGUAGES_PART = "snippet";
 
 export const YOUTUBE_SESSION_COOKIE = "clipscribe_youtube_session";
 export const YOUTUBE_STATE_COOKIE = "clipscribe_youtube_state";
+export const YOUTUBE_RETURN_TO_COOKIE = "clipscribe_youtube_return_to";
 export const YOUTUBE_SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 export const YOUTUBE_STATE_MAX_AGE_SECONDS = 60 * 15;
 

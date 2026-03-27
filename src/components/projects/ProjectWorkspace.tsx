@@ -1,14 +1,16 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Clapperboard, Download, Film, Languages, Loader2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Clapperboard, Download, Film, Languages, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { YouTubeUploadHub } from "@/components/creator/YouTubeUploadHub";
 import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorkspace";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -20,7 +22,7 @@ import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
 import type { ProjectExportRecord } from "@/lib/projects/types";
 
-type WorkspaceTab = "assets" | "transcripts" | "shorts" | "timeline" | "exports";
+type WorkspaceTab = "assets" | "transcripts" | "shorts" | "timeline" | "publish" | "exports";
 
 function formatRelativeDate(timestamp: number) {
   return new Intl.DateTimeFormat("es", {
@@ -68,8 +70,9 @@ function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: Backgroun
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
+  const initialExportId = searchParams.get("exportId") ?? undefined;
   const currentTab: WorkspaceTab =
-    tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "exports" ? tabParam : "assets";
+    tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
 
   const {
     project,
@@ -153,7 +156,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     void refresh();
-  }, [currentTab, refresh]);
+  }, [refresh]);
 
   const handleAddAssets = async (files: FileList | null) => {
     if (!files) return;
@@ -240,7 +243,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
   return (
     <main className={cn(
-      "flex-1 w-full bg-transparent flex flex-col h-full animate-in fade-in duration-500",
+      "flex-1 w-full bg-transparent flex flex-col h-full",
+      currentTab === "publish" ? "" : "animate-in fade-in duration-500",
       currentTab === "timeline" ? "p-0" : "p-4 sm:p-6 lg:p-8"
     )}>
       <input ref={assetInputRef} type="file" multiple className="hidden" accept="audio/*,video/*,image/*,.mkv" onChange={(e) => void handleAddAssets(e.target.files)} />
@@ -249,7 +253,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         currentTab === "timeline" ? "" : "gap-6 pt-2"
       )}>
 
-        <div className="flex-1 w-full animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <div className={cn(
+          "flex-1 w-full",
+          currentTab === "publish" ? "" : "animate-in fade-in slide-in-from-bottom-2 duration-300"
+        )}>
           {currentTab === "assets" && (
             <Card className="border-white/10 bg-white/[0.03] text-white">
               <CardHeader className="flex flex-row items-center justify-between gap-4">
@@ -412,6 +419,14 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             <TimelineEditorWorkspace projectId={project.id} />
           )}
 
+          {currentTab === "publish" && (
+            <YouTubeUploadHub
+              projectId={project.id}
+              initialExportId={initialExportId}
+              embedded
+            />
+          )}
+
           {currentTab === "exports" && (
             <Card className="border-white/10 bg-white/[0.03] text-white">
               <CardHeader>
@@ -440,6 +455,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                           </div>
                         </div>
                         <div className="flex flex-wrap items-center gap-2">
+                          {outputAsset?.fileBlob && record.status === "completed" && outputAsset.kind === "video" && (
+                            <Button
+                              asChild
+                              variant="outline"
+                              className="rounded-xl border-cyan-300/20 bg-cyan-400/10 text-cyan-50 hover:bg-cyan-400/15"
+                            >
+                              <Link href={`/projects/${encodeURIComponent(project.id)}?tab=publish&exportId=${encodeURIComponent(record.id)}`}>
+                                <Upload className="mr-2 h-4 w-4" />
+                                Publish to YouTube
+                              </Link>
+                            </Button>
+                          )}
                           {outputAsset?.fileBlob && (
                             <Button
                               variant="outline"

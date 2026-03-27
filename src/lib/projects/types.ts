@@ -6,11 +6,13 @@ import type {
   CreatorShortSystemExportCounts,
   CreatorShortSystemExportTimingsMs,
   CreatorSuggestedShort,
+  CreatorVideoInfoProjectRecord,
   CreatorViralClip,
 } from "@/lib/creator/types";
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
+  youtubeVideoInfo?: CreatorVideoInfoProjectRecord;
 };
 
 export type ProjectAssetRole = "source" | "derived" | "support";

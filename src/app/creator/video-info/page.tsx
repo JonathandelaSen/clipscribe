@@ -1,5 +1,5 @@
-import { CreatorHub } from "@/components/CreatorHub";
+import { redirect } from "next/navigation";
 
 export default function CreatorVideoInfoPage() {
-  return <CreatorHub lockedTool="video_info" />;
+  redirect("/");
 }

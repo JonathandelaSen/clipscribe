@@ -99,6 +99,24 @@ test("buildVideoInfoPrompt contains packaging fields and excludes shorts instruc
   assert.doesNotMatch(prompt, /viralClips/i);
 });
 
+test("buildVideoInfoPrompt only requires the selected fields", () => {
+  const prompt = buildVideoInfoPrompt({
+    ...baseRequest,
+    videoInfoBlocks: ["titleIdeas", "description"],
+  });
+
+  assert.match(prompt, /youtube\.titleIdeas/i);
+  assert.match(prompt, /youtube\.description/i);
+  assert.match(prompt, /Only include the requested keys/i);
+  assert.doesNotMatch(prompt, /"pinnedComment"/i);
+  assert.doesNotMatch(prompt, /"hashtags"/i);
+  assert.doesNotMatch(prompt, /"seoKeywords"/i);
+  assert.doesNotMatch(prompt, /"thumbnailHooks"/i);
+  assert.doesNotMatch(prompt, /"chapters"/i);
+  assert.doesNotMatch(prompt, /"insights"/i);
+  assert.doesNotMatch(prompt, /"content"/i);
+});
+
 test("mapVideoInfoOpenAIResponse returns the expected video info payload", () => {
   const result = mapVideoInfoOpenAIResponse(baseRequest, videoInfoModelResponse, "test-model");
 
@@ -152,6 +170,7 @@ test("generateVideoInfoWithOpenAI returns packaging results and uses the video i
         };
         const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
         assert.match(userMessage, /youtube\.titleIdeas/i);
+        assert.match(userMessage, /Only include the requested keys/i);
         assert.doesNotMatch(userMessage, /shortsPlans/i);
 
         return new Response(

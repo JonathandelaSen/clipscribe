@@ -4,7 +4,13 @@ export type CreatorAIProviderMode = "mock" | "openai";
 export type CreatorLLMFeature = "shorts" | "video_info";
 export type CreatorLLMProvider = "openai";
 export type CreatorLLMOperation = "generate_shorts" | "generate_video_info";
-export type CreatorLLMRunStatus = "success" | "provider_error" | "parse_error" | "validation_error";
+export type CreatorLLMRunStatus =
+  | "queued"
+  | "processing"
+  | "success"
+  | "provider_error"
+  | "parse_error"
+  | "validation_error";
 export type CreatorLLMRedactionState = "raw" | "purged";
 
 
@@ -174,6 +180,25 @@ export interface CreatorVideoInfoGenerateResponse extends CreatorGenerationRespo
   content: CreatorLongFormContentPack;
   chapters: CreatorChapter[];
   insights: CreatorInsights;
+}
+
+export interface CreatorVideoInfoProjectRecordInputSummary {
+  transcriptId?: string;
+  subtitleId?: string;
+  transcriptVersionLabel?: string;
+  subtitleVersionLabel?: string;
+  sourceSignature?: string;
+  videoInfoBlocks: CreatorVideoInfoBlock[];
+  model?: string;
+}
+
+export interface CreatorVideoInfoProjectRecord {
+  id: string;
+  generatedAt: number;
+  sourceAssetId?: string;
+  sourceSignature?: string;
+  inputSummary: CreatorVideoInfoProjectRecordInputSummary;
+  analysis: CreatorVideoInfoGenerateResponse;
 }
 
 export interface CreatorShortRenderRequest {
