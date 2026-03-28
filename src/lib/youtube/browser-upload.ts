@@ -136,7 +136,7 @@ async function uploadThumbnail(
   fetchImpl: FetchImpl
 ) {
   if (!thumbnail) {
-    return { ok: true } as const;
+    return { state: "skipped" } as const;
   }
 
   const response = await fetchImpl(buildYouTubeThumbnailUploadUrl(videoId), {
@@ -150,12 +150,12 @@ async function uploadThumbnail(
 
   if (!response.ok) {
     return {
-      ok: false,
+      state: "failed",
       error: (await response.text()) || `Thumbnail upload failed (${response.status})`,
     } as const;
   }
 
-  return { ok: true } as const;
+  return { state: "applied" } as const;
 }
 
 async function uploadCaption(
@@ -165,7 +165,7 @@ async function uploadCaption(
   fetchImpl: FetchImpl
 ) {
   if (!caption) {
-    return { ok: true } as const;
+    return { state: "skipped" } as const;
   }
 
   const init = buildYouTubeCaptionInitRequest(videoId, caption);
@@ -181,12 +181,12 @@ async function uploadCaption(
 
   if (!response.ok) {
     return {
-      ok: false,
+      state: "failed",
       error: (await response.text()) || `Caption upload failed (${response.status})`,
     } as const;
   }
 
-  return { ok: true } as const;
+  return { state: "applied" } as const;
 }
 
 export async function publishToYouTubeFromBrowser(
@@ -218,10 +218,20 @@ export async function publishToYouTubeFromBrowser(
     throw new Error("YouTube upload succeeded but the video id was missing from the response.");
   }
 
-  emitProgress(input.onProgress, "thumbnail", 84, "Applying optional YouTube thumbnail");
+  emitProgress(
+    input.onProgress,
+    "thumbnail",
+    84,
+    input.thumbnail ? "Applying YouTube thumbnail" : "Skipping thumbnail"
+  );
   const thumbnail = await uploadThumbnail(uploaded.id, input.accessToken, input.thumbnail, fetchImpl);
 
-  emitProgress(input.onProgress, "caption", 90, "Applying optional caption track");
+  emitProgress(
+    input.onProgress,
+    "caption",
+    90,
+    input.caption ? "Applying caption track" : "Skipping caption track"
+  );
   const caption = await uploadCaption(uploaded.id, input.accessToken, input.caption, fetchImpl);
 
   const apiClient = createYouTubeApiClient(fetchImpl);

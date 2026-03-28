@@ -86,8 +86,10 @@ export interface YouTubeAccessTokenResponse {
   tokenType: string;
 }
 
+export type YouTubePublishStepState = "applied" | "skipped" | "failed";
+
 export interface YouTubePublishStepResult {
-  ok: boolean;
+  state: YouTubePublishStepState;
   error?: string;
 }
 

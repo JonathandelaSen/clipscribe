@@ -114,16 +114,18 @@ export function buildYouTubeVideoInsertRequest(draft: YouTubeUploadDraft): YouTu
       }
     : undefined;
 
-  const localizations = draft.localizations
-    .map((entry) => normalizeLocalization(entry))
-    .filter((entry): entry is YouTubeLocalizationInput => !!entry)
-    .reduce<Record<string, { title: string; description: string }>>((acc, entry) => {
-      acc[entry.locale] = {
-        title: entry.title,
-        description: entry.description,
-      };
-      return acc;
-    }, {});
+  const localizations = defaultLanguage
+    ? draft.localizations
+        .map((entry) => normalizeLocalization(entry))
+        .filter((entry): entry is YouTubeLocalizationInput => !!entry)
+        .reduce<Record<string, { title: string; description: string }>>((acc, entry) => {
+          acc[entry.locale] = {
+            title: entry.title,
+            description: entry.description,
+          };
+          return acc;
+        }, {})
+    : {};
 
   const initUrl = new URL(YOUTUBE_UPLOAD_VIDEO_URL);
   initUrl.searchParams.set("uploadType", "resumable");

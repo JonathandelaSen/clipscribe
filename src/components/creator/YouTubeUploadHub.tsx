@@ -36,6 +36,7 @@ import { toast } from "sonner";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
 import { resolveProjectVideoInfoHistory } from "@/lib/creator/video-info-storage";
 import {
+  getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
   resolveInitialYouTubePublishSelection,
   type YouTubePublishDraft,
@@ -53,6 +54,7 @@ import type {
   YouTubeOptionCatalog,
   YouTubePrivacyStatus,
   YouTubePublishResult,
+  YouTubePublishStepResult,
   YouTubeSessionStatus,
   YouTubeThumbnailUpload,
   YouTubeUploadDraft,
@@ -135,8 +137,27 @@ function formatDateTime(value: number | undefined) {
   });
 }
 
-function resultTone(ok: boolean) {
-  return ok ? "text-emerald-200 border-emerald-400/25 bg-emerald-400/8" : "text-amber-100 border-amber-400/25 bg-amber-400/10";
+function resultTone(state: YouTubePublishStepResult["state"]) {
+  if (state === "applied") {
+    return "border-emerald-400/25 bg-emerald-400/8 text-emerald-200";
+  }
+  if (state === "skipped") {
+    return "border-white/10 bg-white/[0.03] text-zinc-200";
+  }
+  return "border-amber-400/25 bg-amber-400/10 text-amber-100";
+}
+
+function resultMessage(
+  result: YouTubePublishStepResult,
+  labels: {
+    applied: string;
+    skipped: string;
+    failed: string;
+  }
+) {
+  if (result.state === "applied") return labels.applied;
+  if (result.state === "skipped") return labels.skipped;
+  return result.error || labels.failed;
 }
 
 function createEmptyLocalization(): LocalizationRow {
@@ -201,10 +222,12 @@ function ProgressBadge({ progress }: { progress: YouTubeBrowserUploadProgress | 
 
 export function YouTubeUploadHub({
   projectId,
+  initialAssetId,
   initialExportId,
   embedded = false,
 }: {
   projectId?: string;
+  initialAssetId?: string;
   initialExportId?: string;
   embedded?: boolean;
 } = {}) {
@@ -218,6 +241,7 @@ export function YouTubeUploadHub({
   const isProjectLocked = !!projectId;
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? "");
   const [sourceMode, setSourceMode] = useState<YouTubePublishSourceMode>("local_file");
+  const [selectedAssetId, setSelectedAssetId] = useState(initialAssetId ?? "");
   const [selectedExportId, setSelectedExportId] = useState(initialExportId ?? "");
 
   // Autoload picker state
@@ -282,6 +306,14 @@ export function YouTubeUploadHub({
   }, []);
 
   const availableProjectIds = useMemo(() => projects.map((project) => project.id), [projects]);
+  const assetOptionsByProjectId = useMemo(() => {
+    return new Map(
+      projects.map((project) => {
+        const assets = assetsByProjectId.get(project.id) ?? [];
+        return [project.id, getEligibleYouTubeProjectAssets(assets)];
+      })
+    );
+  }, [assetsByProjectId, projects]);
   const exportOptionsByProjectId = useMemo(() => {
     return new Map(
       projects.map((project) => {
@@ -301,8 +333,10 @@ export function YouTubeUploadHub({
 
     const resolved = resolveInitialYouTubePublishSelection({
       projectId: projectId ?? searchParams.get("projectId"),
+      assetId: initialAssetId ?? searchParams.get("assetId"),
       exportId: initialExportId ?? searchParams.get("exportId"),
       availableProjectIds,
+      assetOptionsByProjectId,
       exportOptionsByProjectId,
     });
 
@@ -310,22 +344,15 @@ export function YouTubeUploadHub({
     setSelectedProjectId(
       projectId || resolved.projectId || (projects.length === 1 ? projects[0]?.id ?? "" : "")
     );
+    setSelectedAssetId(resolved.assetId);
     setSelectedExportId(resolved.exportId);
     setSourceMode(resolved.sourceMode);
-  }, [availableProjectIds, exportOptionsByProjectId, initialExportId, isLoadingProjects, projectId, projects, searchParams]);
+  }, [assetOptionsByProjectId, availableProjectIds, exportOptionsByProjectId, initialAssetId, initialExportId, isLoadingProjects, projectId, projects, searchParams]);
 
   useEffect(() => {
     if (!projectId) return;
     setSelectedProjectId(projectId);
   }, [projectId]);
-
-  useEffect(() => {
-    if (!initialExportId) return;
-    setSelectedExportId(initialExportId);
-    setSourceMode("project_export");
-  }, [initialExportId]);
-
-
 
   const projectAssets = useMemo(
     () => (selectedProjectId ? assetsByProjectId.get(selectedProjectId) ?? [] : []),
@@ -335,6 +362,10 @@ export function YouTubeUploadHub({
     () => new Map(projectAssets.map((asset) => [asset.id, asset])),
     [projectAssets]
   );
+  const eligibleProjectAssetOptions = useMemo(
+    () => (selectedProjectId ? getEligibleYouTubeProjectAssets(projectAssets) : []),
+    [projectAssets, selectedProjectId]
+  );
   const eligibleExportOptions = useMemo(
     () => (selectedProjectId ? getEligibleYouTubeProjectExports(exportsByProjectId.get(selectedProjectId) ?? [], projectAssetsById) : []),
     [exportsByProjectId, projectAssetsById, selectedProjectId]
@@ -342,32 +373,58 @@ export function YouTubeUploadHub({
 
   useEffect(() => {
     if (!selectedProjectId) {
+      setSelectedAssetId("");
       setSelectedExportId("");
-      if (sourceMode === "project_export") {
-        setSourceMode("local_file");
-      }
       return;
     }
 
-    if (eligibleExportOptions.length === 0) {
+    if (!selectedAssetId || !eligibleProjectAssetOptions.some((option) => option.assetId === selectedAssetId)) {
+      setSelectedAssetId(eligibleProjectAssetOptions[0]?.assetId ?? "");
+    }
+  }, [eligibleProjectAssetOptions, selectedAssetId, selectedProjectId]);
+
+  useEffect(() => {
+    if (!selectedProjectId) {
       setSelectedExportId("");
-      if (sourceMode === "project_export") {
-        setSourceMode("local_file");
-      }
       return;
     }
 
     if (!selectedExportId || !eligibleExportOptions.some((option) => option.exportId === selectedExportId)) {
       setSelectedExportId(eligibleExportOptions[0]?.exportId ?? "");
     }
-  }, [eligibleExportOptions, selectedExportId, selectedProjectId, sourceMode]);
+  }, [eligibleExportOptions, selectedExportId, selectedProjectId]);
+
+  const selectedAssetOption = useMemo(
+    () => eligibleProjectAssetOptions.find((option) => option.assetId === selectedAssetId) ?? null,
+    [eligibleProjectAssetOptions, selectedAssetId]
+  );
 
   const selectedExportOption = useMemo(
     () => eligibleExportOptions.find((option) => option.exportId === selectedExportId) ?? null,
     [eligibleExportOptions, selectedExportId]
   );
 
-  const activeVideoFile = sourceMode === "project_export" ? selectedExportOption?.file ?? null : localVideoFile;
+  useEffect(() => {
+    if (initialAssetId && eligibleProjectAssetOptions.some((option) => option.assetId === initialAssetId)) {
+      setSelectedAssetId(initialAssetId);
+      setSelectedExportId("");
+      setSourceMode("project_asset");
+      return;
+    }
+
+    if (initialExportId && eligibleExportOptions.some((option) => option.exportId === initialExportId)) {
+      setSelectedExportId(initialExportId);
+      setSelectedAssetId("");
+      setSourceMode("project_export");
+    }
+  }, [eligibleExportOptions, eligibleProjectAssetOptions, initialAssetId, initialExportId]);
+
+  const activeVideoFile =
+    sourceMode === "project_asset"
+      ? selectedAssetOption?.file ?? null
+      : sourceMode === "project_export"
+        ? selectedExportOption?.file ?? null
+        : localVideoFile;
 
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -604,6 +661,9 @@ export function YouTubeUploadHub({
     }
   };
 
+  const selectedAssetLabel = selectedAssetOption
+    ? `Project asset • ${formatRelativeDate(selectedAssetOption.createdAt)}`
+    : "No project video selected";
   const selectedSourceLabel = selectedExportOption
     ? `${selectedExportOption.kind === "timeline" ? "Timeline" : "Short"} export • ${formatRelativeDate(selectedExportOption.createdAt)}`
     : "No export selected";
@@ -743,7 +803,7 @@ export function YouTubeUploadHub({
                     </div>
                   )}
 
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <button
                       type="button"
                       onClick={() => setSourceMode("local_file")}
@@ -755,9 +815,18 @@ export function YouTubeUploadHub({
                       )}
                     >
                       <div className="text-sm font-semibold">Local file</div>
-                      <div className="mt-2 text-xs leading-relaxed opacity-80">
-                        Keep the current drag-and-drop upload path and publish any finished video from your machine.
-                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSourceMode("project_asset")}
+                      className={cn(
+                        "rounded-2xl border p-4 text-left transition-colors",
+                        sourceMode === "project_asset"
+                          ? "border-amber-300/30 bg-amber-400/10 text-amber-50"
+                          : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                      )}
+                    >
+                      <div className="text-sm font-semibold">Project asset</div>
                     </button>
                     <button
                       type="button"
@@ -770,11 +839,42 @@ export function YouTubeUploadHub({
                       )}
                     >
                       <div className="text-sm font-semibold">Project export</div>
-                      <div className="mt-2 text-xs leading-relaxed opacity-80">
-                        Use a completed short or timeline export already stored in the selected ClipScribe project.
-                      </div>
                     </button>
                   </div>
+
+                  {sourceMode === "project_asset" ? (
+                    <div className="grid gap-2">
+                      <Label className="text-zinc-200">Project video</Label>
+                      <Select
+                        value={selectedAssetId || "__none__"}
+                        onValueChange={(value) => setSelectedAssetId(value === "__none__" ? "" : value)}
+                        disabled={!selectedProjectId || eligibleProjectAssetOptions.length === 0}
+                      >
+                        <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                          <SelectValue placeholder={selectedProjectId ? "Select a project video" : "Choose a project first"} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__none__" disabled>
+                            {selectedProjectId ? "Choose a project video" : "Select a project first"}
+                          </SelectItem>
+                          {eligibleProjectAssetOptions.length === 0 ? (
+                            <SelectItem value="__empty_assets__" disabled>
+                              No eligible project videos yet
+                            </SelectItem>
+                          ) : (
+                            eligibleProjectAssetOptions.map((option) => (
+                              <SelectItem key={option.assetId} value={option.assetId}>
+                                {option.filename} • {formatRelativeDate(option.createdAt)}
+                              </SelectItem>
+                            ))
+                          )}
+                        </SelectContent>
+                      </Select>
+                      <div className="text-xs text-zinc-500">
+                        {selectedAssetOption ? selectedAssetLabel : "Saved project videos will appear here when they have a readable video blob."}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {sourceMode === "project_export" ? (
                     <div className="grid gap-2">
@@ -941,9 +1041,6 @@ export function YouTubeUploadHub({
                         </div>
                         <div>
                           <h3 className="text-xl font-semibold text-white">Drop a finished MP4/MOV/WebM here</h3>
-                          <p className="mt-2 max-w-lg text-sm leading-relaxed text-zinc-400">
-                            The file stays in the browser and is streamed directly to YouTube after OAuth. ClipScribe does not proxy the video bytes through the server.
-                          </p>
                         </div>
                       </div>
                       <Button
@@ -956,6 +1053,25 @@ export function YouTubeUploadHub({
                       </Button>
                     </div>
                   </div>
+                ) : sourceMode === "project_asset" ? (
+                  <div className="rounded-[26px] border border-amber-300/15 bg-[linear-gradient(180deg,rgba(251,191,36,0.10),rgba(255,255,255,0.015))] p-6">
+                    <div className="flex flex-col gap-4">
+                      <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1 text-xs uppercase tracking-[0.22em] text-zinc-300">
+                        <FileVideo className="h-3.5 w-3.5" />
+                        Project asset
+                      </div>
+                      {selectedAssetOption ? (
+                        <div className="space-y-2">
+                          <h3 className="text-xl font-semibold text-white">{selectedAssetOption.filename}</h3>
+                          <div className="text-xs text-zinc-500">{selectedAssetLabel}</div>
+                        </div>
+                      ) : (
+                        <div className="text-sm text-zinc-400">
+                          Choose a project and saved project video in the workflow context card to unlock project-backed upload.
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 ) : (
                   <div className="rounded-[26px] border border-emerald-300/15 bg-[linear-gradient(180deg,rgba(16,185,129,0.10),rgba(255,255,255,0.015))] p-6">
                     <div className="flex flex-col gap-4">
@@ -966,9 +1082,6 @@ export function YouTubeUploadHub({
                       {selectedExportOption ? (
                         <div className="space-y-2">
                           <h3 className="text-xl font-semibold text-white">{selectedExportOption.filename}</h3>
-                          <p className="text-sm leading-relaxed text-zinc-400">
-                            Uploading the stored {selectedExportOption.kind === "timeline" ? "timeline" : "short"} export from the selected project.
-                          </p>
                           <div className="text-xs text-zinc-500">{selectedSourceLabel}</div>
                         </div>
                       ) : (
@@ -1103,8 +1216,21 @@ export function YouTubeUploadHub({
                     </div>
 
                     <div className="grid gap-2">
-                      <Label className="text-zinc-200">Category</Label>
-                      <Select value={categoryId} onValueChange={setCategoryId} disabled={!catalog}>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-zinc-200">Category</Label>
+                        {categoryId ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                            onClick={() => setCategoryId("")}
+                          >
+                            Clear
+                          </Button>
+                        ) : null}
+                      </div>
+                      <Select value={categoryId || undefined} onValueChange={setCategoryId} disabled={!catalog}>
                         <SelectTrigger className="border-white/10 bg-black/25 text-white">
                           <SelectValue placeholder={catalog ? "Select a category" : "Connect YouTube first"} />
                         </SelectTrigger>
@@ -1137,10 +1263,23 @@ export function YouTubeUploadHub({
                     <AccordionContent className="space-y-4">
                       <div className="grid gap-4 sm:grid-cols-2">
                         <div className="grid gap-2">
-                          <Label className="text-zinc-200">Default language</Label>
-                          <Select value={defaultLanguage} onValueChange={setDefaultLanguage} disabled={!catalog}>
+                          <div className="flex items-center justify-between">
+                            <Label className="text-zinc-200">Title & description language</Label>
+                            {defaultLanguage ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                                onClick={() => setDefaultLanguage("")}
+                              >
+                                Clear
+                              </Button>
+                            ) : null}
+                          </div>
+                          <Select value={defaultLanguage || undefined} onValueChange={setDefaultLanguage} disabled={!catalog}>
                             <SelectTrigger className="border-white/10 bg-black/25 text-white">
-                              <SelectValue placeholder="Choose language" />
+                              <SelectValue placeholder="Choose metadata language" />
                             </SelectTrigger>
                             <SelectContent>
                               {catalog?.languages.map((language) => (
@@ -1289,7 +1428,7 @@ export function YouTubeUploadHub({
                     <AccordionContent className="space-y-4">
                       {!defaultLanguage ? (
                         <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4 text-sm text-zinc-400">
-                          Pick a default language first, then add locale-specific overrides.
+                          Pick the title and description language first, then add locale-specific overrides.
                         </div>
                       ) : null}
 
@@ -1364,7 +1503,7 @@ export function YouTubeUploadHub({
                           <input
                             ref={thumbnailInputRef}
                             type="file"
-                            accept="image/png,image/jpeg"
+                            accept="image/png,image/jpeg,image/webp"
                             className="hidden"
                             onChange={(event) => setThumbnailFile(event.target.files?.[0] ?? null)}
                           />
@@ -1372,14 +1511,31 @@ export function YouTubeUploadHub({
                             <div>
                               <div className="text-sm font-medium text-white">Thumbnail</div>
                             </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-white/10 bg-white/5 text-white hover:bg-white/10"
-                              onClick={() => thumbnailInputRef.current?.click()}
-                            >
-                              Pick
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              {thumbnailFile ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                                  onClick={() => {
+                                    setThumbnailFile(null);
+                                    if (thumbnailInputRef.current) thumbnailInputRef.current.value = "";
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="border-white/10 bg-white/5 text-white hover:bg-white/10"
+                                onClick={() => thumbnailInputRef.current?.click()}
+                              >
+                                Pick
+                              </Button>
+                            </div>
                           </div>
                           <div className="mt-4 rounded-xl border border-dashed border-white/8 bg-black/20 p-3 text-sm text-zinc-400">
                             {thumbnailFile ? thumbnailFile.name : "No thumbnail selected"}
@@ -1398,14 +1554,34 @@ export function YouTubeUploadHub({
                             <div>
                               <div className="text-sm font-medium text-white">Caption track</div>
                             </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="border-white/10 bg-white/5 text-white hover:bg-white/10"
-                              onClick={() => captionInputRef.current?.click()}
-                            >
-                              Pick
-                            </Button>
+                            <div className="flex items-center gap-2">
+                              {captionFile ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                                  onClick={() => {
+                                    setCaptionFile(null);
+                                    setCaptionLanguage("");
+                                    setCaptionName("");
+                                    setCaptionIsDraft(false);
+                                    if (captionInputRef.current) captionInputRef.current.value = "";
+                                  }}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="border-white/10 bg-white/5 text-white hover:bg-white/10"
+                                onClick={() => captionInputRef.current?.click()}
+                              >
+                                Pick
+                              </Button>
+                            </div>
                           </div>
                           <div className="mt-4 rounded-xl border border-dashed border-white/8 bg-black/20 p-3 text-sm text-zinc-400">
                             {captionFile ? captionFile.name : "No SRT selected"}
@@ -1416,8 +1592,21 @@ export function YouTubeUploadHub({
                       {captionFile ? (
                         <div className="grid gap-4 sm:grid-cols-2">
                           <div className="grid gap-2">
-                            <Label className="text-zinc-200">Caption language</Label>
-                            <Select value={captionLanguage} onValueChange={setCaptionLanguage} disabled={!catalog}>
+                            <div className="flex items-center justify-between">
+                              <Label className="text-zinc-200">Caption language</Label>
+                              {captionLanguage ? (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                                  onClick={() => setCaptionLanguage("")}
+                                >
+                                  Clear
+                                </Button>
+                              ) : null}
+                            </div>
+                            <Select value={captionLanguage || undefined} onValueChange={setCaptionLanguage} disabled={!catalog}>
                               <SelectTrigger className="border-white/10 bg-black/25 text-white">
                                 <SelectValue placeholder="Choose caption language" />
                               </SelectTrigger>
@@ -1556,16 +1745,24 @@ export function YouTubeUploadHub({
                     </div>
 
                     <div className="grid gap-3 sm:grid-cols-2">
-                      <div className={cn("rounded-2xl border p-4", resultTone(publishResult.thumbnail.ok))}>
+                      <div className={cn("rounded-2xl border p-4", resultTone(publishResult.thumbnail.state))}>
                         <div className="text-sm font-medium">Thumbnail</div>
                         <div className="mt-2 text-sm">
-                          {publishResult.thumbnail.ok ? "Applied successfully" : publishResult.thumbnail.error}
+                          {resultMessage(publishResult.thumbnail, {
+                            applied: "Applied successfully",
+                            skipped: "No thumbnail uploaded",
+                            failed: "Thumbnail could not be applied",
+                          })}
                         </div>
                       </div>
-                      <div className={cn("rounded-2xl border p-4", resultTone(publishResult.caption.ok))}>
+                      <div className={cn("rounded-2xl border p-4", resultTone(publishResult.caption.state))}>
                         <div className="text-sm font-medium">Caption</div>
                         <div className="mt-2 text-sm">
-                          {publishResult.caption.ok ? "Applied successfully" : publishResult.caption.error}
+                          {resultMessage(publishResult.caption, {
+                            applied: "Applied successfully",
+                            skipped: "No caption uploaded",
+                            failed: "Caption could not be applied",
+                          })}
                         </div>
                       </div>
                     </div>

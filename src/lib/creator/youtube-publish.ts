@@ -10,7 +10,7 @@ export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] 
   "pinnedComment",
 ];
 
-export type YouTubePublishSourceMode = "local_file" | "project_export";
+export type YouTubePublishSourceMode = "local_file" | "project_asset" | "project_export";
 
 export interface YouTubePublishDraft {
   title: string;
@@ -25,6 +25,14 @@ export interface YouTubeProjectExportOption {
   filename: string;
   createdAt: number;
   kind: ProjectExportRecord["kind"];
+  file: File;
+}
+
+export interface YouTubeProjectAssetOption {
+  assetId: string;
+  projectId: string;
+  filename: string;
+  createdAt: number;
   file: File;
 }
 
@@ -95,6 +103,33 @@ export function appendChapterBlockToDescription(draft: YouTubePublishDraft, chap
   };
 }
 
+function isEligibleProjectVideoAsset(asset: ProjectAssetRecord): boolean {
+  return Boolean(
+    asset.fileBlob &&
+      (asset.kind === "video" || asset.mimeType.toLocaleLowerCase().startsWith("video/"))
+  );
+}
+
+export function getEligibleYouTubeProjectAssets(
+  assets: ProjectAssetRecord[]
+): YouTubeProjectAssetOption[] {
+  return assets
+    .flatMap((asset) => {
+      if (!isEligibleProjectVideoAsset(asset) || !asset.fileBlob) return [];
+
+      return [
+        {
+          assetId: asset.id,
+          projectId: asset.projectId,
+          filename: asset.filename,
+          createdAt: asset.createdAt,
+          file: asset.fileBlob,
+        },
+      ];
+    })
+    .sort((left, right) => right.createdAt - left.createdAt);
+}
+
 export function getEligibleYouTubeProjectExports(
   exports: ProjectExportRecord[],
   assetsById: Map<string, ProjectAssetRecord>
@@ -124,29 +159,40 @@ export function getEligibleYouTubeProjectExports(
 
 export function resolveInitialYouTubePublishSelection(input: {
   projectId?: string | null;
+  assetId?: string | null;
   exportId?: string | null;
   availableProjectIds: string[];
+  assetOptionsByProjectId: Map<string, YouTubeProjectAssetOption[]>;
   exportOptionsByProjectId: Map<string, YouTubeProjectExportOption[]>;
 }): {
   projectId: string;
+  assetId: string;
   exportId: string;
   sourceMode: YouTubePublishSourceMode;
 } {
   const normalizedProjectId = input.projectId?.trim() ?? "";
+  const normalizedAssetId = input.assetId?.trim() ?? "";
   const normalizedExportId = input.exportId?.trim() ?? "";
   const hasProject = normalizedProjectId ? input.availableProjectIds.includes(normalizedProjectId) : false;
   const projectId = hasProject ? normalizedProjectId : "";
 
+  const projectAssetOptions =
+    (projectId ? input.assetOptionsByProjectId.get(projectId) : undefined) ??
+    [];
   const projectExportOptions =
     (projectId ? input.exportOptionsByProjectId.get(projectId) : undefined) ??
     [];
+  const hasRequestedAsset = normalizedAssetId
+    ? projectAssetOptions.some((option) => option.assetId === normalizedAssetId)
+    : false;
   const hasRequestedExport = normalizedExportId
     ? projectExportOptions.some((option) => option.exportId === normalizedExportId)
     : false;
 
   return {
     projectId,
-    exportId: hasRequestedExport ? normalizedExportId : "",
-    sourceMode: hasRequestedExport ? "project_export" : "local_file",
+    assetId: hasRequestedAsset ? normalizedAssetId : "",
+    exportId: hasRequestedAsset ? "" : hasRequestedExport ? normalizedExportId : "",
+    sourceMode: hasRequestedAsset ? "project_asset" : hasRequestedExport ? "project_export" : "local_file",
   };
 }

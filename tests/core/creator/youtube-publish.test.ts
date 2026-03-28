@@ -8,6 +8,7 @@ import {
   applySuggestedDescription,
   applySuggestedTags,
   applySuggestedTitle,
+  getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
   resolveInitialYouTubePublishSelection,
 } from "../../../src/lib/creator/youtube-publish";
@@ -136,7 +137,50 @@ test("getEligibleYouTubeProjectExports only returns completed video exports back
   assert.deepEqual(results.map((item) => item.exportId), ["export_ok"]);
 });
 
+test("getEligibleYouTubeProjectAssets only returns project videos backed by blobs", () => {
+  const videoAsset = createAsset({ id: "asset_video", createdAt: 3_000 });
+  const mimeOnlyVideoAsset = createAsset({
+    id: "asset_mime_video",
+    kind: "audio",
+    mimeType: "video/quicktime",
+    filename: "clip.mov",
+    createdAt: 2_000,
+  });
+  const missingBlobAsset = createAsset({ id: "asset_missing_blob", createdAt: 4_000, fileBlob: undefined });
+  const imageAsset = createAsset({
+    id: "asset_image",
+    kind: "image",
+    mimeType: "image/png",
+    filename: "cover.png",
+    fileBlob: new File(["image"], "cover.png", { type: "image/png" }),
+    createdAt: 1_000,
+  });
+
+  const results = getEligibleYouTubeProjectAssets([
+    videoAsset,
+    mimeOnlyVideoAsset,
+    missingBlobAsset,
+    imageAsset,
+  ]);
+
+  assert.deepEqual(results.map((item) => item.assetId), ["asset_video", "asset_mime_video"]);
+});
+
 test("resolveInitialYouTubePublishSelection honors valid deep links and falls back safely", () => {
+  const assetOptionsByProjectId = new Map([
+    [
+      "project_1",
+      [
+        {
+          assetId: "asset_1",
+          projectId: "project_1",
+          filename: "source.mov",
+          createdAt: 2_000,
+          file: new File(["video"], "source.mov", { type: "video/quicktime" }),
+        },
+      ],
+    ],
+  ]);
   const exportOptionsByProjectId = new Map([
     [
       "project_1",
@@ -157,28 +201,51 @@ test("resolveInitialYouTubePublishSelection honors valid deep links and falls ba
   assert.deepEqual(
     resolveInitialYouTubePublishSelection({
       projectId: "project_1",
+      assetId: "asset_1",
       exportId: "export_1",
       availableProjectIds: ["project_1", "project_2"],
+      assetOptionsByProjectId,
       exportOptionsByProjectId,
     }),
     {
       projectId: "project_1",
-      exportId: "export_1",
-      sourceMode: "project_export",
+      assetId: "asset_1",
+      exportId: "",
+      sourceMode: "project_asset",
     }
   );
 
   assert.deepEqual(
     resolveInitialYouTubePublishSelection({
       projectId: "missing",
+      assetId: "asset_1",
       exportId: "export_1",
       availableProjectIds: ["project_1", "project_2"],
+      assetOptionsByProjectId,
       exportOptionsByProjectId,
     }),
     {
       projectId: "",
+      assetId: "",
       exportId: "",
       sourceMode: "local_file",
+    }
+  );
+
+  assert.deepEqual(
+    resolveInitialYouTubePublishSelection({
+      projectId: "project_1",
+      assetId: "missing_asset",
+      exportId: "export_1",
+      availableProjectIds: ["project_1", "project_2"],
+      assetOptionsByProjectId,
+      exportOptionsByProjectId,
+    }),
+    {
+      projectId: "project_1",
+      assetId: "",
+      exportId: "export_1",
+      sourceMode: "project_export",
     }
   );
 });

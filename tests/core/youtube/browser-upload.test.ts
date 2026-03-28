@@ -135,8 +135,8 @@ test("publishToYouTubeFromBrowser completes the happy path and polls processing"
   );
 
   assert.equal(result.videoId, "video_123");
-  assert.equal(result.thumbnail.ok, true);
-  assert.equal(result.caption.ok, true);
+  assert.equal(result.thumbnail.state, "applied");
+  assert.equal(result.caption.state, "applied");
   assert.equal(result.processing.processingStatus, "succeeded");
   assert.ok(progressMessages.some((message) => /Uploading video bytes/i.test(message)));
 });
@@ -161,7 +161,8 @@ test("publishToYouTubeFromBrowser keeps the video result even when thumbnail upl
   );
 
   assert.equal(result.videoId, "video_123");
-  assert.equal(result.thumbnail.ok, false);
+  assert.equal(result.thumbnail.state, "failed");
   assert.match(result.thumbnail.error || "", /thumbnail failed/i);
+  assert.equal(result.caption.state, "skipped");
   assert.equal(result.processing.processingStatus, "succeeded");
 });

@@ -71,6 +71,7 @@ function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: Backgroun
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
+  const initialAssetId = searchParams.get("assetId") ?? undefined;
   const initialExportId = searchParams.get("exportId") ?? undefined;
   const currentTab: WorkspaceTab =
     tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
@@ -426,6 +427,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           {currentTab === "publish" && (
             <YouTubeUploadHub
               projectId={project.id}
+              initialAssetId={initialAssetId}
               initialExportId={initialExportId}
               embedded
             />
