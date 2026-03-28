@@ -24,10 +24,13 @@ test("buildPendingCreatorLlmRun creates a queued local run with summarized input
   const run = buildPendingCreatorLlmRun({
     feature: "video_info",
     operation: "generate_video_info",
-    promptVersion: "creator-video-info-v2",
+    promptVersion: "creator-video-info-v3",
     request: baseRequest,
     inputSummary: {
       videoInfoBlocks: ["titleIdeas", "description"],
+      promptCustomizationMode: "run_override",
+      promptCustomizationHash: "pc_demo",
+      promptEditedSections: ["field:titleIdeas"],
     },
   });
 
@@ -36,6 +39,8 @@ test("buildPendingCreatorLlmRun creates a queued local run with summarized input
   assert.equal(run.model, "OpenAI pending");
   assert.equal(run.inputSummary.transcriptChunkCount, 1);
   assert.deepEqual(run.inputSummary.videoInfoBlocks, ["titleIdeas", "description"]);
+  assert.equal(run.inputSummary.promptCustomizationMode, "run_override");
+  assert.equal(run.inputSummary.promptCustomizationHash, "pc_demo");
   assert.equal(run.containsRawPayload, false);
 });
 

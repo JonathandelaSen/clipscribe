@@ -70,6 +70,9 @@ export async function generateVideoInfoWithOpenAI(input: {
     inputSummary: {
       ...buildBaseInputSummary(input.request),
       videoInfoBlocks: input.request.videoInfoBlocks?.slice(),
+      promptCustomizationMode: input.request.promptCustomization?.mode ?? "default",
+      promptCustomizationHash: input.request.promptCustomization?.hash,
+      promptEditedSections: input.request.promptCustomization?.editedSections?.slice() ?? [],
     },
     requestFingerprint: createCreatorLLMRequestFingerprint({
       feature: "video_info",

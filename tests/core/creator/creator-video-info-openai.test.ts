@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createVideoInfoPromptCustomizationSnapshot } from "../../../src/lib/creator/prompt-customization";
 import type { CreatorVideoInfoGenerateRequest } from "../../../src/lib/creator/types";
 import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 import { normalizeVideoInfoGenerateRequest } from "../../../src/lib/server/creator/shared/request-normalizers";
@@ -33,7 +34,6 @@ const videoInfoModelResponse = {
     description: "A copy-ready description.",
     pinnedComment: "What would you repurpose first?",
     hashtags: ["#creator", "#workflow"],
-    seoKeywords: ["creator workflow", "content system"],
     thumbnailHooks: ["Stop wasting time"],
     chapterText: "0:00 Intro\n0:18 Key lesson",
   },
@@ -90,6 +90,32 @@ test("normalizeVideoInfoGenerateRequest strips shorts-only fields", () => {
   assert.equal("shortsPlans" in normalized, false);
 });
 
+test("normalizeVideoInfoGenerateRequest sanitizes prompt customization snapshots", () => {
+  const normalized = normalizeVideoInfoGenerateRequest({
+    ...baseRequest,
+    promptCustomization: {
+      mode: "run_override",
+      effectiveProfile: {
+        slotOverrides: {
+          persona: { mode: "replace", value: "  Custom persona.  " },
+        },
+        fieldInstructions: {
+          titleIdeas: "  Use emojis sometimes.  ",
+        },
+      },
+      hash: "ignored",
+      editedSections: ["ignored"],
+    },
+  });
+
+  assert.equal(normalized.promptCustomization?.mode, "run_override");
+  assert.equal(
+    normalized.promptCustomization?.effectiveProfile.slotOverrides?.persona?.value,
+    "Custom persona."
+  );
+  assert.deepEqual(normalized.promptCustomization?.editedSections, ["base:persona", "field:titleIdeas"]);
+});
+
 test("buildVideoInfoPrompt contains packaging fields and excludes shorts instructions", () => {
   const prompt = buildVideoInfoPrompt(baseRequest);
 
@@ -110,11 +136,35 @@ test("buildVideoInfoPrompt only requires the selected fields", () => {
   assert.match(prompt, /Only include the requested keys/i);
   assert.doesNotMatch(prompt, /"pinnedComment"/i);
   assert.doesNotMatch(prompt, /"hashtags"/i);
-  assert.doesNotMatch(prompt, /"seoKeywords"/i);
   assert.doesNotMatch(prompt, /"thumbnailHooks"/i);
   assert.doesNotMatch(prompt, /"chapters"/i);
   assert.doesNotMatch(prompt, /"insights"/i);
   assert.doesNotMatch(prompt, /"content"/i);
+});
+
+test("buildVideoInfoPrompt applies prompt customization layers and field instructions", () => {
+  const prompt = buildVideoInfoPrompt({
+    ...baseRequest,
+    videoInfoBlocks: ["titleIdeas", "description", "chapters"],
+    promptCustomization: createVideoInfoPromptCustomizationSnapshot({
+      globalProfile: {
+        globalInstructions: "Always keep the wording creator-native.",
+      },
+      runProfile: {
+        slotOverrides: {
+          persona: { mode: "replace", value: "You are a bold YouTube growth strategist." },
+        },
+        fieldInstructions: {
+          titleIdeas: "Use emojis only when they sharpen the hook.",
+        },
+      },
+    }),
+  });
+
+  assert.match(prompt, /bold YouTube growth strategist/i);
+  assert.match(prompt, /Always keep the wording creator-native/i);
+  assert.match(prompt, /titleIdeas: Use emojis only when they sharpen the hook/i);
+  assert.match(prompt, /chapters: Use concrete timestamps for chapters/i);
 });
 
 test("mapVideoInfoOpenAIResponse returns the expected video info payload", () => {
@@ -205,6 +255,63 @@ test("generateVideoInfoWithOpenAI returns packaging results and uses the video i
         assert.equal(payload.llmRun?.feature, "video_info");
         assert.equal(payload.llmRun?.promptVersion, CREATOR_VIDEO_INFO_PROMPT_VERSION);
         assert.deepEqual(payload.llmRun?.inputSummary.videoInfoBlocks, baseRequest.videoInfoBlocks);
+        assert.equal(payload.llmRun?.inputSummary.promptCustomizationMode, "default");
+      }
+    );
+  } finally {
+    process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = originalModel;
+  }
+});
+
+test("generateVideoInfoWithOpenAI traces prompt customization metadata", async () => {
+  const originalModel = process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL;
+  process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = "test-model";
+  try {
+    await withMockFetch(
+      async (_, init) => {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          messages?: Array<{ role: string; content: string }>;
+        };
+        const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
+        assert.match(userMessage, /Use emojis sometimes/i);
+
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify(videoInfoModelResponse),
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      },
+      async () => {
+        const promptCustomization = createVideoInfoPromptCustomizationSnapshot({
+          globalProfile: {
+            fieldInstructions: {
+              titleIdeas: "Use emojis sometimes.",
+            },
+          },
+        });
+        const payload = await generateVideoInfoWithOpenAI({
+          request: {
+            ...baseRequest,
+            promptCustomization,
+          },
+          apiKey: "sk-proj-demo",
+        });
+
+        assert.equal(payload.llmRun?.inputSummary.promptCustomizationMode, "global_customized");
+        assert.equal(payload.llmRun?.inputSummary.promptCustomizationHash, promptCustomization?.hash);
+        assert.deepEqual(payload.llmRun?.inputSummary.promptEditedSections, ["field:titleIdeas"]);
       }
     );
   } finally {

@@ -4,7 +4,7 @@ import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
 import { CREATOR_OPENAI_API_KEY_HEADER } from "@/lib/creator/user-ai-settings";
 import { postJson } from "@/hooks/creator-api";
 
-const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v2";
+const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v4";
 
 export function useCreatorVideoInfoGenerator() {
   const [videoInfoAnalysis, setVideoInfoAnalysis] = useState<CreatorVideoInfoGenerateResponse | null>(null);
@@ -31,6 +31,9 @@ export function useCreatorVideoInfoGenerator() {
             request: payload,
             inputSummary: {
               videoInfoBlocks: payload.videoInfoBlocks?.slice(),
+              promptCustomizationMode: payload.promptCustomization?.mode ?? "default",
+              promptCustomizationHash: payload.promptCustomization?.hash,
+              promptEditedSections: payload.promptCustomization?.editedSections?.slice() ?? [],
             },
           }),
         }

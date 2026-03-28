@@ -4,7 +4,7 @@ import type { ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/typ
 export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] = [
   "titleIdeas",
   "description",
-  "hashtagsSeo",
+  "hashtags",
   "thumbnailHooks",
   "chapters",
   "pinnedComment",
@@ -49,10 +49,7 @@ function uniqueStrings(values: string[]): string[] {
 }
 
 export function buildVideoInfoTagsInput(result: Pick<CreatorVideoInfoGenerateResponse, "youtube">): string {
-  return uniqueStrings([
-    ...result.youtube.hashtags.map(normalizeTag),
-    ...result.youtube.seoKeywords.map((keyword) => keyword.trim()),
-  ]).join(", ");
+  return uniqueStrings(result.youtube.hashtags.map(normalizeTag)).join(", ");
 }
 
 export function applySuggestedTitle(draft: YouTubePublishDraft, title: string): YouTubePublishDraft {

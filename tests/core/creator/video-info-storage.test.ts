@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createVideoInfoPromptCustomizationSnapshot } from "../../../src/lib/creator/prompt-customization";
 import type { CreatorVideoInfoGenerateRequest, CreatorVideoInfoGenerateResponse } from "../../../src/lib/creator/types";
 import { buildProjectVideoInfoRecord, resolveProjectVideoInfoAnalysis } from "../../../src/lib/creator/video-info-storage";
 
@@ -13,6 +14,13 @@ const request: CreatorVideoInfoGenerateRequest = {
   transcriptText: "Hello world transcript",
   transcriptChunks: [{ text: "Hello world", timestamp: [0, 2] }],
   videoInfoBlocks: ["titleIdeas", "description"],
+  promptCustomization: createVideoInfoPromptCustomizationSnapshot({
+    globalProfile: {
+      fieldInstructions: {
+        titleIdeas: "Use emojis sometimes.",
+      },
+    },
+  }),
 };
 
 const response: CreatorVideoInfoGenerateResponse = {
@@ -26,7 +34,6 @@ const response: CreatorVideoInfoGenerateResponse = {
     description: "Description",
     pinnedComment: "",
     hashtags: [],
-    seoKeywords: [],
     thumbnailHooks: [],
     chapterText: "",
   },
@@ -56,6 +63,9 @@ test("buildProjectVideoInfoRecord keeps the request summary needed to restore pu
   assert.equal(record.sourceSignature, "sig_1");
   assert.equal(record.inputSummary.transcriptId, "tx_1");
   assert.deepEqual(record.inputSummary.videoInfoBlocks, ["titleIdeas", "description"]);
+  assert.equal(record.inputSummary.promptCustomizationMode, "global_customized");
+  assert.equal(record.inputSummary.promptCustomizationHash, request.promptCustomization?.hash);
+  assert.deepEqual(record.inputSummary.promptEditedSections, ["field:titleIdeas"]);
   assert.equal(record.analysis.youtube.titleIdeas[0], "Hello world");
 });
 
@@ -69,6 +79,9 @@ test("resolveProjectVideoInfoAnalysis returns saved analysis only for matching s
     resolveProjectVideoInfoAnalysis({ youtubeVideoInfo: record }, "sig_1")?.youtube.description,
     "Description"
   );
-  assert.equal(resolveProjectVideoInfoAnalysis({ youtubeVideoInfo: record }, "sig_other"), null);
+  assert.equal(
+    resolveProjectVideoInfoAnalysis({ youtubeVideoInfo: record }, "sig_other")?.youtube.description,
+    "Description"
+  );
   assert.equal(resolveProjectVideoInfoAnalysis({ youtubeVideoInfo: record }, undefined)?.model, "gpt-test");
 });

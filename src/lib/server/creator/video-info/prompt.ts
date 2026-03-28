@@ -1,8 +1,12 @@
 import type { CreatorVideoInfoGenerateRequest } from "../../../creator/types";
+import {
+  resolveVideoInfoPromptFieldInstruction,
+  resolveVideoInfoPromptSlotLine,
+} from "../../../creator/prompt-customization";
 import { selectedVideoInfoBlocks } from "../shared/request-normalizers";
 import { buildTimedTranscriptLines } from "../shared/transcript-format";
 
-export const CREATOR_VIDEO_INFO_PROMPT_VERSION = "creator-video-info-v2";
+export const CREATOR_VIDEO_INFO_PROMPT_VERSION = "creator-video-info-v4";
 
 function buildRequestedShape(request: CreatorVideoInfoGenerateRequest): string {
   const blocks = selectedVideoInfoBlocks(request);
@@ -12,10 +16,7 @@ function buildRequestedShape(request: CreatorVideoInfoGenerateRequest): string {
   if (blocks.has("titleIdeas")) youtubeFields.push('    "titleIdeas": ["string"]');
   if (blocks.has("description")) youtubeFields.push('    "description": "string"');
   if (blocks.has("pinnedComment")) youtubeFields.push('    "pinnedComment": "string"');
-  if (blocks.has("hashtagsSeo")) {
-    youtubeFields.push('    "hashtags": ["string"]');
-    youtubeFields.push('    "seoKeywords": ["string"]');
-  }
+  if (blocks.has("hashtags")) youtubeFields.push('    "hashtags": ["string"]');
   if (blocks.has("thumbnailHooks")) youtubeFields.push('    "thumbnailHooks": ["string"]');
   if (blocks.has("chapters")) youtubeFields.push('    "chapterText": "string"');
   if (youtubeFields.length > 0) {
@@ -63,12 +64,13 @@ function buildRequestedShape(request: CreatorVideoInfoGenerateRequest): string {
 export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): string {
   const blocks = selectedVideoInfoBlocks(request);
   const timedTranscript = buildTimedTranscriptLines(request.transcriptChunks);
+  const effectiveProfile = request.promptCustomization?.effectiveProfile;
 
   const scopeLines: string[] = [];
   if (blocks.has("titleIdeas")) scopeLines.push("youtube.titleIdeas");
   if (blocks.has("description")) scopeLines.push("youtube.description");
   if (blocks.has("pinnedComment")) scopeLines.push("youtube.pinnedComment");
-  if (blocks.has("hashtagsSeo")) scopeLines.push("youtube.hashtags", "youtube.seoKeywords");
+  if (blocks.has("hashtags")) scopeLines.push("youtube.hashtags");
   if (blocks.has("thumbnailHooks")) scopeLines.push("youtube.thumbnailHooks");
   if (blocks.has("chapters")) scopeLines.push("youtube.chapterText", "chapters");
   if (blocks.has("contentPack")) {
@@ -90,14 +92,23 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
   }
 
   const requestedShape = buildRequestedShape(request);
+  const fieldInstructionLines = Array.from(blocks).flatMap((block) => {
+    const instruction = resolveVideoInfoPromptFieldInstruction(block, effectiveProfile);
+    if (!instruction) return [];
+    return [`${block}: ${instruction}`];
+  });
 
   return [
-    "You are a senior YouTube strategist focused on long-form packaging and SEO.",
+    resolveVideoInfoPromptSlotLine("persona", effectiveProfile),
     "Return valid JSON only.",
     "Produce copy-ready packaging based on the full transcript.",
-    "Use concrete timestamps for chapters.",
     "Only include the requested keys. Omit every other key entirely.",
+    effectiveProfile?.globalInstructions ? "" : undefined,
+    effectiveProfile?.globalInstructions,
     scopeLines.length ? `Requested fields: ${scopeLines.join(", ")}` : "",
+    fieldInstructionLines.length ? "" : undefined,
+    fieldInstructionLines.length ? "Field-specific instructions:" : undefined,
+    ...fieldInstructionLines,
     "",
     "Required JSON shape:",
     requestedShape,

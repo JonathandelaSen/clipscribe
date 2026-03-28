@@ -993,9 +993,9 @@ const VIDEO_INFO_BLOCK_OPTIONS: Array<{
     accent: "text-orange-200 border-orange-300/20 bg-orange-400/5",
   },
   {
-    value: "hashtagsSeo",
-    label: "Hashtags + SEO",
-    description: "Hashtags and keyword helpers.",
+    value: "hashtags",
+    label: "Hashtags",
+    description: "Hashtag helpers.",
     accent: "text-pink-200 border-pink-300/20 bg-pink-400/5",
   },
   {
@@ -1672,7 +1672,7 @@ export function CreatorHub({
   const showTitleIdeas = selectedVideoInfoBlocks.has("titleIdeas");
   const showDescription = selectedVideoInfoBlocks.has("description");
   const showPinnedComment = selectedVideoInfoBlocks.has("pinnedComment");
-  const showHashtagsSeo = selectedVideoInfoBlocks.has("hashtagsSeo");
+  const showHashtags = selectedVideoInfoBlocks.has("hashtags");
   const showThumbnailHooks = selectedVideoInfoBlocks.has("thumbnailHooks");
   const showChapters = selectedVideoInfoBlocks.has("chapters");
   const showContentPack = selectedVideoInfoBlocks.has("contentPack");
@@ -3036,7 +3036,7 @@ export function CreatorHub({
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
-                  {!showTitleIdeas && !showDescription && !showHashtagsSeo && !showPinnedComment && !showThumbnailHooks && (
+                  {!showTitleIdeas && !showDescription && !showHashtags && !showPinnedComment && !showThumbnailHooks && (
                     <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-6 text-sm text-white/60">
                       No video info blocks selected. Enable blocks above and run the generator.
                     </div>
@@ -3091,11 +3091,11 @@ export function CreatorHub({
                     </div>
                   )}
 
-                  {(showHashtagsSeo || showPinnedComment || showThumbnailHooks) && (
+                  {(showHashtags || showPinnedComment || showThumbnailHooks) && (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                      {showHashtagsSeo && (
+                      {showHashtags && (
                         <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-3">
-                          <div className="text-xs uppercase tracking-wider text-white/50">Hashtags + SEO</div>
+                          <div className="text-xs uppercase tracking-wider text-white/50">Hashtags</div>
                           <div className="flex flex-wrap gap-2">
                             {videoInfoAnalysis.youtube.hashtags.map((tag) => (
                               <button
@@ -3106,9 +3106,6 @@ export function CreatorHub({
                                 {tag}
                               </button>
                             ))}
-                          </div>
-                          <div className="text-xs text-white/60 leading-relaxed">
-                            Keywords: {videoInfoAnalysis.youtube.seoKeywords.join(", ")}
                           </div>
                         </div>
                       )}

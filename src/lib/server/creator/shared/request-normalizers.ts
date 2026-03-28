@@ -1,15 +1,21 @@
 import type {
   CreatorGenerationSourceInput,
   CreatorShortsGenerateRequest,
+  CreatorVideoInfoPromptCustomizationSnapshot,
   CreatorVideoInfoBlock,
   CreatorVideoInfoGenerateRequest,
 } from "../../../creator/types";
+import {
+  computePromptCustomizationHash,
+  sanitizeVideoInfoPromptProfile,
+  summarizeVideoInfoPromptEdits,
+} from "../../../creator/prompt-customization";
 
 export const ALL_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] = [
   "titleIdeas",
   "description",
   "pinnedComment",
-  "hashtagsSeo",
+  "hashtags",
   "thumbnailHooks",
   "chapters",
   "contentPack",
@@ -43,6 +49,7 @@ export function normalizeShortsGenerateRequest(input: CreatorShortsGenerateReque
 
 export function normalizeVideoInfoGenerateRequest(input: CreatorVideoInfoGenerateRequest): CreatorVideoInfoGenerateRequest {
   const normalized = normalizeCreatorSourceInput(input);
+  const promptCustomization = normalizeVideoInfoPromptCustomization(input.promptCustomization);
   return {
     ...normalized,
     videoInfoBlocks: Array.isArray(input.videoInfoBlocks)
@@ -50,6 +57,35 @@ export function normalizeVideoInfoGenerateRequest(input: CreatorVideoInfoGenerat
           .filter((value): value is CreatorVideoInfoBlock => typeof value === "string")
           .slice(0, 16)
       : undefined,
+    promptCustomization,
+  };
+}
+
+function normalizeVideoInfoPromptCustomization(
+  value: unknown
+): CreatorVideoInfoPromptCustomizationSnapshot | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const mode = (value as { mode?: unknown }).mode;
+  if (mode !== "default" && mode !== "global_customized" && mode !== "run_override") {
+    return undefined;
+  }
+
+  const effectiveProfile = sanitizeVideoInfoPromptProfile(
+    (value as { effectiveProfile?: unknown }).effectiveProfile
+  );
+  if (!effectiveProfile) {
+    return undefined;
+  }
+
+  const editedSections = summarizeVideoInfoPromptEdits(effectiveProfile);
+  return {
+    mode,
+    effectiveProfile,
+    hash: computePromptCustomizationHash(effectiveProfile),
+    editedSections,
   };
 }
 

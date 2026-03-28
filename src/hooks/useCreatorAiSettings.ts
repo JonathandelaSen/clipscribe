@@ -2,7 +2,15 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-import { CREATOR_AI_SETTINGS_STORAGE_KEY, type CreatorAISettings, clearCreatorAISettings, maskOpenAIApiKey, readCreatorAISettings, writeCreatorAISettings } from "@/lib/creator/user-ai-settings";
+import type { CreatorPromptProfiles, CreatorVideoInfoPromptProfile } from "@/lib/creator/types";
+import {
+  CREATOR_AI_SETTINGS_STORAGE_KEY,
+  type CreatorAISettings,
+  clearCreatorAISettings,
+  maskOpenAIApiKey,
+  readCreatorAISettings,
+  writeCreatorAISettings,
+} from "@/lib/creator/user-ai-settings";
 const localListeners = new Set<() => void>();
 
 function emitChange() {
@@ -55,25 +63,75 @@ export function useCreatorAiSettings() {
 
   const saveOpenAIApiKey = useCallback((value: string) => {
     if (typeof window === "undefined") return null;
-    const next = writeCreatorAISettings(window.localStorage, value);
+    const next = writeCreatorAISettings(window.localStorage, {
+      openAIApiKey: value,
+      promptProfiles: settings?.promptProfiles,
+    });
     emitChange();
     return next;
-  }, []);
+  }, [settings]);
+
+  const saveVideoInfoPromptProfile = useCallback((profile: CreatorVideoInfoPromptProfile | undefined) => {
+    if (typeof window === "undefined") return null;
+    const nextPromptProfiles: CreatorPromptProfiles = {
+      ...(settings?.promptProfiles ?? {}),
+    };
+    if (profile) {
+      nextPromptProfiles.video_info = profile;
+    } else {
+      delete nextPromptProfiles.video_info;
+    }
+    const next = writeCreatorAISettings(window.localStorage, {
+      openAIApiKey: settings?.openAIApiKey ?? "",
+      promptProfiles: nextPromptProfiles,
+    });
+    emitChange();
+    return next;
+  }, [settings?.openAIApiKey, settings?.promptProfiles]);
 
   const clearOpenAIApiKey = useCallback(() => {
     if (typeof window === "undefined") return;
-    clearCreatorAISettings(window.localStorage);
+    const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
+    if (hasPromptProfiles) {
+      writeCreatorAISettings(window.localStorage, {
+        openAIApiKey: "",
+        promptProfiles: settings?.promptProfiles,
+      });
+    } else {
+      clearCreatorAISettings(window.localStorage);
+    }
     emitChange();
-  }, []);
+  }, [settings]);
+
+  const clearVideoInfoPromptProfile = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const nextPromptProfiles: CreatorPromptProfiles = {
+      ...(settings?.promptProfiles ?? {}),
+    };
+    delete nextPromptProfiles.video_info;
+    if ((settings?.openAIApiKey ?? "").trim() || Object.keys(nextPromptProfiles).length > 0) {
+      writeCreatorAISettings(window.localStorage, {
+        openAIApiKey: settings?.openAIApiKey ?? "",
+        promptProfiles: nextPromptProfiles,
+      });
+    } else {
+      clearCreatorAISettings(window.localStorage);
+    }
+    emitChange();
+  }, [settings?.openAIApiKey, settings?.promptProfiles]);
 
   const openAIApiKey = settings?.openAIApiKey ?? "";
+  const videoInfoPromptProfile = settings?.promptProfiles?.video_info;
 
   return {
     settings,
     openAIApiKey,
     hasOpenAIApiKey: openAIApiKey.length > 0,
     maskedOpenAIApiKey: openAIApiKey ? maskOpenAIApiKey(openAIApiKey) : "",
+    videoInfoPromptProfile,
     saveOpenAIApiKey,
     clearOpenAIApiKey,
+    saveVideoInfoPromptProfile,
+    clearVideoInfoPromptProfile,
   };
 }

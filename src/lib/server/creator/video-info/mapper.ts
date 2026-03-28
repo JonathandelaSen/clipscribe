@@ -43,7 +43,6 @@ function createEmptyVideoInfoResponse(request: CreatorVideoInfoGenerateRequest, 
       description: "",
       pinnedComment: "",
       hashtags: [],
-      seoKeywords: [],
       thumbnailHooks: [],
       chapterText: "",
     },
@@ -92,7 +91,6 @@ function parseYouTubePack(candidate: unknown): Partial<CreatorYouTubePack> {
     description: typeof candidate.description === "string" ? candidate.description.trim() : "",
     pinnedComment: typeof candidate.pinnedComment === "string" ? candidate.pinnedComment.trim() : "",
     hashtags: readStringArray(candidate.hashtags, 12),
-    seoKeywords: readStringArray(candidate.seoKeywords, 12),
     thumbnailHooks: readStringArray(candidate.thumbnailHooks, 8),
     chapterText: typeof candidate.chapterText === "string" ? candidate.chapterText.trim() : "",
   };
@@ -112,8 +110,6 @@ function parseContentPack(candidate: unknown): Partial<CreatorLongFormContentPac
 
 function parseInsights(candidate: unknown, fallback: CreatorInsights): CreatorInsights {
   if (!isRecord(candidate)) return fallback;
-
-  const recommended = candidate.recommendedPrimaryPlatform;
 
   return {
     transcriptWordCount:

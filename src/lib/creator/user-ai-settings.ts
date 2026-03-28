@@ -1,8 +1,12 @@
+import type { CreatorPromptProfiles } from "./types";
+import { sanitizeVideoInfoPromptProfile } from "./prompt-customization";
+
 export const CREATOR_OPENAI_API_KEY_HEADER = "x-creator-openai-api-key";
 export const CREATOR_AI_SETTINGS_STORAGE_KEY = "clipscribe.creator-ai-settings.v1";
 
 export interface CreatorAISettings {
   openAIApiKey: string;
+  promptProfiles?: CreatorPromptProfiles;
   updatedAt: number;
 }
 
@@ -33,22 +37,46 @@ export function readCreatorAISettings(storage: StorageLike): CreatorAISettings |
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
     const openAIApiKey = sanitizeOpenAIApiKey(String(parsed.openAIApiKey ?? ""));
-    if (!openAIApiKey) return null;
+    const rawPromptProfiles = isRecord(parsed.promptProfiles) ? parsed.promptProfiles : null;
+    const promptProfiles: CreatorPromptProfiles = {};
+    const videoInfoProfile = sanitizeVideoInfoPromptProfile(rawPromptProfiles?.video_info);
+    if (videoInfoProfile) {
+      promptProfiles.video_info = videoInfoProfile;
+    }
     const updatedAt = Number(parsed.updatedAt ?? Date.now());
-    return {
+    const settings: CreatorAISettings = {
       openAIApiKey,
       updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
     };
+    if (Object.keys(promptProfiles).length > 0) {
+      settings.promptProfiles = promptProfiles;
+    }
+    return openAIApiKey || settings.promptProfiles ? settings : null;
   } catch {
     return null;
   }
 }
 
-export function writeCreatorAISettings(storage: StorageLike, openAIApiKey: string): CreatorAISettings {
+export function writeCreatorAISettings(
+  storage: StorageLike,
+  input: {
+    openAIApiKey?: string;
+    promptProfiles?: CreatorPromptProfiles;
+  }
+): CreatorAISettings {
+  const nextPromptProfiles: CreatorPromptProfiles = {};
+  const videoInfoProfile = sanitizeVideoInfoPromptProfile(input.promptProfiles?.video_info);
+  if (videoInfoProfile) {
+    nextPromptProfiles.video_info = videoInfoProfile;
+  }
+
   const next: CreatorAISettings = {
-    openAIApiKey: sanitizeOpenAIApiKey(openAIApiKey),
+    openAIApiKey: sanitizeOpenAIApiKey(input.openAIApiKey ?? ""),
     updatedAt: Date.now(),
   };
+  if (Object.keys(nextPromptProfiles).length > 0) {
+    next.promptProfiles = nextPromptProfiles;
+  }
 
   storage.setItem(CREATOR_AI_SETTINGS_STORAGE_KEY, JSON.stringify(next));
   return next;

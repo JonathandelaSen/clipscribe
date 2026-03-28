@@ -51,7 +51,7 @@ test("DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS keeps the upload-focused default
   assert.deepEqual(DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS, [
     "titleIdeas",
     "description",
-    "hashtagsSeo",
+    "hashtags",
     "thumbnailHooks",
     "chapters",
     "pinnedComment",
@@ -76,7 +76,7 @@ test("apply suggestion helpers only update the targeted draft fields", () => {
   assert.equal(withDescription.tagsInput, draft.tagsInput);
 });
 
-test("applySuggestedTags merges hashtags and keywords into a deduplicated tags input", () => {
+test("applySuggestedTags normalizes and deduplicates hashtags into the tags input", () => {
   const result = applySuggestedTags(
     {
       title: "",
@@ -89,14 +89,13 @@ test("applySuggestedTags merges hashtags and keywords into a deduplicated tags i
         description: "",
         pinnedComment: "",
         hashtags: ["#workflow", "#Workflow", "#clipscribe"],
-        seoKeywords: ["youtube upload", "workflow"],
         thumbnailHooks: [],
         chapterText: "",
       },
     }
   );
 
-  assert.equal(result.tagsInput, "workflow, clipscribe, youtube upload");
+  assert.equal(result.tagsInput, "workflow, clipscribe");
 });
 
 test("appendChapterBlockToDescription appends chapters once and preserves existing copy", () => {

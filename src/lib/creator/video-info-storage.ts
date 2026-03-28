@@ -31,6 +31,9 @@ export function buildProjectVideoInfoRecord(input: {
       sourceSignature: input.request.sourceSignature,
       videoInfoBlocks: input.request.videoInfoBlocks?.slice() ?? [],
       model: input.response.model,
+      promptCustomizationMode: input.request.promptCustomization?.mode ?? "default",
+      promptCustomizationHash: input.request.promptCustomization?.hash,
+      promptEditedSections: input.request.promptCustomization?.editedSections?.slice() ?? [],
     },
     analysis: input.response,
   };

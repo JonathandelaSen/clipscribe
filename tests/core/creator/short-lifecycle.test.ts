@@ -191,7 +191,6 @@ test("AI suggestion helpers build normalized signatures and records", () => {
       description: "",
       pinnedComment: "",
       hashtags: [],
-      seoKeywords: [],
       thumbnailHooks: [],
       chapterText: "",
     },

@@ -297,7 +297,6 @@ function buildMockAnalysisData(request: CreatorShortsGenerateRequest | CreatorVi
       description: descriptionLines.join("\n"),
       pinnedComment: `What part hit hardest: ${chapters[1]?.label ?? "the main workflow"}? I can break it into a full short next.`,
       hashtags,
-      seoKeywords: [primaryKeyword, secondaryKeyword, tertiaryKeyword, ...topTerms.slice(3, 8)],
       thumbnailHooks: [
         `Big ${primaryKeyword} mistake`,
         `${secondaryKeyword} changed everything`,

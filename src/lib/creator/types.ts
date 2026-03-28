@@ -4,6 +4,9 @@ export type CreatorAIProviderMode = "mock" | "openai";
 export type CreatorLLMFeature = "shorts" | "video_info";
 export type CreatorLLMProvider = "openai";
 export type CreatorLLMOperation = "generate_shorts" | "generate_video_info";
+export type CreatorPromptProfileFamily = "video_info" | "shorts";
+export type CreatorPromptCustomizationMode = "default" | "global_customized" | "run_override";
+export type CreatorPromptSlotOverrideMode = "inherit" | "replace" | "omit";
 export type CreatorLLMRunStatus =
   | "queued"
   | "processing"
@@ -18,11 +21,38 @@ export type CreatorVideoInfoBlock =
   | "titleIdeas"
   | "description"
   | "pinnedComment"
-  | "hashtagsSeo"
+  | "hashtags"
   | "thumbnailHooks"
   | "chapters"
   | "contentPack"
   | "insights";
+
+export type CreatorVideoInfoPromptSlot = "persona";
+
+export interface CreatorPromptSlotOverride {
+  mode: CreatorPromptSlotOverrideMode;
+  value?: string;
+}
+
+export interface CreatorVideoInfoPromptProfile {
+  slotOverrides?: Partial<Record<CreatorVideoInfoPromptSlot, CreatorPromptSlotOverride>>;
+  globalInstructions?: string;
+  fieldInstructions?: Partial<Record<CreatorVideoInfoBlock, string>>;
+}
+
+export type CreatorShortsPromptProfile = Record<string, never>;
+
+export interface CreatorPromptProfiles {
+  video_info?: CreatorVideoInfoPromptProfile;
+  shorts?: CreatorShortsPromptProfile;
+}
+
+export interface CreatorVideoInfoPromptCustomizationSnapshot {
+  mode: CreatorPromptCustomizationMode;
+  effectiveProfile: CreatorVideoInfoPromptProfile;
+  hash?: string;
+  editedSections?: string[];
+}
 
 export interface CreatorGenerationSourceInput {
   projectId?: string;
@@ -58,6 +88,9 @@ export interface CreatorLLMRunInputSummary {
   audience?: string;
   tone?: string;
   videoInfoBlocks?: CreatorVideoInfoBlock[];
+  promptCustomizationMode?: CreatorPromptCustomizationMode;
+  promptCustomizationHash?: string;
+  promptEditedSections?: string[];
 }
 
 export interface CreatorLLMRunRecord {
@@ -104,6 +137,7 @@ export interface CreatorShortsGenerateRequest extends CreatorGenerationSourceInp
 
 export interface CreatorVideoInfoGenerateRequest extends CreatorGenerationSourceInput {
   videoInfoBlocks?: CreatorVideoInfoBlock[];
+  promptCustomization?: CreatorVideoInfoPromptCustomizationSnapshot;
 }
 
 export interface CreatorChapter {
@@ -190,6 +224,9 @@ export interface CreatorVideoInfoProjectRecordInputSummary {
   sourceSignature?: string;
   videoInfoBlocks: CreatorVideoInfoBlock[];
   model?: string;
+  promptCustomizationMode?: CreatorPromptCustomizationMode;
+  promptCustomizationHash?: string;
+  promptEditedSections?: string[];
 }
 
 export interface CreatorVideoInfoProjectRecord {
@@ -215,7 +252,6 @@ export interface CreatorYouTubePack {
   description: string;
   pinnedComment: string;
   hashtags: string[];
-  seoKeywords: string[];
   thumbnailHooks: string[];
   chapterText: string;
 }

@@ -522,6 +522,13 @@ function OverviewInspector({
             {inputSummary.videoInfoBlocks?.length ? (
               <KeyValue label="Video Blocks" value={inputSummary.videoInfoBlocks.join(", ")} />
             ) : null}
+            <KeyValue label="Prompt Mode" value={inputSummary.promptCustomizationMode ?? "default"} />
+            {inputSummary.promptCustomizationHash ? (
+              <KeyValue label="Prompt Hash" value={inputSummary.promptCustomizationHash} mono />
+            ) : null}
+            {inputSummary.promptEditedSections?.length ? (
+              <KeyValue label="Edited Sections" value={inputSummary.promptEditedSections.join(", ")} />
+            ) : null}
           </div>
         </section>
 
