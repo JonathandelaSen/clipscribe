@@ -14,13 +14,13 @@ export interface YouTubeUploadDraft {
   tags: string[];
   categoryId?: string;
   defaultLanguage?: string;
-  notifySubscribers: boolean;
-  embeddable: boolean;
-  license: YouTubeLicense;
-  publicStatsViewable: boolean;
+  notifySubscribers?: boolean;
+  embeddable?: boolean;
+  license?: YouTubeLicense;
+  publicStatsViewable?: boolean;
   publishAt?: string;
-  selfDeclaredMadeForKids: boolean;
-  containsSyntheticMedia: boolean;
+  selfDeclaredMadeForKids?: boolean;
+  containsSyntheticMedia?: boolean;
   recordingDate?: string;
   localizations: YouTubeLocalizationInput[];
 }

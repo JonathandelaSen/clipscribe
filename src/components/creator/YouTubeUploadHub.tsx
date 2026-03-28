@@ -94,6 +94,8 @@ type LocalizationRow = YouTubeLocalizationInput & {
   id: string;
 };
 
+type OptionalBooleanSelectValue = "unset" | "true" | "false";
+
 type SessionPayload = YouTubeSessionStatus & {
   error?: string;
 };
@@ -194,6 +196,37 @@ function resultMessage(
   return result.error || labels.failed;
 }
 
+function toOptionalBooleanSelectValue(value: boolean | undefined): OptionalBooleanSelectValue {
+  if (value === true) return "true";
+  if (value === false) return "false";
+  return "unset";
+}
+
+function fromOptionalBooleanSelectValue(value: string): boolean | undefined {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+function formatOptionalBoolean(
+  value: boolean | undefined,
+  labels: {
+    trueLabel: string;
+    falseLabel: string;
+    unsetLabel?: string;
+  }
+) {
+  if (value === true) return labels.trueLabel;
+  if (value === false) return labels.falseLabel;
+  return labels.unsetLabel ?? "Not set";
+}
+
+function formatOptionalLicense(value: YouTubeLicense | undefined) {
+  if (value === "youtube") return "Standard YouTube License";
+  if (value === "creativeCommon") return "Creative Commons";
+  return "Not set";
+}
+
 function createEmptyLocalization(): LocalizationRow {
   return {
     id: makeRowId(),
@@ -210,13 +243,13 @@ function buildDraft(input: {
   tagsInput: string;
   categoryId: string;
   defaultLanguage: string;
-  notifySubscribers: boolean;
-  embeddable: boolean;
-  license: YouTubeLicense;
-  publicStatsViewable: boolean;
+  notifySubscribers: boolean | undefined;
+  embeddable: boolean | undefined;
+  license: YouTubeLicense | undefined;
+  publicStatsViewable: boolean | undefined;
   publishAt: string;
-  selfDeclaredMadeForKids: boolean;
-  containsSyntheticMedia: boolean;
+  selfDeclaredMadeForKids: boolean | undefined;
+  containsSyntheticMedia: boolean | undefined;
   recordingDate: string;
   localizations: LocalizationRow[];
 }): YouTubeUploadDraft {
@@ -313,13 +346,13 @@ export function YouTubeUploadHub({
   const [privacyStatus, setPrivacyStatus] = useState<YouTubePrivacyStatus>("private");
   const [categoryId, setCategoryId] = useState("");
   const [defaultLanguage, setDefaultLanguage] = useState("");
-  const [notifySubscribers, setNotifySubscribers] = useState(false);
-  const [embeddable, setEmbeddable] = useState(true);
-  const [license, setLicense] = useState<YouTubeLicense>("youtube");
-  const [publicStatsViewable, setPublicStatsViewable] = useState(true);
+  const [notifySubscribers, setNotifySubscribers] = useState<boolean | undefined>(undefined);
+  const [embeddable, setEmbeddable] = useState<boolean | undefined>(undefined);
+  const [license, setLicense] = useState<YouTubeLicense | undefined>(undefined);
+  const [publicStatsViewable, setPublicStatsViewable] = useState<boolean | undefined>(undefined);
   const [publishAt, setPublishAt] = useState("");
-  const [selfDeclaredMadeForKids, setSelfDeclaredMadeForKids] = useState(false);
-  const [containsSyntheticMedia, setContainsSyntheticMedia] = useState(false);
+  const [selfDeclaredMadeForKids, setSelfDeclaredMadeForKids] = useState<boolean | undefined>(undefined);
+  const [containsSyntheticMedia, setContainsSyntheticMedia] = useState<boolean | undefined>(undefined);
   const [recordingDate, setRecordingDate] = useState("");
   const [localizations, setLocalizations] = useState<LocalizationRow[]>([]);
   const [captionLanguage, setCaptionLanguage] = useState("");
@@ -750,12 +783,12 @@ export function YouTubeUploadHub({
   const sourceSummaryLabel =
     sourceMode === "project_asset" ? selectedAssetLabel : sourceMode === "project_export" ? selectedSourceLabel : "Local file";
   const complianceRows = [
-    { label: "Notify subscribers", value: notifySubscribers ? "On" : "Off" },
-    { label: "Embeddable", value: embeddable ? "On" : "Off" },
-    { label: "Public stats viewable", value: publicStatsViewable ? "On" : "Off" },
-    { label: "Made for kids", value: selfDeclaredMadeForKids ? "Yes" : "No" },
-    { label: "Contains synthetic media", value: containsSyntheticMedia ? "Yes" : "No" },
-    { label: "License", value: license === "youtube" ? "Standard YouTube License" : "Creative Commons" },
+    { label: "Notify subscribers", value: formatOptionalBoolean(notifySubscribers, { trueLabel: "Yes", falseLabel: "No" }) },
+    { label: "Embeddable", value: formatOptionalBoolean(embeddable, { trueLabel: "Yes", falseLabel: "No" }) },
+    { label: "Public stats viewable", value: formatOptionalBoolean(publicStatsViewable, { trueLabel: "Yes", falseLabel: "No" }) },
+    { label: "Made for kids", value: formatOptionalBoolean(selfDeclaredMadeForKids, { trueLabel: "Yes", falseLabel: "No" }) },
+    { label: "Contains synthetic media", value: formatOptionalBoolean(containsSyntheticMedia, { trueLabel: "Yes", falseLabel: "No" }) },
+    { label: "License", value: formatOptionalLicense(license) },
   ];
 
 
@@ -829,14 +862,6 @@ export function YouTubeUploadHub({
             </div>
           </div>
         </div>
-
-        <Alert className="border-amber-400/25 bg-amber-400/10 text-amber-50">
-          <ShieldAlert className="h-4 w-4" />
-          <AlertTitle>Compliance note</AlertTitle>
-          <AlertDescription className="text-amber-50/80">
-            Unverified Google API projects can leave uploads locked to <strong>private</strong> even if you request <strong>public</strong> or <strong>unlisted</strong>. This tool defaults to private for safety.
-          </AlertDescription>
-        </Alert>
 
         {session && !session.configured && (
           <Alert className="border-red-400/25 bg-red-400/10 text-red-50">
@@ -1381,9 +1406,22 @@ export function YouTubeUploadHub({
                           </Select>
                         </div>
                         <div className="grid gap-2">
-                          <Label htmlFor="yt-recording-date" className="text-zinc-200">
-                            Recording date
-                          </Label>
+                          <div className="flex items-center justify-between">
+                            <Label htmlFor="yt-recording-date" className="text-zinc-200">
+                              Recording date
+                            </Label>
+                            {recordingDate ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                                onClick={() => setRecordingDate("")}
+                              >
+                                Clear
+                              </Button>
+                            ) : null}
+                          </div>
                           <Input
                             id="yt-recording-date"
                             type="date"
@@ -1417,9 +1455,22 @@ export function YouTubeUploadHub({
                         />
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="yt-publish-at" className="text-zinc-200">
-                          Publish at
-                        </Label>
+                        <div className="flex items-center justify-between">
+                          <Label htmlFor="yt-publish-at" className="text-zinc-200">
+                            Publish at
+                          </Label>
+                          {publishAt ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="text-zinc-400 hover:bg-white/10 hover:text-white"
+                              onClick={() => setPublishAt("")}
+                            >
+                              Clear
+                            </Button>
+                          ) : null}
+                        </div>
                         <Input
                           id="yt-publish-at"
                           type="datetime-local"
@@ -1446,32 +1497,32 @@ export function YouTubeUploadHub({
                           {
                             label: "Notify subscribers",
                             description: "Leave off by default to avoid accidental notifications during testing.",
-                            checked: notifySubscribers,
-                            onCheckedChange: setNotifySubscribers,
+                            value: notifySubscribers,
+                            onValueChange: setNotifySubscribers,
                           },
                           {
                             label: "Embeddable",
                             description: "Allow the uploaded video to be embedded on external sites.",
-                            checked: embeddable,
-                            onCheckedChange: setEmbeddable,
+                            value: embeddable,
+                            onValueChange: setEmbeddable,
                           },
                           {
                             label: "Public stats viewable",
                             description: "Expose public view/like counters when YouTube allows them.",
-                            checked: publicStatsViewable,
-                            onCheckedChange: setPublicStatsViewable,
+                            value: publicStatsViewable,
+                            onValueChange: setPublicStatsViewable,
                           },
                           {
                             label: "Made for kids",
                             description: "Set the self-declared audience flag immediately in the upload metadata.",
-                            checked: selfDeclaredMadeForKids,
-                            onCheckedChange: setSelfDeclaredMadeForKids,
+                            value: selfDeclaredMadeForKids,
+                            onValueChange: setSelfDeclaredMadeForKids,
                           },
                           {
                             label: "Contains synthetic media",
                             description: "Useful when the final piece includes AI-generated or materially synthetic content.",
-                            checked: containsSyntheticMedia,
-                            onCheckedChange: setContainsSyntheticMedia,
+                            value: containsSyntheticMedia,
+                            onValueChange: setContainsSyntheticMedia,
                           },
                         ].map((item) => (
                           <div
@@ -1484,7 +1535,19 @@ export function YouTubeUploadHub({
                                 {item.description}
                               </div>
                             </div>
-                            <Switch checked={item.checked} onCheckedChange={item.onCheckedChange} />
+                            <Select
+                              value={toOptionalBooleanSelectValue(item.value)}
+                              onValueChange={(value) => item.onValueChange(fromOptionalBooleanSelectValue(value))}
+                            >
+                              <SelectTrigger className="w-[132px] border-white/10 bg-black/25 text-white">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="unset">Not set</SelectItem>
+                                <SelectItem value="true">Yes</SelectItem>
+                                <SelectItem value="false">No</SelectItem>
+                              </SelectContent>
+                            </Select>
                           </div>
                         ))}
                       </div>
@@ -1492,11 +1555,15 @@ export function YouTubeUploadHub({
                       <div className="grid gap-2 sm:grid-cols-2">
                         <div className="grid gap-2">
                           <Label className="text-zinc-200">License</Label>
-                          <Select value={license} onValueChange={(value: YouTubeLicense) => setLicense(value)}>
+                          <Select
+                            value={license ?? "unset"}
+                            onValueChange={(value) => setLicense(value === "unset" ? undefined : (value as YouTubeLicense))}
+                          >
                             <SelectTrigger className="border-white/10 bg-black/25 text-white">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
+                              <SelectItem value="unset">Not set</SelectItem>
                               <SelectItem value="youtube">Standard YouTube License</SelectItem>
                               <SelectItem value="creativeCommon">Creative Commons</SelectItem>
                             </SelectContent>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { publishToYouTubeFromBrowser } from "../../../src/lib/youtube/browser-upload";
+import type { YouTubeUploadDraft } from "../../../src/lib/youtube/types";
 
 class FakeUploadRequest {
   upload = {
@@ -90,18 +91,11 @@ function createFetchStub(options?: { failThumbnail?: boolean; failCaption?: bool
   };
 }
 
-const draft = {
+const draft: YouTubeUploadDraft = {
   title: "Launch cut",
   description: "Description",
-  privacyStatus: "private" as const,
+  privacyStatus: "private",
   tags: ["launch", "workflow"],
-  defaultLanguage: "en",
-  notifySubscribers: false,
-  embeddable: true,
-  license: "youtube" as const,
-  publicStatsViewable: true,
-  selfDeclaredMadeForKids: false,
-  containsSyntheticMedia: false,
   localizations: [],
 };
 

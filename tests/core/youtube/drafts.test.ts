@@ -39,6 +39,10 @@ test("buildYouTubeVideoInsertRequest maps required and advanced metadata", () =>
   assert.deepEqual(result.body.snippet.tags, ["alpha", "beta"]);
   assert.equal(result.body.snippet.categoryId, "22");
   assert.equal(result.body.snippet.defaultLanguage, "en");
+  assert.equal(result.body.status.embeddable, true);
+  assert.equal(result.body.status.license, "youtube");
+  assert.equal(result.body.status.publicStatsViewable, true);
+  assert.equal(result.body.status.selfDeclaredMadeForKids, false);
   assert.equal(result.body.status.containsSyntheticMedia, true);
   assert.equal(result.body.status.publishAt, new Date("2026-03-17T10:30").toISOString());
   assert.equal(result.body.recordingDetails?.recordingDate, "2026-03-10T00:00:00.000Z");
@@ -50,29 +54,47 @@ test("buildYouTubeVideoInsertRequest maps required and advanced metadata", () =>
   });
 });
 
-test("buildYouTubeVideoInsertRequest omits empty optional fields", () => {
+test("buildYouTubeVideoInsertRequest omits unset optional fields", () => {
   const result = buildYouTubeVideoInsertRequest({
     title: "Quick post",
     description: "Description",
     privacyStatus: "private",
     tags: [],
-    notifySubscribers: true,
-    embeddable: true,
-    license: "creativeCommon",
+    localizations: [],
+  });
+
+  assert.doesNotMatch(result.initUrl, /notifySubscribers=/);
+  assert.equal("tags" in result.body.snippet, false);
+  assert.equal("categoryId" in result.body.snippet, false);
+  assert.equal("defaultLanguage" in result.body.snippet, false);
+  assert.equal("embeddable" in result.body.status, false);
+  assert.equal("license" in result.body.status, false);
+  assert.equal("publicStatsViewable" in result.body.status, false);
+  assert.equal("selfDeclaredMadeForKids" in result.body.status, false);
+  assert.equal("containsSyntheticMedia" in result.body.status, false);
+  assert.equal("recordingDetails" in result.body, false);
+  assert.equal("localizations" in result.body, false);
+});
+
+test("buildYouTubeVideoInsertRequest preserves explicit false values", () => {
+  const result = buildYouTubeVideoInsertRequest({
+    title: "Explicit false",
+    description: "Description",
+    privacyStatus: "private",
+    tags: [],
+    notifySubscribers: false,
+    embeddable: false,
     publicStatsViewable: false,
-    selfDeclaredMadeForKids: true,
+    selfDeclaredMadeForKids: false,
     containsSyntheticMedia: false,
     localizations: [],
   });
 
-  assert.equal("tags" in result.body.snippet, false);
-  assert.equal("categoryId" in result.body.snippet, false);
-  assert.equal("defaultLanguage" in result.body.snippet, false);
-  assert.equal("recordingDetails" in result.body, false);
-  assert.equal("localizations" in result.body, false);
-  assert.equal(result.body.status.license, "creativeCommon");
+  assert.match(result.initUrl, /notifySubscribers=false/);
+  assert.equal(result.body.status.embeddable, false);
   assert.equal(result.body.status.publicStatsViewable, false);
-  assert.equal(result.body.status.selfDeclaredMadeForKids, true);
+  assert.equal(result.body.status.selfDeclaredMadeForKids, false);
+  assert.equal(result.body.status.containsSyntheticMedia, false);
 });
 
 test("buildYouTubeCaptionInitRequest creates resumable caption metadata", () => {

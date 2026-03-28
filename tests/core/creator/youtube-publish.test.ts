@@ -268,13 +268,7 @@ test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for p
     tags: ["clipscribe", "launch"],
     categoryId: "28",
     defaultLanguage: "en",
-    notifySubscribers: false,
-    embeddable: true,
-    license: "youtube",
-    publicStatsViewable: true,
     publishAt: "2026-04-01T12:00",
-    selfDeclaredMadeForKids: false,
-    containsSyntheticMedia: true,
     recordingDate: "2026-03-27",
     localizations: [
       {

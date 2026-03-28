@@ -22,11 +22,11 @@ type MutableVideoSnippet = {
 
 type MutableVideoStatus = {
   privacyStatus: string;
-  embeddable: boolean;
-  license: string;
-  publicStatsViewable: boolean;
-  selfDeclaredMadeForKids: boolean;
-  containsSyntheticMedia: boolean;
+  embeddable?: boolean;
+  license?: string;
+  publicStatsViewable?: boolean;
+  selfDeclaredMadeForKids?: boolean;
+  containsSyntheticMedia?: boolean;
   publishAt?: string;
 };
 
@@ -98,12 +98,12 @@ export function buildYouTubeVideoInsertRequest(draft: YouTubeUploadDraft): YouTu
 
   const status: MutableVideoStatus = {
     privacyStatus: draft.privacyStatus,
-    embeddable: Boolean(draft.embeddable),
-    license: draft.license,
-    publicStatsViewable: Boolean(draft.publicStatsViewable),
-    selfDeclaredMadeForKids: Boolean(draft.selfDeclaredMadeForKids),
-    containsSyntheticMedia: Boolean(draft.containsSyntheticMedia),
   };
+  if (typeof draft.embeddable === "boolean") status.embeddable = draft.embeddable;
+  if (draft.license) status.license = draft.license;
+  if (typeof draft.publicStatsViewable === "boolean") status.publicStatsViewable = draft.publicStatsViewable;
+  if (typeof draft.selfDeclaredMadeForKids === "boolean") status.selfDeclaredMadeForKids = draft.selfDeclaredMadeForKids;
+  if (typeof draft.containsSyntheticMedia === "boolean") status.containsSyntheticMedia = draft.containsSyntheticMedia;
   const publishAt = trimOptional(draft.publishAt);
   if (publishAt) status.publishAt = new Date(publishAt).toISOString();
 
@@ -130,7 +130,9 @@ export function buildYouTubeVideoInsertRequest(draft: YouTubeUploadDraft): YouTu
   const initUrl = new URL(YOUTUBE_UPLOAD_VIDEO_URL);
   initUrl.searchParams.set("uploadType", "resumable");
   initUrl.searchParams.set("part", YOUTUBE_VIDEO_INSERT_PARTS.join(","));
-  initUrl.searchParams.set("notifySubscribers", String(Boolean(draft.notifySubscribers)));
+  if (typeof draft.notifySubscribers === "boolean") {
+    initUrl.searchParams.set("notifySubscribers", String(draft.notifySubscribers));
+  }
 
   return {
     initUrl: initUrl.toString(),
