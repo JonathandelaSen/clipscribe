@@ -84,7 +84,7 @@ function createTestProject(options?: {
       enabled: options?.subtitlesEnabled ?? false,
       preset: "clean_caption",
       positionXPercent: 50,
-      positionYPercent: 90,
+      positionYPercent: 78,
       scale: 1,
       style: {},
     },

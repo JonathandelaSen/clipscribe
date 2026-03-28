@@ -61,6 +61,21 @@ export function getDefaultTimelineVideoClipActions(): TimelineVideoClipActions {
   };
 }
 
+export function getDefaultEditorSubtitleStyle(
+  preset: EditorSubtitlePreset
+) {
+  if (preset !== "clean_caption") {
+    return getDefaultCreatorSubtitleStyle(preset);
+  }
+
+  return resolveCreatorSubtitleStyle(preset, {
+    borderColor: "#111111",
+    borderWidth: 4.8,
+    shadowOpacity: 0.46,
+    shadowDistance: 3,
+  });
+}
+
 export function getDefaultEditorSubtitleTrackSettings(): EditorSubtitleTrackSettings {
   return {
     source: {
@@ -76,9 +91,9 @@ export function getDefaultEditorSubtitleTrackSettings(): EditorSubtitleTrackSett
     enabled: true,
     preset: DEFAULT_SUBTITLE_PRESET,
     positionXPercent: 50,
-    positionYPercent: 90,
+    positionYPercent: 78,
     scale: 1,
-    style: getDefaultCreatorSubtitleStyle(DEFAULT_SUBTITLE_PRESET),
+    style: getDefaultEditorSubtitleStyle(DEFAULT_SUBTITLE_PRESET),
   };
 }
 
@@ -122,6 +137,8 @@ export function normalizeEditorSubtitleTrackSettings(
         : { kind: "none" as const };
 
   const chunks = Array.isArray(subtitles?.chunks) ? subtitles.chunks : defaults.chunks;
+  const preset = subtitles?.preset ?? defaults.preset;
+  const defaultStyle = getDefaultEditorSubtitleStyle(preset);
 
   return {
     source: normalizedSource,
@@ -142,15 +159,19 @@ export function normalizeEditorSubtitleTrackSettings(
       : defaults.trimStartSeconds,
     trimEndSeconds: normalizeSubtitleTrimEndSeconds(Number(subtitles?.trimEndSeconds), chunks),
     enabled: typeof subtitles?.enabled === "boolean" ? subtitles.enabled : defaults.enabled,
-    preset: subtitles?.preset ?? defaults.preset,
+    preset,
     positionXPercent: Number.isFinite(subtitles?.positionXPercent)
-      ? Number(subtitles?.positionXPercent)
+      ? Math.min(90, Math.max(10, Number(subtitles?.positionXPercent)))
       : defaults.positionXPercent,
     positionYPercent: Number.isFinite(subtitles?.positionYPercent)
-      ? Number(subtitles?.positionYPercent)
+      ? Math.min(92, Math.max(45, Number(subtitles?.positionYPercent)))
       : defaults.positionYPercent,
     scale: Number.isFinite(subtitles?.scale) ? Number(subtitles?.scale) : defaults.scale,
-    style: resolveCreatorSubtitleStyle(subtitles?.preset ?? defaults.preset, subtitles?.style),
+    style: resolveCreatorSubtitleStyle(preset, {
+      ...defaultStyle,
+      ...subtitles?.style,
+      preset,
+    }),
   };
 }
 

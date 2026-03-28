@@ -106,7 +106,7 @@ function createProject(overrides: Partial<ContentProjectRecord> = {}): ContentPr
       enabled: true,
       preset: "clean_caption",
       positionXPercent: 50,
-      positionYPercent: 90,
+      positionYPercent: 78,
       scale: 1,
       style: {},
     },

@@ -128,7 +128,7 @@ function renderChunkToCanvas(input: {
   ctx.font = fontSpec;
 
   const textBlockHeight = (lines.length - 1) * lineHeight + fontSize;
-  const blockTop = -textBlockHeight;
+  const blockTop = -(textBlockHeight / 2);
   const maxLineWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
   const hasBackground = style.backgroundEnabled && style.backgroundOpacity > 0;
 

@@ -88,7 +88,7 @@ export function buildEditorAssSubtitleDocument(input: {
       );
       if (lines.length === 0) return null;
 
-      return `Dialogue: 0,${formatAssTimestamp(start)},${formatAssTimestamp(safeEnd)},Default,,0,0,0,,{\\an2\\pos(${anchorX},${anchorY})}${escapeAssText(lines.join("\\N"))}`;
+      return `Dialogue: 0,${formatAssTimestamp(start)},${formatAssTimestamp(safeEnd)},Default,,0,0,0,,{\\an5\\pos(${anchorX},${anchorY})}${escapeAssText(lines.join("\\N"))}`;
     })
     .filter((line): line is string => Boolean(line));
 
@@ -121,7 +121,7 @@ export function buildEditorAssSubtitleDocument(input: {
       borderStyle,
       String(outline),
       String(shadow),
-      "2",
+      "5",
       "0",
       "0",
       "0",

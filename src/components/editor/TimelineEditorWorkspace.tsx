@@ -155,6 +155,7 @@ import {
   createDefaultImageTrackItem,
   createDefaultVideoClip,
   createEditorAssetRecord,
+  getDefaultEditorSubtitleStyle,
   getEditorProjectPersistenceFingerprint,
   markEditorProjectFailed,
   markEditorProjectSaved,
@@ -751,6 +752,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const lastAnimationFrameRef = useRef<number | null>(null);
   const persistedPlayheadSecondsRef = useRef(0);
   const playheadRef = useRef(0);
+  const pendingPreviewSeekSecondsRef = useRef<number | null>(null);
+  const pendingPreviewSeekUntilRef = useRef(0);
   const isPlayingRef = useRef(false);
   const isTimelinePreviewRef = useRef(false);
   const projectDurationRef = useRef(0);
@@ -1408,21 +1411,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
   const previewImageUrl = useObjectUrl(previewImageAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const subtitlePreviewRenderSize = useMemo(
+    () => (project ? getEditorOutputDimensions(project.aspectRatio, "1080p") : null),
+    [project]
+  );
   const currentCaptionStyle = useMemo(
     () => (project ? resolveCreatorSubtitleStyle(project.subtitles.preset, project.subtitles.style) : null),
     [project]
   );
   const currentCaptionLayout = useMemo(() => {
-    if (!project || !currentCaption || timelinePreviewFrameSize.width <= 0 || timelinePreviewFrameSize.height <= 0) {
+    if (!project || !currentCaption || !subtitlePreviewRenderSize) {
       return null;
     }
     return resolveEditorSubtitleTextLayout({
-      width: timelinePreviewFrameSize.width,
-      height: timelinePreviewFrameSize.height,
+      width: subtitlePreviewRenderSize.width,
+      height: subtitlePreviewRenderSize.height,
       text: String(currentCaption.text ?? ""),
       project,
     });
-  }, [currentCaption, project, timelinePreviewFrameSize.height, timelinePreviewFrameSize.width]);
+  }, [currentCaption, project, subtitlePreviewRenderSize]);
+  const currentCaptionPreviewScale = useMemo(() => {
+    if (!subtitlePreviewRenderSize || timelinePreviewFrameSize.width <= 0 || timelinePreviewFrameSize.height <= 0) {
+      return 1;
+    }
+    return Math.min(
+      timelinePreviewFrameSize.width / subtitlePreviewRenderSize.width,
+      timelinePreviewFrameSize.height / subtitlePreviewRenderSize.height
+    );
+  }, [subtitlePreviewRenderSize, timelinePreviewFrameSize.height, timelinePreviewFrameSize.width]);
   const timelineImagePreviewLayout = useMemo(() => {
     if (
       !isTimelinePreview ||
@@ -1705,13 +1721,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       isUsingActiveReversePreview ? Math.max(0, activePlacement.durationSeconds - 0.001) : clipMaxTime
     );
     if (!Number.isFinite(nextTime)) return;
+    const isPendingSeek =
+      pendingPreviewSeekSecondsRef.current != null &&
+      Date.now() <= pendingPreviewSeekUntilRef.current &&
+      Math.abs(playheadSeconds - pendingPreviewSeekSecondsRef.current) < 0.05;
     const seekThreshold =
       activePlacement.clip.actions.reverse && !isUsingActiveReversePreview
         ? 0.015
         : isPlaying
           ? 0.35
           : 0.05;
-    if (Math.abs(video.currentTime - nextTime) > seekThreshold) {
+    if (isPendingSeek || Math.abs(video.currentTime - nextTime) > seekThreshold) {
       try {
         video.currentTime = nextTime;
       } catch {}
@@ -1772,7 +1792,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return;
     }
     const currentTime = item.trimStartSeconds + (playheadSeconds - activeAudioPlacement.startSeconds);
-    if (Math.abs(audio.currentTime - currentTime) > (isPlaying ? 0.35 : 0.05)) {
+    const isPendingSeek =
+      pendingPreviewSeekSecondsRef.current != null &&
+      Date.now() <= pendingPreviewSeekUntilRef.current &&
+      Math.abs(playheadSeconds - pendingPreviewSeekSecondsRef.current) < 0.05;
+    if (isPendingSeek || Math.abs(audio.currentTime - currentTime) > (isPlaying ? 0.35 : 0.05)) {
       try {
         audio.currentTime = currentTime;
       } catch {}
@@ -1832,6 +1856,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
       const video = videoRef.current;
       const audio = audioRef.current;
+      const forcedSeekTime =
+        pendingPreviewSeekSecondsRef.current != null &&
+        Date.now() <= pendingPreviewSeekUntilRef.current
+          ? pendingPreviewSeekSecondsRef.current
+          : null;
       const mediaDrivenTime =
         video &&
         activePlacement &&
@@ -1851,13 +1880,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               audio.readyState >= 2
             ? getTimelinePlaybackTimeFromAudio({
                 placement: activeAudioPlacement,
-                currentTime: audio.currentTime,
+              currentTime: audio.currentTime,
               })
             : null;
       const nextTime = Math.min(
         projectDurationRef.current,
-        mediaDrivenTime ?? (playheadRef.current + deltaSeconds)
+        forcedSeekTime ?? mediaDrivenTime ?? (playheadRef.current + deltaSeconds)
       );
+      if (forcedSeekTime != null) {
+        pendingPreviewSeekSecondsRef.current = null;
+        pendingPreviewSeekUntilRef.current = 0;
+      }
       playheadRef.current = nextTime;
 
       startTransition(() => {
@@ -2053,6 +2086,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       0,
       Math.max(projectDurationRef.current, 0)
     );
+    pendingPreviewSeekSecondsRef.current = clampedPlayheadSeconds;
+    pendingPreviewSeekUntilRef.current = Date.now() + 250;
+    lastAnimationFrameRef.current = null;
+    if (isTimelinePreviewRef.current && isPlayingRef.current) {
+      videoRef.current?.pause();
+      audioRef.current?.pause();
+    }
     playheadRef.current = clampedPlayheadSeconds;
     setPlayheadSeconds((current) =>
       Math.abs(current - clampedPlayheadSeconds) < 0.001 ? current : clampedPlayheadSeconds
@@ -2246,9 +2286,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ...subtitles,
       preset: "clean_caption",
       positionXPercent: 50,
-      positionYPercent: 90,
+      positionYPercent: 78,
       scale: 1,
-      style: resolveCreatorSubtitleStyle("clean_caption"),
+      style: getDefaultEditorSubtitleStyle("clean_caption"),
     }));
   };
 
@@ -4251,37 +4291,51 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                   ) : null}
                                   {project.subtitles.enabled && currentCaption && currentCaptionLayout && currentCaptionStyle ? (
                                     <div
-                                      className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-full text-center"
+                                      className="pointer-events-none absolute text-center"
                                       style={{
-                                        left: `${project.subtitles.positionXPercent}%`,
-                                        top: `${project.subtitles.positionYPercent}%`,
-                                        transform: "translate(-50%, -100%)",
+                                        left: `${Math.round(currentCaptionLayout.anchorX * currentCaptionPreviewScale)}px`,
+                                        top: `${Math.round(currentCaptionLayout.anchorY * currentCaptionPreviewScale)}px`,
+                                        transform: "translate(-50%, -50%)",
+                                        maxWidth: `${Math.round(subtitlePreviewRenderSize?.width ? subtitlePreviewRenderSize.width * 0.82 * currentCaptionPreviewScale : 0)}px`,
+                                        width: "max-content",
                                       }}
                                     >
                                       <div
-                                        className="inline-block text-center font-bold"
+                                        className="inline-block max-w-full text-center"
                                         style={{
-                                          color: currentCaptionStyle.textColor,
-                                          fontSize: `${currentCaptionLayout.fontSize}px`,
-                                          lineHeight: `${currentCaptionLayout.lineHeight}px`,
-                                          fontWeight: 700,
-                                          textShadow: cssTextShadowFromStyle(currentCaptionStyle),
-                                          WebkitTextStroke: `${Math.max(1, currentCaptionStyle.borderWidth * 0.85)}px ${cssRgbaFromHex(currentCaptionStyle.borderColor, 0.95)}`,
-                                          backgroundColor: currentCaptionStyle.backgroundEnabled
-                                            ? cssRgbaFromHex(
-                                                currentCaptionStyle.backgroundColor,
-                                                currentCaptionStyle.backgroundOpacity
-                                              )
-                                            : "transparent",
-                                          borderRadius: `${currentCaptionStyle.backgroundRadius}px`,
-                                          padding: currentCaptionStyle.backgroundEnabled
-                                            ? `${currentCaptionStyle.backgroundPaddingY}px ${currentCaptionStyle.backgroundPaddingX}px`
-                                            : "0px",
-                                          whiteSpace: "pre-line",
-                                          backdropFilter: currentCaptionStyle.backgroundEnabled ? "blur(2px)" : "none",
+                                          transform: `scaleX(${Math.max(1, Math.min(1.5, currentCaptionStyle.letterWidth))})`,
+                                          transformOrigin: "center center",
                                         }}
                                       >
-                                        {currentCaptionLayout.lines.join("\n")}
+                                        <div
+                                          style={{
+                                            display: "block",
+                                            whiteSpace: "pre-line",
+                                            textAlign: "center",
+                                            color: currentCaptionStyle.textColor,
+                                            fontSize: `${(currentCaptionLayout.fontSize * currentCaptionPreviewScale).toFixed(2)}px`,
+                                            lineHeight: `${(currentCaptionLayout.lineHeight * currentCaptionPreviewScale).toFixed(2)}px`,
+                                            fontWeight: 700,
+                                            fontFamily: "var(--font-inter), 'Inter', sans-serif",
+                                            textShadow: cssTextShadowFromStyle(currentCaptionStyle, currentCaptionPreviewScale),
+                                            WebkitTextStroke: `${Math.max(1, currentCaptionStyle.borderWidth * currentCaptionPreviewScale).toFixed(2)}px ${cssRgbaFromHex(currentCaptionStyle.borderColor, 0.95)}`,
+                                            paintOrder: "stroke fill",
+                                            backgroundColor: currentCaptionStyle.backgroundEnabled
+                                              ? cssRgbaFromHex(
+                                                  currentCaptionStyle.backgroundColor,
+                                                  currentCaptionStyle.backgroundOpacity
+                                                )
+                                              : "transparent",
+                                            borderRadius: currentCaptionStyle.backgroundEnabled
+                                              ? `${(currentCaptionStyle.backgroundRadius * currentCaptionPreviewScale).toFixed(2)}px`
+                                              : undefined,
+                                            padding: currentCaptionStyle.backgroundEnabled
+                                              ? `${(currentCaptionStyle.backgroundPaddingY * currentCaptionPreviewScale).toFixed(2)}px ${(currentCaptionStyle.backgroundPaddingX * currentCaptionPreviewScale).toFixed(2)}px`
+                                              : undefined,
+                                          }}
+                                        >
+                                          {currentCaptionLayout.lines.join("\n")}
+                                        </div>
                                       </div>
                                     </div>
                                   ) : null}
@@ -5024,7 +5078,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                     preset: value as EditorProjectRecord["subtitles"]["preset"],
                                     style: resolveCreatorSubtitleStyle(
                                       value as EditorProjectRecord["subtitles"]["preset"],
-                                      subtitles.style
+                                      {
+                                        ...getDefaultEditorSubtitleStyle(
+                                          value as EditorProjectRecord["subtitles"]["preset"]
+                                        ),
+                                        ...subtitles.style,
+                                      }
                                     ),
                                   }))
                                 }
@@ -5073,8 +5132,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               <label className="text-xs text-white/55">Position Y · {Math.round(selectedSubtitleTrack.positionYPercent)}%</label>
                               <input
                                 type="range"
-                                min={10}
-                                max={95}
+                                min={45}
+                                max={92}
                                 step={1}
                                 value={selectedSubtitleTrack.positionYPercent}
                                 onChange={(event) =>
