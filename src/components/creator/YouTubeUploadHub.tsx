@@ -64,7 +64,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -714,9 +714,6 @@ export function YouTubeUploadHub({
                   <FileVideo className="h-5 w-5 text-cyan-300" />
                   Video source
                 </CardTitle>
-                <CardDescription className="text-zinc-400">
-                  Upload a local file or choose a completed export from this project.
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6 p-6">
                 <div className="grid gap-4">
@@ -825,9 +822,6 @@ export function YouTubeUploadHub({
                       <ShieldCheck className="h-5 w-5 text-cyan-300" />
                       YouTube connection
                     </CardTitle>
-                    <CardDescription className="mt-2 text-zinc-400">
-                      OAuth stays on the backend. The browser only gets a short-lived token right before upload.
-                    </CardDescription>
                   </div>
                   <Button
                     variant="ghost"
@@ -923,9 +917,6 @@ export function YouTubeUploadHub({
                   <Upload className="h-5 w-5 text-orange-300" />
                   Video source
                 </CardTitle>
-                <CardDescription className="text-zinc-400">
-                  Choose whether the upload should stream a local file or a finished ClipScribe export.
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 p-6">
                 <input
@@ -1045,9 +1036,6 @@ export function YouTubeUploadHub({
                     </Button>
                   ) : null}
                 </CardTitle>
-                <CardDescription className="text-zinc-400">
-                  Manual inputs stay authoritative. AI only fills these fields when you explicitly tell it to.
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6 p-6">
                 <div className="grid gap-5">

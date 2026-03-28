@@ -3031,9 +3031,6 @@ export function CreatorHub({
               <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2"><Sparkles className="w-5 h-5 text-cyan-300" /> YouTube Content Pack</CardTitle>
-                  <CardDescription className="text-white/50">
-                    Copy-ready packaging generated from transcript + timed chunks.
-                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-5">
                   {!showTitleIdeas && !showDescription && !showHashtags && !showPinnedComment && !showThumbnailHooks && (
@@ -3161,7 +3158,6 @@ export function CreatorHub({
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2"><CalendarClock className="w-5 h-5 text-orange-300" /> Time Marks / Chapters</CardTitle>
-                      <CardDescription className="text-white/50">Copy these directly into your YouTube description.</CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
                       <div className="flex gap-2">
@@ -3198,13 +3194,6 @@ export function CreatorHub({
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                     <CardHeader>
                       <CardTitle className="flex items-center gap-2"><Film className="w-5 h-5 text-emerald-300" /> Insights + Repurpose Strategy</CardTitle>
-                      <CardDescription className="text-white/50">
-                        {showContentPack && showInsights
-                          ? "AI content notes plus transcript-level signals."
-                          : showContentPack
-                            ? "AI content notes to plan posts beyond one upload."
-                            : "Transcript-level metrics and theme signals."}
-                      </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm">
                       {showContentPack && (
@@ -3293,9 +3282,6 @@ export function CreatorHub({
                       <CardTitle className="text-2xl font-bold flex items-center gap-2">
                         ✂️ Manual Edit
                       </CardTitle>
-                      <CardDescription className="text-white/60 text-base mt-2 leading-relaxed">
-                        Jump straight into the editor with your full video. Perfect for when you already know what you want to cut.
-                      </CardDescription>
                     </CardHeader>
                   </Card>
 
@@ -3308,9 +3294,6 @@ export function CreatorHub({
                       <CardTitle className="text-2xl font-bold flex items-center gap-2">
                         ✨ AI Magic Clips
                       </CardTitle>
-                      <CardDescription className="text-white/60 text-base mt-2 leading-relaxed">
-                        Let AI analyze your transcript and suggest the most viral, engaging moments based on your defined niche and tone.
-                      </CardDescription>
                     </CardHeader>
                   </Card>
                 </div>
@@ -3469,9 +3452,6 @@ export function CreatorHub({
                 <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2 text-2xl"><Flame className="w-6 h-6 text-orange-300" /> AI Magic Clips</CardTitle>
-                    <CardDescription className="text-white/50 text-base">
-                      Review saved AI suggestion batches. Each generation keeps the inputs used so you can compare recommendations over time.
-                    </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4 max-h-[42rem] overflow-auto pr-1">
                     {matchingAiSuggestionGenerations.length > 0 ? (

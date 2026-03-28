@@ -361,7 +361,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                         onValueChange={setTranscriptionLanguage}
                         disabled={isActiveSourceTranscribing}
                         required
-                        helperText="La transcripción se guardará como historial versionado del asset fuente activo."
                       />
                     </>
                   ) : (

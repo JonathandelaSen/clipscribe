@@ -843,9 +843,6 @@ export function AiRunsWorkbench() {
                   <span className="text-xs uppercase tracking-[0.28em]">AI Runs Workbench</span>
                 </div>
                 <h1 className="text-3xl font-semibold tracking-tight text-white">Operational view for prompts, payloads, and JSON traces</h1>
-                <p className="max-w-4xl text-sm text-white/50">
-                  Full-screen inspection for long sessions: dense run index, sharable filters in the URL, and a structured JSON inspector instead of raw text blobs.
-                </p>
               </div>
 
               <div className="flex flex-wrap gap-2">
