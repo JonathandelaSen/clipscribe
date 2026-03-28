@@ -127,15 +127,6 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data;
 }
 
-async function copyText(text: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(`${label} copied`);
-  } catch {
-    toast.error(`Couldn't copy ${label.toLowerCase()}`);
-  }
-}
-
 function formatDateTime(value: number | undefined) {
   if (!value) return "No token expiry available";
   return new Date(value).toLocaleString(undefined, {
@@ -223,7 +214,6 @@ export function YouTubeUploadHub({
     assetsByProjectId,
     exportsByProjectId,
     isLoading: isLoadingProjects,
-    saveProject,
   } = useProjectLibrary();
   const isProjectLocked = !!projectId;
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? "");
@@ -1153,10 +1143,7 @@ export function YouTubeUploadHub({
                         <div className="rounded-xl border border-cyan-300/15 bg-cyan-400/10 p-2 text-cyan-100">
                           <Languages className="h-4 w-4" />
                         </div>
-                        <div className="text-left">
-                          <div className="font-medium">Discovery & scheduling</div>
-                          <div className="text-xs text-zinc-500">Language, tags, category, publish time.</div>
-                        </div>
+                        <div className="text-left font-medium">Discovery & scheduling</div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-4">
@@ -1233,10 +1220,7 @@ export function YouTubeUploadHub({
                         <div className="rounded-xl border border-emerald-300/15 bg-emerald-400/10 p-2 text-emerald-100">
                           <ShieldCheck className="h-4 w-4" />
                         </div>
-                        <div className="text-left">
-                          <div className="font-medium">Compliance & distribution</div>
-                          <div className="text-xs text-zinc-500">Audience flags, embeddability, visibility knobs.</div>
-                        </div>
+                        <div className="text-left font-medium">Compliance & distribution</div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-4">
@@ -1311,10 +1295,7 @@ export function YouTubeUploadHub({
                         <div className="rounded-xl border border-violet-300/15 bg-violet-400/10 p-2 text-violet-100">
                           <Languages className="h-4 w-4" />
                         </div>
-                        <div className="text-left">
-                          <div className="font-medium">Localized metadata</div>
-                          <div className="text-xs text-zinc-500">Optional per-locale title and description pairs.</div>
-                        </div>
+                        <div className="text-left font-medium">Localized metadata</div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-4">
@@ -1386,10 +1367,7 @@ export function YouTubeUploadHub({
                         <div className="rounded-xl border border-orange-300/15 bg-orange-400/10 p-2 text-orange-100">
                           <FileImage className="h-4 w-4" />
                         </div>
-                        <div className="text-left">
-                          <div className="font-medium">Optional assets</div>
-                          <div className="text-xs text-zinc-500">Thumbnail and SRT caption track.</div>
-                        </div>
+                        <div className="text-left font-medium">Optional assets</div>
                       </div>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-5">
@@ -1405,7 +1383,6 @@ export function YouTubeUploadHub({
                           <div className="flex items-start justify-between gap-4">
                             <div>
                               <div className="text-sm font-medium text-white">Thumbnail</div>
-                              <div className="mt-1 text-xs text-zinc-500">Manual JPG/PNG upload for <code>thumbnails.set</code>.</div>
                             </div>
                             <Button
                               variant="outline"
@@ -1432,7 +1409,6 @@ export function YouTubeUploadHub({
                           <div className="flex items-start justify-between gap-4">
                             <div>
                               <div className="text-sm font-medium text-white">Caption track</div>
-                              <div className="mt-1 text-xs text-zinc-500">Optional <code>.srt</code> sent via <code>captions.insert</code>.</div>
                             </div>
                             <Button
                               variant="outline"
@@ -1520,9 +1496,6 @@ export function YouTubeUploadHub({
                   <Sparkles className="h-5 w-5 text-fuchsia-300" />
                   Progress & result
                 </CardTitle>
-                <CardDescription className="text-zinc-400">
-                  The browser handles the resumable upload, then we collect the resulting YouTube ids and processing state.
-                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-5 p-6">
                 <div className="rounded-[26px] border border-white/8 bg-black/20 p-5">

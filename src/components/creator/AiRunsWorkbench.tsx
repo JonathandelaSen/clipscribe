@@ -190,7 +190,7 @@ function MetricCard({
 }: {
   label: string;
   value: string;
-  caption: string;
+  caption?: string;
   accent?: "cyan" | "amber" | "emerald";
 }) {
   return (
@@ -206,7 +206,7 @@ function MetricCard({
     >
       <div className="text-[11px] uppercase tracking-[0.28em] text-white/38">{label}</div>
       <div className="mt-2 text-2xl font-semibold tracking-tight text-white">{value}</div>
-      <div className="mt-1 text-xs text-white/45">{caption}</div>
+      {caption ? <div className="mt-1 text-xs text-white/45">{caption}</div> : null}
     </div>
   );
 }
@@ -882,10 +882,10 @@ export function AiRunsWorkbench() {
             </div>
 
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-              <MetricCard label="Visible Runs" value={String(metrics.totalRuns)} caption="Current query result size" />
+              <MetricCard label="Visible Runs" value={String(metrics.totalRuns)} />
               <MetricCard label="Error Rate" value={formatPercent(metrics.errorRate)} caption={`${metrics.errorRuns} failed or degraded runs`} accent="amber" />
-              <MetricCard label="Models" value={String(metrics.uniqueModels)} caption="Unique models in visible set" />
-              <MetricCard label="Avg Latency" value={formatDurationMs(metrics.averageDurationMs)} caption="Mean runtime for visible runs" />
+              <MetricCard label="Models" value={String(metrics.uniqueModels)} />
+              <MetricCard label="Avg Latency" value={formatDurationMs(metrics.averageDurationMs)} />
               <MetricCard label="Visible Tokens" value={formatCompactNumber(metrics.totalTokens)} caption={`${metrics.successRuns} successful runs`} accent="emerald" />
             </div>
           </div>
@@ -898,12 +898,11 @@ export function AiRunsWorkbench() {
             <Card className="overflow-hidden border-white/10 bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.12),transparent_30%),linear-gradient(180deg,rgba(10,14,22,0.98),rgba(5,8,14,0.98))] text-white shadow-[0_20px_80px_rgba(0,0,0,0.42)]">
               <CardContent className="space-y-4 p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="space-y-1">
+                  <div>
                     <div className="flex items-center gap-2">
                       <Filter className="h-4 w-4 text-cyan-300" />
                       <h2 className="text-sm font-semibold text-white">Query controls</h2>
                     </div>
-                    <p className="text-xs text-white/44">Sharable URL filters for long debugging sessions.</p>
                   </div>
                   <Badge variant="outline" className="border-white/12 bg-black/25 text-white/70">
                     {activeFilterCount} active

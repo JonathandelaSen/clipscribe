@@ -352,14 +352,14 @@ function AiResultCard({
   children,
 }: {
   title: string;
-  description: string;
+  description?: string;
   children: ReactNode;
 }) {
   return (
     <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-      <div className="space-y-1">
+      <div className={cn("space-y-1", !description && "space-y-0")}>
         <div className="text-sm font-semibold text-white">{title}</div>
-        <div className="text-xs leading-relaxed text-zinc-500">{description}</div>
+        {description ? <div className="text-xs leading-relaxed text-zinc-500">{description}</div> : null}
       </div>
       <div className="mt-4 space-y-3">{children}</div>
     </div>
@@ -1079,10 +1079,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
           </CardHeader>
           <CardContent className="space-y-4 p-6">
             {displayAnalysis.youtube.titleIdeas?.length > 0 && (
-              <AiResultCard
-                title="Title ideas"
-                description="Copy any suggestion to use it in the Publish tab."
-              >
+              <AiResultCard title="Title ideas">
                 <div className="space-y-2">
                   {displayAnalysis.youtube.titleIdeas.map((title, index) => (
                     <div
@@ -1106,10 +1103,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
             )}
 
             {displayAnalysis.youtube.description && (
-              <AiResultCard
-                title="Description draft"
-                description="Full description generated from the transcript."
-              >
+              <AiResultCard title="Description draft">
                 <Textarea
                   readOnly
                   value={displayAnalysis.youtube.description}
@@ -1123,10 +1117,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
             )}
 
             {displayAnalysis.youtube.hashtags?.length > 0 && (
-              <AiResultCard
-                title="Hashtags"
-                description="Copy-ready tags."
-              >
+              <AiResultCard title="Hashtags">
                 <div className="flex flex-wrap gap-2">
                   {displayAnalysis.youtube.hashtags.map((tag) => (
                     <button
@@ -1147,10 +1138,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
             )}
 
             {displayAnalysis.youtube.chapterText && (
-              <AiResultCard
-                title="Chapter block"
-                description="Timestamped chapters ready to use."
-              >
+              <AiResultCard title="Chapter block">
                 <Textarea
                   readOnly
                   value={displayAnalysis.youtube.chapterText}
@@ -1164,10 +1152,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
             )}
 
             {(displayAnalysis.youtube.pinnedComment || displayAnalysis.youtube.thumbnailHooks?.length > 0) && (
-              <AiResultCard
-                title="Packaging extras"
-                description="Pinned comment and thumbnail hooks."
-              >
+              <AiResultCard title="Packaging extras">
                 {displayAnalysis.youtube.pinnedComment ? (
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-3 text-sm text-white/85">
                     {displayAnalysis.youtube.pinnedComment}
@@ -1200,10 +1185,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
             )}
 
             {showContentPack || showInsights ? (
-              <AiResultCard
-                title="Advanced analysis"
-                description="Extended content and insights blocks."
-              >
+              <AiResultCard title="Advanced analysis">
                 {showContentPack ? (
                   <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-white/85">
                     <div className="font-medium text-white">Summary</div>
