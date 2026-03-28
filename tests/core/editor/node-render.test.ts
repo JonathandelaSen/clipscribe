@@ -79,6 +79,44 @@ test("exportEditorProjectWithSystemFfmpeg returns render details after a success
   assert.ok(result.ffmpegCommandPreview.includes("ffmpeg"));
 });
 
+test("exportEditorProjectWithSystemFfmpeg injects ASS burn-in when the global subtitle track is active", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const { project, asset } = createRenderableProject();
+  project.subtitles = {
+    ...project.subtitles,
+    source: {
+      kind: "uploaded-srt",
+    },
+    label: "subs.srt",
+    chunks: [{ text: "Hello world", timestamp: [0, 1.5] }],
+    trimEndSeconds: 1.5,
+  };
+  const outputPath = path.join(tempDir, "exports", "render.mp4");
+
+  await exportEditorProjectWithSystemFfmpeg({
+    project,
+    assets: [{ asset, absolutePath: "/media/clip.mp4" }],
+    resolution: "1080p",
+    outputPath,
+    overwrite: true,
+    commandRunner: async (_command, args) => {
+      const filterIndex = args.indexOf("-filter_complex");
+      assert.ok(filterIndex >= 0);
+      assert.match(args[filterIndex + 1] ?? "", /ass='/);
+      await writeFile(outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
 test("exportEditorProjectWithSystemFfmpeg emits progress callbacks when rendering succeeds", async (t) => {
   const tempDir = await createTempDirectory();
   t.after(async () => {

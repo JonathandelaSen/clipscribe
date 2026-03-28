@@ -66,9 +66,6 @@ function getSystemExportReasons(
     if (asset.sourceType !== "upload") {
       reasons.push(`System FFmpeg supports upload assets only. "${asset.filename}" must use browser export.`);
     }
-    if (asset.captionSource.kind !== "none") {
-      reasons.push(`System FFmpeg does not support subtitle burn-in yet. "${asset.filename}" has attached captions.`);
-    }
   }
 
   return reasons;

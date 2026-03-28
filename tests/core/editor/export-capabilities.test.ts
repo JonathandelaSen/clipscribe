@@ -57,12 +57,16 @@ test("system export capability passes for a supported upload-only timeline", () 
   assert.deepEqual(capability.reasons, []);
 });
 
-test("system export capability blocks attached captions on used assets", () => {
+test("system export capability allows global subtitle burn-in on used assets", () => {
   const { project, asset } = createBaseProject();
-  asset.captionSource = {
-    kind: "embedded-srt",
+  project.subtitles = {
+    ...project.subtitles,
+    source: {
+      kind: "uploaded-srt",
+    },
     label: "captions.srt",
-    chunks: [],
+    chunks: [{ text: "Hello", timestamp: [0, 1] }],
+    trimEndSeconds: 1,
   };
 
   const capability = getEditorExportCapability({
@@ -71,8 +75,8 @@ test("system export capability blocks attached captions on used assets", () => {
     assets: [{ asset }],
   });
 
-  assert.equal(capability.supported, false);
-  assert.match(capability.reasons.join("\n"), /attached captions/);
+  assert.equal(capability.supported, true);
+  assert.deepEqual(capability.reasons, []);
 });
 
 test("system export capability blocks non-upload assets on the timeline", () => {

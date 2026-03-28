@@ -45,7 +45,13 @@ import { toast } from "sonner";
 
 import { BackgroundTaskBanner } from "@/components/tasks/BackgroundTaskBanner";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
-import { secondsToClock } from "@/lib/creator/types";
+import {
+  CREATOR_SUBTITLE_STYLE_LABELS,
+  cssRgbaFromHex,
+  cssTextShadowFromStyle,
+  resolveCreatorSubtitleStyle,
+} from "@/lib/creator/subtitle-style";
+import { secondsToClock, type CreatorSubtitleTimingMode } from "@/lib/creator/types";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getLatestSubtitleForLanguage, getLatestTranscript, type HistoryItem } from "@/lib/history";
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
@@ -54,6 +60,10 @@ import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { downloadBlob, readMediaMetadata } from "@/lib/editor/media";
 import {
   buildProjectCaptionTimeline,
+  getProjectSubtitleTrackEffectiveTimingMode,
+  buildProjectSubtitleTimeline,
+  hasProjectSubtitleTrack,
+  hydrateProjectSubtitleTrackFromLegacyCaptions,
   type TimelineCaptionChunk,
 } from "@/lib/editor/core/captions";
 import {
@@ -136,6 +146,7 @@ import {
   buildReversedClipPreviewCacheKey,
   renderReversedClipPreview,
 } from "@/lib/editor/preview-proxy";
+import { resolveEditorSubtitleTextLayout } from "@/lib/editor/subtitle-canvas";
 import { resetFFmpeg } from "@/lib/ffmpeg";
 import {
   applyResolvedSubtitleStyle,
@@ -150,6 +161,9 @@ import {
   normalizeLegacyEditorProjectRecord,
   serializeEditorProjectForPersistence,
 } from "@/lib/editor/storage";
+import {
+  EDITOR_SUBTITLE_TRACK_ID,
+} from "@/lib/editor/types";
 import type {
   EditorAssetRecord,
   EditorAspectRatio,
@@ -157,6 +171,8 @@ import type {
   EditorProjectRecord,
   EditorResolution,
   ResolvedEditorAsset,
+  TimelineAudioPlacement,
+  TimelineClipPlacement,
   TimelineAudioItem,
   TimelineClipGroup,
   TimelineImageItem,
@@ -199,6 +215,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { ExportSettingsDialog } from "@/components/editor/ExportSettingsDialog";
@@ -218,6 +235,12 @@ const EDITOR_TOOLBAR_BUTTON_CLASS =
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
 const IMAGE_TRACK_MIN_ZOOM = 0.6;
 const IMAGE_TRACK_MAX_ZOOM = 6;
+const EDITOR_SUBTITLE_TIMING_MODE_LABELS: Record<CreatorSubtitleTimingMode, string> = {
+  segment: "Normal subtitles",
+  word: "1 word",
+  pair: "2 words",
+  triple: "3 words",
+};
 
 function getRenderTaskStatus(stage: BrowserRenderStage) {
   if (stage === "preparing") return "preparing" as const;
@@ -237,6 +260,41 @@ function getBakeTaskMessage(stage: BrowserRenderStage) {
   if (stage === "rendering") return "Baking joined clip";
   if (stage === "handoff") return "Applying baked clip to the timeline";
   return "Wrapping up bake";
+}
+
+function getTimelinePlaybackTimeFromVideo(input: {
+  placement: TimelineClipPlacement;
+  currentTime: number;
+  isUsingReversePreview: boolean;
+}) {
+  const { placement, currentTime, isUsingReversePreview } = input;
+  if (!Number.isFinite(currentTime)) return null;
+  if (placement.clip.actions.reverse) {
+    if (!isUsingReversePreview) return null;
+    return clampNumber(
+      placement.startSeconds + currentTime,
+      placement.startSeconds,
+      placement.endSeconds
+    );
+  }
+  return clampNumber(
+    placement.startSeconds + (currentTime - placement.clip.trimStartSeconds),
+    placement.startSeconds,
+    placement.endSeconds
+  );
+}
+
+function getTimelinePlaybackTimeFromAudio(input: {
+  placement: TimelineAudioPlacement;
+  currentTime: number;
+}) {
+  const { placement, currentTime } = input;
+  if (!Number.isFinite(currentTime)) return null;
+  return clampNumber(
+    placement.startSeconds + (currentTime - placement.item.trimStartSeconds),
+    placement.startSeconds,
+    placement.endSeconds
+  );
 }
 
 type InspectorVideoTab = "edit" | "transform" | "join";
@@ -689,7 +747,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const autosaveHashRef = useRef<string>("");
-  const captionAttachAssetIdRef = useRef<string | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
   const lastAnimationFrameRef = useRef<number | null>(null);
   const persistedPlayheadSecondsRef = useRef(0);
@@ -750,6 +807,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [draggingAssetKind, setDraggingAssetKind] = useState<EditorAssetRecord["kind"] | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isSubtitleHistoryDialogOpen, setIsSubtitleHistoryDialogOpen] = useState(false);
   const [focusedJoinedClipId, setFocusedJoinedClipId] = useState<string | null>(null);
   const [timelinePreviewFrameSize, setTimelinePreviewFrameSize] = useState({ width: 0, height: 0 });
   const [panelVisibility, setPanelVisibility] = useState<PanelVisibilityState>({
@@ -875,13 +933,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }
   }, [exportResolution, project]);
 
+  const historyMap = useMemo(() => new Map(history.map((item) => [item.id, item])), [history]);
+
   useEffect(() => {
     if (!loadedProject) return;
     const hydratedProject = ensureProjectSelection(
-      applyResolvedSubtitleStyle({
-        ...normalizeLegacyEditorProjectRecord(loadedProject),
-        assetIds: loadedAssets.map((asset) => asset.id),
-      })
+      applyResolvedSubtitleStyle(
+        hydrateProjectSubtitleTrackFromLegacyCaptions({
+          project: {
+            ...normalizeLegacyEditorProjectRecord(loadedProject),
+            assetIds: loadedAssets.map((asset) => asset.id),
+          },
+          assets: loadedAssets,
+          historyMap,
+        })
+      )
     );
     const hydratedDuration = getProjectDuration(hydratedProject);
     const hydratedPlayheadSeconds = clampNumber(
@@ -910,7 +976,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }
     autosaveHashRef.current = hydratedSnapshot;
     setSaveState("saved");
-  }, [loadedAssets, loadedProject, project?.id]);
+  }, [historyMap, loadedAssets, loadedProject, project?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -987,7 +1053,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     return () => window.clearTimeout(timer);
   }, [assets, project, saveProject]);
 
-  const historyMap = useMemo(() => new Map(history.map((item) => [item.id, item])), [history]);
   const resolvedAssetsMap = useMemo(() => new Map(resolvedAssets.map((entry) => [entry.asset.id, entry])), [resolvedAssets]);
   const assetMap = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
   const clipPlacements = useMemo(
@@ -1101,6 +1166,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : undefined,
     [project, selectedItem]
   );
+  const subtitleTrackAvailable = useMemo(() => (project ? hasProjectSubtitleTrack(project) : false), [project]);
+  const selectedSubtitleTrack = useMemo(
+    () =>
+      selectedItem?.kind === "subtitle" && project && subtitleTrackAvailable
+        ? project.subtitles
+        : undefined,
+    [project, selectedItem, subtitleTrackAvailable]
+  );
   const selectedGroupClipPlacements = useMemo(
     () =>
       selectedVideoGroup
@@ -1146,6 +1219,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }
 
       if (selection.kind === "image") {
+        return {
+          canCloneToFill: false,
+          canTrimToMatch: false,
+        };
+      }
+
+      if (selection.kind === "subtitle") {
         return {
           canCloneToFill: false,
           canTrimToMatch: false,
@@ -1217,6 +1297,23 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       Math.max(2.4, Math.ceil(Math.max(selectedImageCoverZoom, currentZoom) * 10) / 10 + 0.2)
     );
   }, [selectedImageCoverZoom, selectedImageItem?.canvas.zoom]);
+  const selectedSubtitleSourceDuration = useMemo(() => {
+    if (!selectedSubtitleTrack) return 0;
+    return selectedSubtitleTrack.chunks.reduce((max, chunk) => {
+      const start = chunk.timestamp?.[0];
+      const end = chunk.timestamp?.[1];
+      const safeStart = typeof start === "number" && Number.isFinite(start) ? start : 0;
+      const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : safeStart;
+      return Math.max(max, safeEnd);
+    }, 0);
+  }, [selectedSubtitleTrack]);
+  const effectiveSubtitleTimingMode = useMemo<CreatorSubtitleTimingMode>(() => {
+    if (!project || !subtitleTrackAvailable) return "segment";
+    return getProjectSubtitleTrackEffectiveTimingMode({
+      project,
+      historyMap,
+    });
+  }, [historyMap, project, subtitleTrackAvailable]);
   const activePlacement = useMemo(() => {
     return (
       clipPlacements.find(
@@ -1245,6 +1342,26 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const activeResolvedAsset = activePlacement ? resolvedAssetsMap.get(activePlacement.clip.assetId) : undefined;
   const activeResolvedImageAsset = activeImagePlacement ? resolvedAssetsMap.get(activeImagePlacement.item.assetId) : undefined;
   const activeResolvedAudioAsset = activeAudioPlacement ? resolvedAssetsMap.get(activeAudioPlacement.item.assetId) : undefined;
+  const subtitleTrackTimeline = useMemo(() => {
+    if (!project || !subtitleTrackAvailable) return [] as TimelineCaptionChunk[];
+    return buildProjectSubtitleTimeline({
+      project: {
+        ...project,
+        subtitles: {
+          ...project.subtitles,
+          enabled: true,
+        },
+      },
+      historyMap,
+    });
+  }, [historyMap, project, subtitleTrackAvailable]);
+  const subtitleTrackDuration = subtitleTrackTimeline.reduce((max, chunk) => {
+    const start = chunk.timestamp?.[0];
+    const end = chunk.timestamp?.[1];
+    const safeStart = typeof start === "number" && Number.isFinite(start) ? start : 0;
+    const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : safeStart;
+    return Math.max(max, safeEnd);
+  }, 0);
   const captionTimeline = useMemo(() => {
     if (!project) return [] as TimelineCaptionChunk[];
     return buildProjectCaptionTimeline({
@@ -1265,6 +1382,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     if (!query) return history;
     return history.filter((item) => item.filename.toLowerCase().includes(query));
   }, [deferredLibrarySearch, history]);
+  const historyItemsWithSubtitles = useMemo(
+    () =>
+      history.filter((item) => {
+        const transcript = getLatestTranscript(item);
+        return Boolean(transcript?.subtitles.length);
+      }),
+    [history]
+  );
   const isTimelinePreview = previewMode.kind === "timeline";
   const previewedAsset =
     previewMode.kind === "asset" ? assets.find((asset) => asset.id === previewMode.assetId) : undefined;
@@ -1283,6 +1408,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
   const previewImageUrl = useObjectUrl(previewImageAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const currentCaptionStyle = useMemo(
+    () => (project ? resolveCreatorSubtitleStyle(project.subtitles.preset, project.subtitles.style) : null),
+    [project]
+  );
+  const currentCaptionLayout = useMemo(() => {
+    if (!project || !currentCaption || timelinePreviewFrameSize.width <= 0 || timelinePreviewFrameSize.height <= 0) {
+      return null;
+    }
+    return resolveEditorSubtitleTextLayout({
+      width: timelinePreviewFrameSize.width,
+      height: timelinePreviewFrameSize.height,
+      text: String(currentCaption.text ?? ""),
+      project,
+    });
+  }, [currentCaption, project, timelinePreviewFrameSize.height, timelinePreviewFrameSize.width]);
   const timelineImagePreviewLayout = useMemo(() => {
     if (
       !isTimelinePreview ||
@@ -1430,6 +1570,39 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ];
     });
   }, [audioPlacements, visibleDuration, visibleEnd, visibleStart]);
+  const visibleSubtitleChunks = useMemo(() => {
+    return subtitleTrackTimeline.flatMap((chunk, index) => {
+      const rawStart = chunk.timestamp?.[0];
+      if (typeof rawStart !== "number" || !Number.isFinite(rawStart)) return [];
+      const rawEndValue = chunk.timestamp?.[1];
+      const rawEnd = typeof rawEndValue === "number" && Number.isFinite(rawEndValue) ? rawEndValue : rawStart;
+      const overlapStart = Math.max(rawStart, visibleStart);
+      const overlapEnd = Math.min(rawEnd, visibleEnd);
+      if (overlapEnd <= overlapStart) return [];
+      return [
+        {
+          chunk,
+          index,
+          leftPct: ((overlapStart - visibleStart) / visibleDuration) * 100,
+          widthPct: ((overlapEnd - overlapStart) / visibleDuration) * 100,
+        },
+      ];
+    });
+  }, [subtitleTrackTimeline, visibleDuration, visibleEnd, visibleStart]);
+  const visibleSubtitleTrackBlock = useMemo(() => {
+    if (!subtitleTrackAvailable || subtitleTrackTimeline.length === 0) return null;
+    const trackStart = subtitleTrackTimeline.reduce((min, chunk) => {
+      const start = chunk.timestamp?.[0];
+      return typeof start === "number" && Number.isFinite(start) ? Math.min(min, start) : min;
+    }, Number.POSITIVE_INFINITY);
+    const overlapStart = Math.max(Number.isFinite(trackStart) ? trackStart : 0, visibleStart);
+    const overlapEnd = Math.min(subtitleTrackDuration, visibleEnd);
+    if (overlapEnd <= overlapStart) return null;
+    return {
+      leftPct: ((overlapStart - visibleStart) / visibleDuration) * 100,
+      widthPct: ((overlapEnd - overlapStart) / visibleDuration) * 100,
+    };
+  }, [subtitleTrackAvailable, subtitleTrackDuration, subtitleTrackTimeline, visibleDuration, visibleEnd, visibleStart]);
 
   useEffect(() => {
     playheadRef.current = playheadSeconds;
@@ -1505,11 +1678,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const video = videoRef.current;
     if (!video) return;
     if (!isTimelinePreview || !activePlacement) {
-      video.pause();
+      if (!video.paused) {
+        video.pause();
+      }
       return;
     }
     if (!effectiveTimelineVideoUrl) {
-      video.pause();
+      if (!video.paused) {
+        video.pause();
+      }
       return;
     }
     const clipMaxTime = Math.max(
@@ -1539,16 +1716,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         video.currentTime = nextTime;
       } catch {}
     }
-    if (activePlacement.clip.actions.reverse && !isUsingActiveReversePreview) {
-      video.pause();
+  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview, playheadSeconds]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (
+      !isTimelinePreview ||
+      !activePlacement ||
+      !effectiveTimelineVideoUrl ||
+      (activePlacement.clip.actions.reverse && !isUsingActiveReversePreview)
+    ) {
+      if (!video.paused) {
+        video.pause();
+      }
       return;
     }
+
     if (isPlaying) {
-      void video.play().catch(() => {});
-    } else {
+      if (video.paused) {
+        void video.play().catch(() => {});
+      }
+      return;
+    }
+
+    if (!video.paused) {
       video.pause();
     }
-  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview, playheadSeconds]);
+  }, [activePlacement, effectiveTimelineVideoUrl, isPlaying, isTimelinePreview, isUsingActiveReversePreview]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -1564,12 +1759,16 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     const audio = audioRef.current;
     if (!audio) return;
     if (!isTimelinePreview || !activeAudioPlacement) {
-      audio.pause();
+      if (!audio.paused) {
+        audio.pause();
+      }
       return;
     }
     const item = activeAudioPlacement.item;
     if (playheadSeconds < activeAudioPlacement.startSeconds || playheadSeconds > activeAudioPlacement.endSeconds || item.muted) {
-      audio.pause();
+      if (!audio.paused) {
+        audio.pause();
+      }
       return;
     }
     const currentTime = item.trimStartSeconds + (playheadSeconds - activeAudioPlacement.startSeconds);
@@ -1579,9 +1778,33 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       } catch {}
     }
     audio.volume = item.volume;
+  }, [activeAudioPlacement, isPlaying, isTimelinePreview, playheadSeconds, previewAudioUrl]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (
+      !isTimelinePreview ||
+      !activeAudioPlacement ||
+      !previewAudioUrl ||
+      playheadSeconds < activeAudioPlacement.startSeconds ||
+      playheadSeconds > activeAudioPlacement.endSeconds ||
+      activeAudioPlacement.item.muted
+    ) {
+      if (!audio.paused) {
+        audio.pause();
+      }
+      return;
+    }
+
     if (isPlaying) {
-      void audio.play().catch(() => {});
-    } else {
+      if (audio.paused) {
+        void audio.play().catch(() => {});
+      }
+      return;
+    }
+
+    if (!audio.paused) {
       audio.pause();
     }
   }, [activeAudioPlacement, isPlaying, isTimelinePreview, playheadSeconds, previewAudioUrl]);
@@ -1607,7 +1830,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       const deltaSeconds = Math.max(0, (now - lastFrame) / 1000);
       lastAnimationFrameRef.current = now;
 
-      const nextTime = Math.min(projectDurationRef.current, playheadRef.current + deltaSeconds);
+      const video = videoRef.current;
+      const audio = audioRef.current;
+      const mediaDrivenTime =
+        video &&
+        activePlacement &&
+        effectiveTimelineVideoUrl &&
+        !video.paused &&
+        video.readyState >= 2
+          ? getTimelinePlaybackTimeFromVideo({
+              placement: activePlacement,
+              currentTime: video.currentTime,
+              isUsingReversePreview: isUsingActiveReversePreview,
+            })
+          : audio &&
+              activeAudioPlacement &&
+              previewAudioUrl &&
+              !activeAudioPlacement.item.muted &&
+              !audio.paused &&
+              audio.readyState >= 2
+            ? getTimelinePlaybackTimeFromAudio({
+                placement: activeAudioPlacement,
+                currentTime: audio.currentTime,
+              })
+            : null;
+      const nextTime = Math.min(
+        projectDurationRef.current,
+        mediaDrivenTime ?? (playheadRef.current + deltaSeconds)
+      );
       playheadRef.current = nextTime;
 
       startTransition(() => {
@@ -1637,7 +1887,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }
       lastAnimationFrameRef.current = null;
     };
-  }, [isPlaying, isTimelinePreview]);
+  }, [
+    activeAudioPlacement,
+    activePlacement,
+    effectiveTimelineVideoUrl,
+    isPlaying,
+    isTimelinePreview,
+    isUsingActiveReversePreview,
+    previewAudioUrl,
+  ]);
 
   useEffect(() => {
     if (previewMode.kind === "timeline") return;
@@ -1938,6 +2196,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
+  const updateSubtitleTrack = (updater: (subtitles: EditorProjectRecord["subtitles"]) => EditorProjectRecord["subtitles"]) => {
+    updateProject((current) => ({
+      ...current,
+      subtitles: updater(current.subtitles),
+    }));
+  };
+
   const resetInspectorClipTrim = () => {
     if (!inspectorClipAsset) return;
     updateInspectorClip((clip) => resetTimelineVideoClipTrim(clip, inspectorClipAsset.durationSeconds));
@@ -1958,6 +2223,32 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         ...clip.actions,
         reverse: false,
       },
+    }));
+  };
+
+  const resetSubtitleTrackTiming = () => {
+    updateSubtitleTrack((subtitles) => ({
+      ...subtitles,
+      offsetSeconds: 0,
+      trimStartSeconds: 0,
+      trimEndSeconds: subtitles.chunks.reduce((max, chunk) => {
+        const start = chunk.timestamp?.[0];
+        const end = chunk.timestamp?.[1];
+        const safeStart = typeof start === "number" && Number.isFinite(start) ? start : 0;
+        const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : safeStart;
+        return Math.max(max, safeEnd);
+      }, 0),
+    }));
+  };
+
+  const resetSubtitleTrackStyle = () => {
+    updateSubtitleTrack((subtitles) => ({
+      ...subtitles,
+      preset: "clean_caption",
+      positionXPercent: 50,
+      positionYPercent: 90,
+      scale: 1,
+      style: resolveCreatorSubtitleStyle("clean_caption"),
     }));
   };
 
@@ -2776,7 +3067,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                   nextTimeline.videoClips,
                   current.timeline.audioItems,
                   nextTimeline.videoClipGroups,
-                  current.timeline.imageItems
+                  current.timeline.imageItems,
+                  hasProjectSubtitleTrack(current)
                 ),
           },
         };
@@ -2802,7 +3094,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               nextClips,
               current.timeline.audioItems,
               current.timeline.videoClipGroups,
-              current.timeline.imageItems
+              current.timeline.imageItems,
+              hasProjectSubtitleTrack(current)
             ),
           },
         };
@@ -2827,11 +3120,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               current.timeline.videoClips,
               current.timeline.audioItems,
               current.timeline.videoClipGroups,
-              nextImageItems
+              nextImageItems,
+              hasProjectSubtitleTrack(current)
             ),
           },
         };
       });
+      return true;
+    }
+
+    if (project.timeline.selectedItem.kind === "subtitle") {
+      clearProjectSubtitleTrack();
       return true;
     }
 
@@ -2851,7 +3150,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             current.timeline.videoClips,
             nextAudioItems,
             current.timeline.videoClipGroups,
-            current.timeline.imageItems
+            current.timeline.imageItems,
+            hasProjectSubtitleTrack(current)
           ),
         },
       };
@@ -2971,30 +3271,126 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     toast.success(`Added ${item.filename} to the media bin`);
   };
 
-  const handleAttachSrt = async (fileList: FileList | null) => {
+  const clearProjectSubtitleTrack = useCallback(() => {
+    updateProject((current) => ({
+      ...current,
+      subtitles: {
+        ...current.subtitles,
+        source: { kind: "none" },
+        label: undefined,
+        language: undefined,
+        chunks: [],
+        offsetSeconds: 0,
+        trimStartSeconds: 0,
+        trimEndSeconds: 0,
+      },
+      timeline: {
+        ...current.timeline,
+        selectedItem:
+          current.timeline.selectedItem?.kind === "subtitle"
+            ? getSelectionForLaneIndex(
+                "video",
+                0,
+                current.timeline.videoClips,
+                current.timeline.audioItems,
+                current.timeline.videoClipGroups,
+                current.timeline.imageItems,
+                false
+              )
+            : current.timeline.selectedItem,
+      },
+    }));
+  }, [updateProject]);
+
+  const handleSelectHistorySubtitle = useCallback(
+    (item: HistoryItem, transcriptId: string, subtitleId: string) => {
+      const transcript = item.transcripts.find((entry) => entry.id === transcriptId) ?? getLatestTranscript(item);
+      const subtitle = transcript?.subtitles.find((entry) => entry.id === subtitleId);
+      if (!transcript || !subtitle) {
+        toast.error("That subtitle version is no longer available.");
+        return;
+      }
+
+      const trimEndSeconds = subtitle.chunks.reduce((max, chunk) => {
+        const start = chunk.timestamp?.[0];
+        const end = chunk.timestamp?.[1];
+        const safeStart = typeof start === "number" && Number.isFinite(start) ? start : 0;
+        const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : safeStart;
+        return Math.max(max, safeEnd);
+      }, 0);
+
+      updateProject((current) => ({
+        ...current,
+        subtitles: {
+          ...current.subtitles,
+          source: {
+            kind: "history-subtitle",
+            sourceProjectId: item.id,
+            transcriptId: transcript.id,
+            subtitleId: subtitle.id,
+          },
+          label: subtitle.label,
+          language: subtitle.language,
+          chunks: subtitle.chunks,
+          offsetSeconds: 0,
+          trimStartSeconds: 0,
+          trimEndSeconds,
+        },
+        timeline: {
+          ...current.timeline,
+          selectedItem: {
+            kind: "subtitle",
+            id: EDITOR_SUBTITLE_TRACK_ID,
+          },
+        },
+      }));
+      setIsSubtitleHistoryDialogOpen(false);
+      toast.success(`Loaded ${subtitle.label} into S1`);
+    },
+    [updateProject]
+  );
+
+  const handleAttachSubtitleSrt = async (fileList: FileList | null) => {
     const file = fileList?.[0];
-    const assetId = captionAttachAssetIdRef.current;
-    if (!file || !assetId) return;
+    if (srtInputRef.current) {
+      srtInputRef.current.value = "";
+    }
+    if (!file) return;
     const text = await file.text();
     const chunks = parseSrt(text);
     if (!chunks.length) {
       toast.error("The SRT file did not contain any valid subtitle rows.");
       return;
     }
-    const target = assets.find((asset) => asset.id === assetId);
-    if (!target) return;
-    const updated: EditorAssetRecord = {
-      ...target,
-      updatedAt: Date.now(),
-      captionSource: {
-        kind: "embedded-srt",
+    const trimEndSeconds = chunks.reduce((max, chunk) => {
+      const start = chunk.timestamp?.[0];
+      const end = chunk.timestamp?.[1];
+      const safeStart = typeof start === "number" && Number.isFinite(start) ? start : 0;
+      const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : safeStart;
+      return Math.max(max, safeEnd);
+    }, 0);
+
+    updateProject((current) => ({
+      ...current,
+      subtitles: {
+        ...current.subtitles,
+        source: { kind: "uploaded-srt" },
         label: file.name,
+        language: current.subtitles.language,
         chunks,
+        offsetSeconds: 0,
+        trimStartSeconds: 0,
+        trimEndSeconds,
       },
-    };
-    setAssets((current) => current.map((asset) => (asset.id === assetId ? updated : asset)));
-    await saveAssets([updated]);
-    toast.success("SRT attached to asset");
+      timeline: {
+        ...current.timeline,
+        selectedItem: {
+          kind: "subtitle",
+          id: EDITOR_SUBTITLE_TRACK_ID,
+        },
+      },
+    }));
+    toast.success(`Loaded ${file.name} into S1`);
   };
 
   const handleDeleteAsset = async (asset: EditorAssetRecord) => {
@@ -3451,6 +3847,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         ? selectedClip?.label
       : selectedItem?.kind === "image"
         ? selectedImageItem?.label ?? selectedImageAsset?.filename
+      : selectedItem?.kind === "subtitle"
+        ? project.subtitles.label ?? "Subtitle track"
       : selectedAudioAsset?.filename ?? (selectedAudioItem ? "Audio item" : undefined);
   const visibleWindowLabel = `${secondsToClock(visibleStart)} - ${secondsToClock(
     Math.min(projectDuration, visibleEnd)
@@ -3483,8 +3881,65 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         type="file"
         accept=".srt"
         className="hidden"
-        onChange={(event) => void handleAttachSrt(event.target.files)}
+        onChange={(event) => void handleAttachSubtitleSrt(event.target.files)}
       />
+      <Dialog open={isSubtitleHistoryDialogOpen} onOpenChange={setIsSubtitleHistoryDialogOpen}>
+        <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,11,16,0.985),rgba(4,7,12,0.985))] text-white sm:max-w-[44rem]">
+          <DialogHeader>
+            <DialogTitle>Select subtitles from history</DialogTitle>
+            <DialogDescription className="text-white/58">
+              Choose a subtitle version and load it into the global `S1` track.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto pr-1">
+            {historyItemsWithSubtitles.length === 0 ? (
+              <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-4 text-sm text-white/45">
+                No history items with subtitles are available yet.
+              </div>
+            ) : (
+              historyItemsWithSubtitles.map((item) => {
+                const transcript = getLatestTranscript(item);
+                if (!transcript) return null;
+                return (
+                  <div
+                    key={item.id}
+                    className="rounded-[0.95rem] border border-white/8 bg-white/[0.03] p-3"
+                  >
+                    <div className="text-sm font-medium text-white">{item.filename}</div>
+                    <div className="mt-1 text-xs text-white/45">{transcript.label}</div>
+                    <div className="mt-3 space-y-2">
+                      {transcript.subtitles.map((subtitle) => (
+                        <button
+                          key={subtitle.id}
+                          type="button"
+                          className="flex w-full items-center justify-between rounded-[0.85rem] border border-white/8 bg-black/20 px-3 py-2 text-left transition-colors hover:border-white/16 hover:bg-white/[0.04]"
+                          onClick={() => handleSelectHistorySubtitle(item, transcript.id, subtitle.id)}
+                        >
+                          <span className="truncate pr-3 text-sm text-white/82">{subtitle.label}</span>
+                          <span className="shrink-0 text-[11px] uppercase tracking-[0.18em] text-white/40">
+                            {subtitle.language}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button
+                type="button"
+                variant="outline"
+                className="rounded-xl border-white/15 bg-transparent text-white hover:bg-white/5"
+              >
+                Close
+              </Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="mx-auto flex h-full w-full flex-col gap-[6px]">
         <TimelineWorkspaceHeader
@@ -3595,14 +4050,26 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                         <div className="mt-1 text-xs text-white/42">
                                           {transcript ? `${transcript.subtitles.length} subtitle versions` : "No subtitles"}
                                         </div>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="mt-3 h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
-                                          onClick={() => void handleAddHistoryItem(item)}
-                                        >
-                                          Add to Bin
-                                        </Button>
+                                        <div className="mt-3 flex gap-2">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
+                                            onClick={() => void handleAddHistoryItem(item)}
+                                          >
+                                            Add to Bin
+                                          </Button>
+                                          {transcript?.subtitles.length ? (
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-8 rounded-lg border-white/8 bg-black/20 text-white/78 hover:bg-white/[0.08] hover:text-white"
+                                              onClick={() => setIsSubtitleHistoryDialogOpen(true)}
+                                            >
+                                              Use Subs
+                                            </Button>
+                                          ) : null}
+                                        </div>
                                       </div>
                                     );
                                   })
@@ -3782,26 +4249,39 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       </div>
                                     )
                                   ) : null}
-                                  {project.subtitles.enabled && currentCaption ? (
+                                  {project.subtitles.enabled && currentCaption && currentCaptionLayout && currentCaptionStyle ? (
                                     <div
-                                      className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-1/2 text-center"
+                                      className="pointer-events-none absolute max-w-[82%] -translate-x-1/2 -translate-y-full text-center"
                                       style={{
                                         left: `${project.subtitles.positionXPercent}%`,
                                         top: `${project.subtitles.positionYPercent}%`,
-                                        transform: "translate(-50%, -50%)",
+                                        transform: "translate(-50%, -100%)",
                                       }}
                                     >
                                       <div
-                                        className="inline-block rounded-[1rem] border border-white/10 bg-black/18 px-4 py-2 text-white backdrop-blur-[2px]"
+                                        className="inline-block text-center font-bold"
                                         style={{
-                                          fontSize: `${Math.max(18, 28 * project.subtitles.scale)}px`,
-                                          lineHeight: `${Math.max(22, 34 * project.subtitles.scale)}px`,
+                                          color: currentCaptionStyle.textColor,
+                                          fontSize: `${currentCaptionLayout.fontSize}px`,
+                                          lineHeight: `${currentCaptionLayout.lineHeight}px`,
                                           fontWeight: 700,
-                                          textShadow: "0 3px 10px rgba(0,0,0,0.6)",
-                                          WebkitTextStroke: "2px rgba(8,8,8,0.75)",
+                                          textShadow: cssTextShadowFromStyle(currentCaptionStyle),
+                                          WebkitTextStroke: `${Math.max(1, currentCaptionStyle.borderWidth * 0.85)}px ${cssRgbaFromHex(currentCaptionStyle.borderColor, 0.95)}`,
+                                          backgroundColor: currentCaptionStyle.backgroundEnabled
+                                            ? cssRgbaFromHex(
+                                                currentCaptionStyle.backgroundColor,
+                                                currentCaptionStyle.backgroundOpacity
+                                              )
+                                            : "transparent",
+                                          borderRadius: `${currentCaptionStyle.backgroundRadius}px`,
+                                          padding: currentCaptionStyle.backgroundEnabled
+                                            ? `${currentCaptionStyle.backgroundPaddingY}px ${currentCaptionStyle.backgroundPaddingX}px`
+                                            : "0px",
+                                          whiteSpace: "pre-line",
+                                          backdropFilter: currentCaptionStyle.backgroundEnabled ? "blur(2px)" : "none",
                                         }}
                                       >
-                                        {String(currentCaption.text)}
+                                        {currentCaptionLayout.lines.join("\n")}
                                       </div>
                                     </div>
                                   ) : null}
@@ -3947,7 +4427,9 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               </Button>
                             </div>
                           )}
-                          {previewMode.kind === "timeline" && previewAudioUrl ? <audio ref={audioRef} src={previewAudioUrl} hidden /> : null}
+                          {previewMode.kind === "timeline" && previewAudioUrl ? (
+                            <audio ref={audioRef} src={previewAudioUrl} preload="auto" hidden />
+                          ) : null}
                         </div>
                       </div>
                     </div>
@@ -4372,6 +4854,429 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               </TabsContent>
                             </Tabs>
                           </div>
+                        ) : selectedSubtitleTrack ? (
+                          <div className="space-y-2.5">
+                            <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className={EDITOR_LABEL_CLASS}>Subtitle Track</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">
+                                    {selectedSubtitleTrack.label ?? "Global subtitles"}
+                                  </div>
+                                  <div className="mt-1 text-sm text-white/50">
+                                    {selectedSubtitleTrack.language?.toUpperCase() ?? "Und"} · {selectedSubtitleTrack.chunks.length} cues
+                                  </div>
+                                </div>
+                                <div className="rounded-full border border-fuchsia-300/20 bg-fuchsia-300/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-fuchsia-100">
+                                  S1
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Source</div>
+                                <Switch
+                                  checked={selectedSubtitleTrack.enabled}
+                                  onCheckedChange={(checked) =>
+                                    updateSubtitleTrack((subtitles) => ({
+                                      ...subtitles,
+                                      enabled: checked,
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <div className="grid gap-2 sm:grid-cols-2">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-10 rounded-[0.95rem] border-white/10 text-white hover:bg-white/[0.08]"
+                                  onClick={() => setIsSubtitleHistoryDialogOpen(true)}
+                                >
+                                  Select From History
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="h-10 rounded-[0.95rem] border-white/10 text-white hover:bg-white/[0.08]"
+                                  onClick={() => srtInputRef.current?.click()}
+                                >
+                                  Upload SRT
+                                </Button>
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-8 rounded-lg px-3 text-white/68 hover:bg-white/[0.06] hover:text-white"
+                                  onClick={() => focusTimelineSelection({ kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID })}
+                                >
+                                  Focus S1
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  className="h-8 rounded-lg px-3 text-red-200/78 hover:bg-red-500/10 hover:text-red-100"
+                                  onClick={clearProjectSubtitleTrack}
+                                >
+                                  Remove Track
+                                </Button>
+                              </div>
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Timing</div>
+                                <SectionResetButton onClick={resetSubtitleTrackTiming} />
+                              </div>
+                              <div className="space-y-2">
+                                <div className="text-xs text-white/55">Display</div>
+                                <Select
+                                  value={selectedSubtitleTrack.subtitleTimingMode}
+                                  onValueChange={(value) =>
+                                    updateSubtitleTrack((subtitles) => ({
+                                      ...subtitles,
+                                      subtitleTimingMode: value as CreatorSubtitleTimingMode,
+                                    }))
+                                  }
+                                >
+                                  <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent className="border-white/10 bg-slate-950 text-white">
+                                    {Object.entries(EDITOR_SUBTITLE_TIMING_MODE_LABELS).map(([value, label]) => (
+                                      <SelectItem key={value} value={value}>
+                                        {label}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                {effectiveSubtitleTimingMode !== selectedSubtitleTrack.subtitleTimingMode ? (
+                                  <div className="rounded-lg border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
+                                    This subtitle source does not include compatible word timings, so preview and export are using normal subtitle chunks.
+                                  </div>
+                                ) : null}
+                              </div>
+                              <label className="text-xs text-white/55">
+                                Offset · {selectedSubtitleTrack.offsetSeconds.toFixed(2)}s
+                              </label>
+                              <input
+                                type="range"
+                                min={-6}
+                                max={6}
+                                step={0.01}
+                                value={selectedSubtitleTrack.offsetSeconds}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    offsetSeconds: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">
+                                Trim Start · {secondsToClock(selectedSubtitleTrack.trimStartSeconds)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={Math.max(selectedSubtitleSourceDuration - 0.5, 0.5)}
+                                step={0.01}
+                                value={Math.min(selectedSubtitleTrack.trimStartSeconds, Math.max(selectedSubtitleSourceDuration - 0.5, 0.5))}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    trimStartSeconds: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">
+                                Trim End · {secondsToClock(selectedSubtitleTrack.trimEndSeconds)}
+                              </label>
+                              <input
+                                type="range"
+                                min={Math.min(selectedSubtitleTrack.trimStartSeconds + 0.5, Math.max(selectedSubtitleSourceDuration, 0.5))}
+                                max={Math.max(selectedSubtitleSourceDuration, 0.5)}
+                                step={0.01}
+                                value={Math.max(selectedSubtitleTrack.trimEndSeconds, Math.min(selectedSubtitleTrack.trimStartSeconds + 0.5, Math.max(selectedSubtitleSourceDuration, 0.5)))}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    trimEndSeconds: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Placement</div>
+                                <SectionResetButton onClick={resetSubtitleTrackStyle} />
+                              </div>
+                              <div className="mb-1 text-xs uppercase tracking-[0.24em] text-white/45">Preset</div>
+                              <Select
+                                value={selectedSubtitleTrack.preset}
+                                onValueChange={(value) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    preset: value as EditorProjectRecord["subtitles"]["preset"],
+                                    style: resolveCreatorSubtitleStyle(
+                                      value as EditorProjectRecord["subtitles"]["preset"],
+                                      subtitles.style
+                                    ),
+                                  }))
+                                }
+                              >
+                                <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
+                                  <SelectValue placeholder="Preset" />
+                                </SelectTrigger>
+                                <SelectContent className="border-white/10 bg-slate-950 text-white">
+                                  {Object.entries(CREATOR_SUBTITLE_STYLE_LABELS).map(([value, label]) => (
+                                    <SelectItem key={value} value={value}>
+                                      {label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <label className="text-xs text-white/55">Scale · {selectedSubtitleTrack.scale.toFixed(2)}x</label>
+                              <input
+                                type="range"
+                                min={0.7}
+                                max={2.5}
+                                step={0.01}
+                                value={selectedSubtitleTrack.scale}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    scale: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Position X · {Math.round(selectedSubtitleTrack.positionXPercent)}%</label>
+                              <input
+                                type="range"
+                                min={10}
+                                max={90}
+                                step={1}
+                                value={selectedSubtitleTrack.positionXPercent}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    positionXPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Position Y · {Math.round(selectedSubtitleTrack.positionYPercent)}%</label>
+                              <input
+                                type="range"
+                                min={10}
+                                max={95}
+                                step={1}
+                                value={selectedSubtitleTrack.positionYPercent}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    positionYPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className={EDITOR_LABEL_CLASS}>Appearance</div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <label className="space-y-1 text-xs text-white/55">
+                                  <span>Text Color</span>
+                                  <input
+                                    type="color"
+                                    value={selectedSubtitleTrack.style?.textColor ?? "#FFFFFF"}
+                                    onChange={(event) =>
+                                      updateSubtitleTrack((subtitles) => ({
+                                        ...subtitles,
+                                        style: {
+                                          ...subtitles.style,
+                                          textColor: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    className="h-10 w-full rounded-lg border border-white/10 bg-transparent"
+                                  />
+                                </label>
+                                <label className="space-y-1 text-xs text-white/55">
+                                  <span>Outline Color</span>
+                                  <input
+                                    type="color"
+                                    value={selectedSubtitleTrack.style?.borderColor ?? "#2A2A2A"}
+                                    onChange={(event) =>
+                                      updateSubtitleTrack((subtitles) => ({
+                                        ...subtitles,
+                                        style: {
+                                          ...subtitles.style,
+                                          borderColor: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    className="h-10 w-full rounded-lg border border-white/10 bg-transparent"
+                                  />
+                                </label>
+                                <label className="space-y-1 text-xs text-white/55">
+                                  <span>Shadow Color</span>
+                                  <input
+                                    type="color"
+                                    value={selectedSubtitleTrack.style?.shadowColor ?? "#000000"}
+                                    onChange={(event) =>
+                                      updateSubtitleTrack((subtitles) => ({
+                                        ...subtitles,
+                                        style: {
+                                          ...subtitles.style,
+                                          shadowColor: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    className="h-10 w-full rounded-lg border border-white/10 bg-transparent"
+                                  />
+                                </label>
+                                <label className="space-y-1 text-xs text-white/55">
+                                  <span>Background Color</span>
+                                  <input
+                                    type="color"
+                                    value={selectedSubtitleTrack.style?.backgroundColor ?? "#111111"}
+                                    onChange={(event) =>
+                                      updateSubtitleTrack((subtitles) => ({
+                                        ...subtitles,
+                                        style: {
+                                          ...subtitles.style,
+                                          backgroundColor: event.target.value,
+                                        },
+                                      }))
+                                    }
+                                    className="h-10 w-full rounded-lg border border-white/10 bg-transparent"
+                                  />
+                                </label>
+                              </div>
+                              <label className="text-xs text-white/55">
+                                Outline Width · {(selectedSubtitleTrack.style?.borderWidth ?? 3).toFixed(1)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={8}
+                                step={0.1}
+                                value={selectedSubtitleTrack.style?.borderWidth ?? 3}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    style: {
+                                      ...subtitles.style,
+                                      borderWidth: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">
+                                Shadow Opacity · {Math.round((selectedSubtitleTrack.style?.shadowOpacity ?? 0.32) * 100)}%
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                value={selectedSubtitleTrack.style?.shadowOpacity ?? 0.32}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    style: {
+                                      ...subtitles.style,
+                                      shadowOpacity: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">
+                                Shadow Distance · {(selectedSubtitleTrack.style?.shadowDistance ?? 2.2).toFixed(1)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={12}
+                                step={0.1}
+                                value={selectedSubtitleTrack.style?.shadowDistance ?? 2.2}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    style: {
+                                      ...subtitles.style,
+                                      shadowDistance: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="text-xs text-white/55">Background</div>
+                                <Switch
+                                  checked={selectedSubtitleTrack.style?.backgroundEnabled ?? false}
+                                  onCheckedChange={(checked) =>
+                                    updateSubtitleTrack((subtitles) => ({
+                                      ...subtitles,
+                                      style: {
+                                        ...subtitles.style,
+                                        backgroundEnabled: checked,
+                                      },
+                                    }))
+                                  }
+                                />
+                              </div>
+                              <label className="text-xs text-white/55">
+                                Background Opacity · {Math.round((selectedSubtitleTrack.style?.backgroundOpacity ?? 0.72) * 100)}%
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={1}
+                                step={0.01}
+                                value={selectedSubtitleTrack.style?.backgroundOpacity ?? 0.72}
+                                onChange={(event) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    style: {
+                                      ...subtitles.style,
+                                      backgroundOpacity: Number(event.target.value),
+                                    },
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <div className="mb-1 text-xs uppercase tracking-[0.24em] text-white/45">Text Case</div>
+                              <Select
+                                value={selectedSubtitleTrack.style?.textCase ?? "original"}
+                                onValueChange={(value) =>
+                                  updateSubtitleTrack((subtitles) => ({
+                                    ...subtitles,
+                                    style: {
+                                      ...subtitles.style,
+                                      textCase: value as "original" | "uppercase",
+                                    },
+                                  }))
+                                }
+                              >
+                                <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
+                                  <SelectValue placeholder="Text case" />
+                                </SelectTrigger>
+                                <SelectContent className="border-white/10 bg-slate-950 text-white">
+                                  <SelectItem value="original">Original</SelectItem>
+                                  <SelectItem value="uppercase">Uppercase</SelectItem>
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          </div>
                         ) : selectedImageItem && selectedImageAsset ? (
                           <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
@@ -4621,7 +5526,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           </div>
                         ) : (
                           <div className="rounded-[0.95rem] border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/45">
-                            Select a timeline item to edit it here. Video clips expose trim/audio tools, audio keeps its track controls, and image items let you frame the full-length overlay.
+                            Select a timeline item to edit it here. Video clips expose trim/audio tools, subtitles control the global burn-in track, audio keeps its track controls, and image items let you frame the full-length overlay.
                           </div>
                         )}
                       </div>
@@ -4645,6 +5550,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           ? "border border-amber-300/16 bg-amber-300/8 text-amber-100/80"
                           : selectedItem?.kind === "image"
                             ? "border border-emerald-300/18 bg-emerald-300/10 text-emerald-100/80"
+                          : selectedItem?.kind === "subtitle"
+                            ? "border border-fuchsia-300/18 bg-fuchsia-300/10 text-fuchsia-100/80"
                           : "border border-cyan-400/16 bg-cyan-400/8 text-cyan-100/80"
                       )}
                     >
@@ -4713,7 +5620,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               </div>
 
               <div className="grid min-h-0 flex-1 grid-cols-[84px_minmax(0,1fr)] overflow-hidden bg-[linear-gradient(180deg,rgba(8,11,16,0.98),rgba(4,7,12,0.98))]">
-                <div className="grid min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
+                <div className="grid min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_84px_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
                   <div className={cn(EDITOR_LABEL_CLASS, "flex items-center px-3")}>Time</div>
                   <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
                     <div className="font-mono text-sm font-semibold text-emerald-100">I1</div>
@@ -4761,6 +5668,32 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                       </Button>
                     </div>
                   </div>
+                  <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
+                    <div className="font-mono text-sm font-semibold text-fuchsia-100">S1</div>
+                    <div className="text-[11px] text-white/38">
+                      {subtitleTrackAvailable ? project.subtitles.label ?? `${subtitleTrackTimeline.length} cues` : "Subtitle lane"}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!subtitleTrackAvailable}
+                        className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
+                        onClick={() => focusTimelineSelection({ kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID })}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!subtitleTrackAvailable}
+                        className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
+                        onClick={clearProjectSubtitleTrack}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
                   <div className="flex flex-col justify-center gap-2 px-3">
                     <div className="font-mono text-sm font-semibold text-amber-100">A1</div>
                     <div className="text-[11px] text-white/38">{project.timeline.audioItems.length} items</div>
@@ -4802,7 +5735,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                     <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-[10px] -translate-x-1/2 rounded-b-full border border-red-300/40 bg-red-400/90 shadow-[0_4px_12px_rgba(248,113,113,0.4)]" />
                   </div>
 
-                  <div className="grid h-full min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_96px]">
+                  <div className="grid h-full min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_84px_96px]">
                     <div
                       className="relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.028),rgba(255,255,255,0.01))]"
                       onClick={seekVisibleTimeline}
@@ -5230,6 +6163,127 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           </ContextMenu>
                         );
                       })}
+                    </div>
+
+                    <div
+                      className="relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.008))]"
+                      onClick={(event) => {
+                        seekVisibleTimeline(event);
+                        if (subtitleTrackAvailable) {
+                          focusTimelineSelection({ kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID });
+                        }
+                      }}
+                    >
+                      {timelineMinorTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`subtitle-minor-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.03]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+                      {timelineTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`subtitle-grid-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.05]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+
+                      {subtitleTrackAvailable && visibleSubtitleTrackBlock ? (
+                        <button
+                          type="button"
+                          className={cn(
+                            "absolute top-1/2 h-[68%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
+                            selectedItem?.kind === "subtitle"
+                              ? "border-white/80 bg-[linear-gradient(180deg,rgba(116,54,146,0.92),rgba(64,26,84,0.96))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.24),0_0_20px_rgba(216,180,254,0.08)]"
+                              : "border-fuchsia-300/24 bg-[linear-gradient(180deg,rgba(110,49,138,0.82),rgba(58,22,74,0.92))] hover:border-fuchsia-200/40 hover:bg-[linear-gradient(180deg,rgba(122,57,153,0.84),rgba(67,26,86,0.94))]"
+                          )}
+                          style={{
+                            left: `${visibleSubtitleTrackBlock.leftPct}%`,
+                            width: `${visibleSubtitleTrackBlock.widthPct}%`,
+                          }}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            focusTimelineSelection({ kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID });
+                          }}
+                        >
+                          <div className="pointer-events-none flex h-full flex-col justify-between">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="truncate text-sm font-medium text-fuchsia-50">
+                                {project.subtitles.label ?? "Subtitle track"}
+                              </div>
+                              <span className="font-mono text-[11px] text-fuchsia-100/60">
+                                {secondsToClock(subtitleTrackDuration)}
+                              </span>
+                            </div>
+                            <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-fuchsia-50/65">
+                              <span className="truncate">
+                                {project.subtitles.enabled ? `${subtitleTrackTimeline.length} cues` : "Disabled on export"}
+                              </span>
+                              <span className="font-mono">
+                                {project.subtitles.language?.toUpperCase() ?? "SRT"}
+                              </span>
+                            </div>
+                            <div className="relative mt-2 h-6 overflow-hidden rounded-[0.65rem] bg-black/25">
+                              {visibleSubtitleChunks.map((entry, index) => (
+                                <div
+                                  key={`${entry.index}-${entry.chunk.timestamp?.[0] ?? index}`}
+                                  className={cn(
+                                    "absolute inset-y-0 rounded-[0.5rem] border border-white/10 bg-[linear-gradient(180deg,rgba(244,114,182,0.34),rgba(217,70,239,0.2))]",
+                                    index % 2 === 0 ? "opacity-95" : "opacity-75"
+                                  )}
+                                  style={{
+                                    left: `${entry.leftPct}%`,
+                                    width: `${Math.max(entry.widthPct, 0.8)}%`,
+                                  }}
+                                />
+                              ))}
+                            </div>
+                          </div>
+                        </button>
+                      ) : subtitleTrackAvailable ? (
+                        <div className="absolute left-[4%] top-1/2 w-[30%] min-w-[240px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-fuchsia-300/16 bg-fuchsia-300/[0.035] px-4 py-3 text-left">
+                          <div className={EDITOR_LABEL_CLASS}>Subtitle outside view</div>
+                          <div className="mt-2 text-sm text-white/56">Move the playhead or reduce zoom to bring subtitle cues into view.</div>
+                        </div>
+                      ) : (
+                        <div className="absolute left-[4%] top-1/2 flex min-w-[260px] -translate-y-1/2 items-center gap-2 rounded-[0.95rem] border border-dashed border-white/12 bg-white/[0.018] px-4 py-3 text-left">
+                          <div className="min-w-0 flex-1">
+                            <div className={EDITOR_LABEL_CLASS}>Subtitle lane empty</div>
+                            <div className="mt-2 text-sm text-white/56">Load a subtitle track from history or upload an SRT.</div>
+                          </div>
+                          <div className="flex shrink-0 gap-2">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-8 rounded-lg border-white/12 bg-white/[0.04] text-white hover:bg-white/[0.08]"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setIsSubtitleHistoryDialogOpen(true);
+                              }}
+                            >
+                              History
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="h-8 rounded-lg border-white/12 bg-white/[0.04] text-white hover:bg-white/[0.08]"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                srtInputRef.current?.click();
+                              }}
+                            >
+                              Upload SRT
+                            </Button>
+                          </div>
+                        </div>
+                      )}
                     </div>
 
                     <div

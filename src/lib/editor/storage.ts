@@ -12,6 +12,7 @@ import type {
   EditorExportRecord,
   EditorProjectRecord,
   EditorSubtitlePreset,
+  EditorSubtitleTrackSettings,
   TimelineClipGroup,
   TimelineImageItem,
   TimelineSelection,
@@ -57,6 +58,99 @@ export function getDefaultEditorCanvasState(): EditorCanvasState {
 export function getDefaultTimelineVideoClipActions(): TimelineVideoClipActions {
   return {
     ...DEFAULT_TIMELINE_VIDEO_CLIP_ACTIONS,
+  };
+}
+
+export function getDefaultEditorSubtitleTrackSettings(): EditorSubtitleTrackSettings {
+  return {
+    source: {
+      kind: "none",
+    },
+    label: undefined,
+    language: undefined,
+    chunks: [],
+    subtitleTimingMode: "segment",
+    offsetSeconds: 0,
+    trimStartSeconds: 0,
+    trimEndSeconds: 0,
+    enabled: true,
+    preset: DEFAULT_SUBTITLE_PRESET,
+    positionXPercent: 50,
+    positionYPercent: 90,
+    scale: 1,
+    style: getDefaultCreatorSubtitleStyle(DEFAULT_SUBTITLE_PRESET),
+  };
+}
+
+function getSubtitleTrackSourceDurationSeconds(
+  chunks: EditorSubtitleTrackSettings["chunks"]
+): number {
+  return chunks.reduce((max, chunk) => {
+    const start = chunk.timestamp?.[0];
+    const end = chunk.timestamp?.[1];
+    const fallback = typeof start === "number" && Number.isFinite(start) ? start : 0;
+    const candidate = typeof end === "number" && Number.isFinite(end) ? end : fallback;
+    return Math.max(max, candidate);
+  }, 0);
+}
+
+function normalizeSubtitleTrimEndSeconds(
+  trimEndSeconds: number,
+  chunks: EditorSubtitleTrackSettings["chunks"]
+): number {
+  if (!Number.isFinite(trimEndSeconds) || trimEndSeconds < 0) {
+    return getSubtitleTrackSourceDurationSeconds(chunks);
+  }
+  return trimEndSeconds;
+}
+
+export function normalizeEditorSubtitleTrackSettings(
+  subtitles: Partial<EditorSubtitleTrackSettings> | undefined
+): EditorSubtitleTrackSettings {
+  const defaults = getDefaultEditorSubtitleTrackSettings();
+  const source = subtitles?.source;
+  const normalizedSource =
+    source?.kind === "history-subtitle"
+      ? {
+          kind: "history-subtitle" as const,
+          sourceProjectId: String(source.sourceProjectId ?? ""),
+          transcriptId: String(source.transcriptId ?? ""),
+          subtitleId: String(source.subtitleId ?? ""),
+        }
+      : source?.kind === "uploaded-srt"
+        ? { kind: "uploaded-srt" as const }
+        : { kind: "none" as const };
+
+  const chunks = Array.isArray(subtitles?.chunks) ? subtitles.chunks : defaults.chunks;
+
+  return {
+    source: normalizedSource,
+    label: typeof subtitles?.label === "string" && subtitles.label.trim() ? subtitles.label.trim() : undefined,
+    language:
+      typeof subtitles?.language === "string" && subtitles.language.trim() ? subtitles.language.trim() : undefined,
+    chunks,
+    subtitleTimingMode:
+      subtitles?.subtitleTimingMode === "word" ||
+      subtitles?.subtitleTimingMode === "pair" ||
+      subtitles?.subtitleTimingMode === "triple" ||
+      subtitles?.subtitleTimingMode === "segment"
+        ? subtitles.subtitleTimingMode
+        : defaults.subtitleTimingMode,
+    offsetSeconds: Number.isFinite(subtitles?.offsetSeconds) ? Number(subtitles?.offsetSeconds) : defaults.offsetSeconds,
+    trimStartSeconds: Number.isFinite(subtitles?.trimStartSeconds)
+      ? Math.max(0, Number(subtitles?.trimStartSeconds))
+      : defaults.trimStartSeconds,
+    trimEndSeconds: normalizeSubtitleTrimEndSeconds(Number(subtitles?.trimEndSeconds), chunks),
+    enabled: typeof subtitles?.enabled === "boolean" ? subtitles.enabled : defaults.enabled,
+    preset: subtitles?.preset ?? defaults.preset,
+    positionXPercent: Number.isFinite(subtitles?.positionXPercent)
+      ? Number(subtitles?.positionXPercent)
+      : defaults.positionXPercent,
+    positionYPercent: Number.isFinite(subtitles?.positionYPercent)
+      ? Number(subtitles?.positionYPercent)
+      : defaults.positionYPercent,
+    scale: Number.isFinite(subtitles?.scale) ? Number(subtitles?.scale) : defaults.scale,
+    style: resolveCreatorSubtitleStyle(subtitles?.preset ?? defaults.preset, subtitles?.style),
   };
 }
 
@@ -167,14 +261,7 @@ export function createEmptyEditorProject(input?: {
       videoClipGroups: [],
       audioItems: [],
     },
-    subtitles: {
-      enabled: true,
-      preset: DEFAULT_SUBTITLE_PRESET,
-      positionXPercent: 50,
-      positionYPercent: 84,
-      scale: 1,
-      style: getDefaultCreatorSubtitleStyle(DEFAULT_SUBTITLE_PRESET),
-    },
+    subtitles: getDefaultEditorSubtitleTrackSettings(),
   };
 }
 
@@ -214,6 +301,7 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
         : [],
       audioItems,
     },
+    subtitles: normalizeEditorSubtitleTrackSettings(project.subtitles),
   };
 }
 
@@ -394,9 +482,6 @@ export function buildEditorExportRecord(input: {
 export function applyResolvedSubtitleStyle(project: EditorProjectRecord): EditorProjectRecord {
   return {
     ...project,
-    subtitles: {
-      ...project.subtitles,
-      style: resolveCreatorSubtitleStyle(project.subtitles.preset, project.subtitles.style),
-    },
+    subtitles: normalizeEditorSubtitleTrackSettings(project.subtitles),
   };
 }

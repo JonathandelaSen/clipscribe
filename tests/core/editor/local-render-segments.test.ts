@@ -67,11 +67,26 @@ function createTestProject(options?: {
       })),
     },
     subtitles: {
+      source: options?.subtitlesEnabled
+        ? {
+            kind: "uploaded-srt",
+          }
+        : {
+            kind: "none",
+          },
+      label: options?.subtitlesEnabled ? "subs.srt" : undefined,
+      language: options?.subtitlesEnabled ? "en" : undefined,
+      chunks: options?.subtitlesEnabled ? [{ text: "Hello", timestamp: [0, 1] }] : [],
+      subtitleTimingMode: "segment",
+      offsetSeconds: 0,
+      trimStartSeconds: 0,
+      trimEndSeconds: options?.subtitlesEnabled ? 1 : 0,
       enabled: options?.subtitlesEnabled ?? false,
       preset: "clean_caption",
       positionXPercent: 50,
-      positionYPercent: 84,
+      positionYPercent: 90,
       scale: 1,
+      style: {},
     },
   };
 }

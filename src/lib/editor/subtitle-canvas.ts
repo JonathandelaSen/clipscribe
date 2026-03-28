@@ -5,6 +5,7 @@ import {
   resolveCreatorSubtitleStyle,
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
+import type { CreatorSubtitleStyleSettings } from "@/lib/creator/types";
 import type { EditorProjectRecord } from "@/lib/editor/types";
 import type { TimelineCaptionChunk } from "@/lib/editor/core/captions";
 
@@ -13,6 +14,16 @@ export interface EditorSubtitlePngFrame {
   start: number;
   end: number;
   vfsPath: string;
+}
+
+export interface EditorSubtitleTextLayout {
+  style: CreatorSubtitleStyleSettings;
+  fontSize: number;
+  lineHeight: number;
+  anchorX: number;
+  anchorY: number;
+  lines: string[];
+  maxCharsPerLine: number;
 }
 
 const FONT_URL =
@@ -68,6 +79,34 @@ function drawRoundedRect(
   ctx.closePath();
 }
 
+export function resolveEditorSubtitleTextLayout(input: {
+  width: number;
+  height: number;
+  text: string;
+  project: EditorProjectRecord;
+}): EditorSubtitleTextLayout {
+  const style = resolveCreatorSubtitleStyle(input.project.subtitles.preset, input.project.subtitles.style);
+  const fontSize = Math.round(Math.min(96, Math.max(34, 56 * input.project.subtitles.scale)));
+  const lineHeight = Math.round(fontSize * 1.18);
+  const anchorX = Math.round(input.width * (input.project.subtitles.positionXPercent / 100));
+  const anchorY = Math.round(input.height * (input.project.subtitles.positionYPercent / 100));
+  const maxCharsPerLine = getSubtitleMaxCharsPerLine(fontSize, style.letterWidth, input.width);
+  const lines = wrapSubtitleLines(
+    style.textCase === "uppercase" ? input.text.toUpperCase() : input.text,
+    maxCharsPerLine
+  );
+
+  return {
+    style,
+    fontSize,
+    lineHeight,
+    anchorX,
+    anchorY,
+    lines,
+    maxCharsPerLine,
+  };
+}
+
 function renderChunkToCanvas(input: {
   width: number;
   height: number;
@@ -80,16 +119,7 @@ function renderChunkToCanvas(input: {
     throw new Error("Failed to initialize subtitle canvas context.");
   }
 
-  const style = resolveCreatorSubtitleStyle(input.project.subtitles.preset, input.project.subtitles.style);
-  const fontSize = Math.round(Math.min(96, Math.max(34, 56 * input.project.subtitles.scale)));
-  const lineHeight = Math.round(fontSize * 1.18);
-  const anchorX = Math.round(input.width * (input.project.subtitles.positionXPercent / 100));
-  const anchorY = Math.round(input.height * (input.project.subtitles.positionYPercent / 100));
-  const maxCharsPerLine = getSubtitleMaxCharsPerLine(fontSize, style.letterWidth, input.width);
-  const lines = wrapSubtitleLines(
-    style.textCase === "uppercase" ? input.text.toUpperCase() : input.text,
-    maxCharsPerLine
-  );
+  const { style, fontSize, lineHeight, anchorX, anchorY, lines } = resolveEditorSubtitleTextLayout(input);
   const fontSpec = `700 ${fontSize}px InterSubtitle, Inter, sans-serif`;
 
   ctx.clearRect(0, 0, input.width, input.height);
@@ -98,7 +128,7 @@ function renderChunkToCanvas(input: {
   ctx.font = fontSpec;
 
   const textBlockHeight = (lines.length - 1) * lineHeight + fontSize;
-  const blockTop = -(textBlockHeight / 2);
+  const blockTop = -textBlockHeight;
   const maxLineWidth = lines.reduce((max, line) => Math.max(max, ctx.measureText(line).width), 0);
   const hasBackground = style.backgroundEnabled && style.backgroundOpacity > 0;
 

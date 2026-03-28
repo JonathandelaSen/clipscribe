@@ -71,7 +71,7 @@ export function ExportSettingsDialog({
             Export timeline
           </DialogTitle>
           <DialogDescription className="text-sm text-white/58">
-            Choose the render engine, resolution, and destination before the export starts.
+            Choose the render engine, resolution, and destination before the export starts. Active subtitles will be burned into the MP4.
           </DialogDescription>
         </DialogHeader>
 

@@ -1,5 +1,9 @@
 import type { SubtitleChunk } from "../history";
-import type { CreatorSubtitleStyleSettings, CreatorVerticalEditorPreset } from "../creator/types";
+import type {
+  CreatorSubtitleStyleSettings,
+  CreatorSubtitleTimingMode,
+  CreatorVerticalEditorPreset,
+} from "../creator/types";
 
 export type EditorAspectRatio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EditorResolution = "720p" | "1080p" | "4K";
@@ -12,6 +16,7 @@ export type EditorAssetRole = "source" | "derived" | "support";
 export type EditorAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual";
 
 export type EditorSubtitlePreset = CreatorVerticalEditorPreset["subtitleStyle"];
+export const EDITOR_SUBTITLE_TRACK_ID = "subtitle-track";
 
 export type CaptionSourceRef =
   | {
@@ -38,6 +43,20 @@ export type CaptionSourceRef =
       label: string;
       language?: string;
       chunks: SubtitleChunk[];
+    };
+
+export type EditorSubtitleTrackSource =
+  | {
+      kind: "none";
+    }
+  | {
+      kind: "history-subtitle";
+      sourceProjectId: string;
+      transcriptId: string;
+      subtitleId: string;
+    }
+  | {
+      kind: "uploaded-srt";
     };
 
 export interface EditorCanvasState {
@@ -86,7 +105,7 @@ export interface TimelineImageItem {
   canvas: EditorCanvasState;
 }
 
-export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image";
+export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image" | "subtitle";
 
 export interface TimelineSelection {
   kind: TimelineSelectionKind;
@@ -94,6 +113,14 @@ export interface TimelineSelection {
 }
 
 export interface EditorSubtitleTrackSettings {
+  source: EditorSubtitleTrackSource;
+  label?: string;
+  language?: string;
+  chunks: SubtitleChunk[];
+  subtitleTimingMode: CreatorSubtitleTimingMode;
+  offsetSeconds: number;
+  trimStartSeconds: number;
+  trimEndSeconds: number;
   enabled: boolean;
   preset: EditorSubtitlePreset;
   positionXPercent: number;

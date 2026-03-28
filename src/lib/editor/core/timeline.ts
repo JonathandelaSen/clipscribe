@@ -1,3 +1,6 @@
+import {
+  EDITOR_SUBTITLE_TRACK_ID,
+} from "../types";
 import type {
   EditorAssetRecord,
   EditorProjectRecord,
@@ -24,6 +27,14 @@ function clampNumber(value: number, min: number, max: number): number {
 
 function roundMs(value: number): number {
   return Number(value.toFixed(3));
+}
+
+function hasProjectSubtitleTrack(project: Pick<EditorProjectRecord, "subtitles">): boolean {
+  return (
+    project.subtitles.source.kind !== "none" ||
+    project.subtitles.chunks.length > 0 ||
+    Boolean(project.subtitles.label)
+  );
 }
 
 function getOrderedClipIds(
@@ -1095,13 +1106,15 @@ export function getFirstTimelineSelection(
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
   videoClipGroups: TimelineClipGroup[] = [],
-  imageItems: TimelineImageItem[] = []
+  imageItems: TimelineImageItem[] = [],
+  subtitleTrackAvailable = false
 ): TimelineSelection | undefined {
   if (imageItems[0]) return { kind: "image", id: imageItems[0].id };
   const firstVideoBlock = getTimelineVideoBlockPlacements(videoClips, videoClipGroups)[0];
   if (firstVideoBlock) {
     return getTimelineSelectionForVideoBlock(firstVideoBlock);
   }
+  if (subtitleTrackAvailable) return { kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID };
   if (audioItems[0]) return { kind: "audio", id: audioItems[0].id };
   return undefined;
 }
@@ -1111,11 +1124,15 @@ export function hasTimelineSelection(
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
   videoClipGroups: TimelineClipGroup[] = [],
-  imageItems: TimelineImageItem[] = []
+  imageItems: TimelineImageItem[] = [],
+  subtitleTrackAvailable = false
 ): boolean {
   if (!selection) return false;
   if (selection.kind === "image") {
     return imageItems.some((item) => item.id === selection.id);
+  }
+  if (selection.kind === "subtitle") {
+    return subtitleTrackAvailable && selection.id === EDITOR_SUBTITLE_TRACK_ID;
   }
   if (selection.kind === "video") {
     return videoClips.some((clip) => clip.id === selection.id);
@@ -1130,15 +1147,17 @@ export function ensureProjectSelection(project: EditorProjectRecord): EditorProj
   const videoClipGroups = normalizeTimelineClipGroups(project.timeline.videoClipGroups ?? [], project.timeline.videoClips);
   const audioItems = normalizeTimelineAudioItems(project.timeline.audioItems ?? []);
   const imageItems = Array.isArray(project.timeline.imageItems) ? project.timeline.imageItems : [];
+  const subtitleTrackAvailable = hasProjectSubtitleTrack(project);
   const selectedItem = hasTimelineSelection(
     project.timeline.selectedItem,
     project.timeline.videoClips,
     audioItems,
     videoClipGroups,
-    imageItems
+    imageItems,
+    subtitleTrackAvailable
   )
     ? project.timeline.selectedItem
-    : getFirstTimelineSelection(project.timeline.videoClips, audioItems, videoClipGroups, imageItems);
+    : getFirstTimelineSelection(project.timeline.videoClips, audioItems, videoClipGroups, imageItems, subtitleTrackAvailable);
 
   return {
     ...project,
@@ -1158,13 +1177,14 @@ export function getSelectionForLaneIndex(
   videoClips: TimelineVideoClip[],
   audioItems: TimelineAudioItem[],
   videoClipGroups: TimelineClipGroup[] = [],
-  imageItems: TimelineImageItem[] = []
+  imageItems: TimelineImageItem[] = [],
+  subtitleTrackAvailable = false
 ): TimelineSelection | undefined {
   if (kind === "image") {
     if (imageItems[index]) {
       return { kind: "image", id: imageItems[index].id };
     }
-    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
+    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems, subtitleTrackAvailable);
   }
 
   if (kind === "video") {
@@ -1177,7 +1197,14 @@ export function getSelectionForLaneIndex(
       }
       return { kind: "video", id: candidateClipId };
     }
-    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
+    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems, subtitleTrackAvailable);
+  }
+
+  if (kind === "subtitle") {
+    if (subtitleTrackAvailable) {
+      return { kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID };
+    }
+    return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems, subtitleTrackAvailable);
   }
 
   const lane = audioItems;
@@ -1187,7 +1214,7 @@ export function getSelectionForLaneIndex(
   if (index > 0 && lane[index - 1]) {
     return { kind, id: lane[index - 1].id };
   }
-  return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems);
+  return getFirstTimelineSelection(videoClips, audioItems, videoClipGroups, imageItems, subtitleTrackAvailable);
 }
 
 export function getAssetById(

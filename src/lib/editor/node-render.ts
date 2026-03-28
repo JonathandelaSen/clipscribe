@@ -1,8 +1,10 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, stat } from "node:fs/promises";
+import { access, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
+import { buildEditorAssFilterExpression, buildEditorAssSubtitleDocument } from "./ass-subtitles";
+import { buildProjectSubtitleTimeline } from "./core/captions";
 import { getEditorExportCapability } from "./export-capabilities";
 import { buildEditorExportPlan } from "./core/export-plan";
 import type { CommandRunResult, CommandRunner } from "./node-media";
@@ -170,6 +172,7 @@ export function buildNodeEditorExportCommand(input: {
   resolution: EditorResolution;
   outputPath: string;
   overwrite?: boolean;
+  subtitleTrackPath?: string | null;
 }): {
   width: number;
   height: number;
@@ -192,7 +195,15 @@ export function buildNodeEditorExportCommand(input: {
     resolution: input.resolution,
   });
 
-  const mapArgs = ["-map", `[${exportPlan.videoTrackLabel}]`];
+  let filterComplex = exportPlan.filterComplex;
+  let videoTrackLabel = exportPlan.videoTrackLabel;
+  if (input.subtitleTrackPath) {
+    const subtitleVideoLabel = "video_track_subtitles";
+    filterComplex = `${filterComplex};[${videoTrackLabel}]${buildEditorAssFilterExpression(input.subtitleTrackPath)}[${subtitleVideoLabel}]`;
+    videoTrackLabel = subtitleVideoLabel;
+  }
+
+  const mapArgs = ["-map", `[${videoTrackLabel}]`];
   if (exportPlan.mixedAudioLabel) {
     mapArgs.push("-map", `[${exportPlan.mixedAudioLabel}]`);
   }
@@ -201,7 +212,7 @@ export function buildNodeEditorExportCommand(input: {
     input.overwrite ? "-y" : "-n",
     ...exportPlan.ffmpegArgs,
     "-filter_complex",
-    exportPlan.filterComplex,
+    filterComplex,
     ...mapArgs,
     "-c:v",
     "libx264",
@@ -237,7 +248,7 @@ export function buildNodeEditorExportCommand(input: {
         : exportPlan.mixedAudioLabel
           ? "Clip audio only."
           : "No audio track.",
-      "No subtitle burn-in is rendered by the CLI exporter.",
+      input.subtitleTrackPath ? "Global subtitle track burned in via ASS." : "No subtitle burn-in is rendered.",
       input.resolution === "4K" ? "4K uses a slightly higher CRF preset." : "Standard CLI export preset.",
     ],
   };
@@ -258,90 +269,120 @@ export async function exportEditorProjectWithSystemFfmpeg(
     }
   }
 
+  const subtitleTimeline = buildProjectSubtitleTimeline({
+    project: input.project,
+    historyMap: new Map(),
+  });
+  const subtitleTrackPath =
+    input.project.subtitles.enabled && subtitleTimeline.length > 0
+      ? path.join(path.dirname(outputPath), `${path.parse(outputPath).name}.subs.ass`)
+      : null;
+
   const command = buildNodeEditorExportCommand({
     project: input.project,
     assets: input.assets,
     resolution: input.resolution,
     outputPath,
     overwrite: input.overwrite,
+    subtitleTrackPath,
   });
 
   await mkdir(path.dirname(outputPath), { recursive: true });
-  if (!input.dryRun) {
-    const commandCandidates = [
-      "ffmpeg",
-      input.ffmpegPath ?? getBundledBinaryPath("ffmpeg"),
-    ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  if (!input.dryRun && subtitleTrackPath) {
+    await mkdir(path.dirname(subtitleTrackPath), { recursive: true });
+    await writeFile(
+      subtitleTrackPath,
+      buildEditorAssSubtitleDocument({
+        project: input.project,
+        chunks: subtitleTimeline,
+        width: command.width,
+        height: command.height,
+      }),
+      "utf8"
+    );
+  }
 
-    let result: CommandRunResult | null = null;
-    let lastProgressPercent = -1;
-    const emitProgress = (processedSeconds: number) => {
-      if (!input.onProgress || command.durationSeconds <= 0) return;
-      const percent = clampNumber((processedSeconds / command.durationSeconds) * 100, 0, 100);
-      if (percent <= lastProgressPercent + 0.25 && percent < 100) return;
-      lastProgressPercent = percent;
-      input.onProgress({
-        percent,
-        processedSeconds,
-        durationSeconds: command.durationSeconds,
-      });
+  try {
+    if (!input.dryRun) {
+      const commandCandidates = [
+        "ffmpeg",
+        input.ffmpegPath ?? getBundledBinaryPath("ffmpeg"),
+      ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+
+      let result: CommandRunResult | null = null;
+      let lastProgressPercent = -1;
+      const emitProgress = (processedSeconds: number) => {
+        if (!input.onProgress || command.durationSeconds <= 0) return;
+        const percent = clampNumber((processedSeconds / command.durationSeconds) * 100, 0, 100);
+        if (percent <= lastProgressPercent + 0.25 && percent < 100) return;
+        lastProgressPercent = percent;
+        input.onProgress({
+          percent,
+          processedSeconds,
+          durationSeconds: command.durationSeconds,
+        });
+      };
+
+      emitProgress(0);
+      for (const commandName of commandCandidates) {
+        try {
+          if (input.commandRunner) {
+            result = await input.commandRunner(commandName, command.ffmpegArgs);
+          } else {
+            result = await runCommand(commandName, command.ffmpegArgs, {
+              onStderrChunk: (chunk) => {
+                const processedSeconds = parseFfmpegProgressSeconds(chunk);
+                if (processedSeconds != null) {
+                  emitProgress(processedSeconds);
+                }
+              },
+              signal: input.signal,
+            });
+          }
+          break;
+        } catch (error) {
+          if (isEnoentError(error)) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!result) {
+        if (input.signal?.aborted) {
+          throw createAbortError();
+        }
+        throw new Error(buildMissingBinaryMessage("ffmpeg"));
+      }
+
+      if (result.code !== 0) {
+        const detail = getStderrTail(result.stderr) || result.stdout.trim() || "Unknown ffmpeg failure.";
+        throw new Error(`ffmpeg failed while rendering the timeline.\n${detail}`);
+      }
+
+      emitProgress(command.durationSeconds);
+    }
+
+    const outputStats = input.dryRun ? null : await stat(outputPath);
+    if (outputStats && outputStats.size < 1024) {
+      throw new Error(`Rendered output is empty: ${outputPath}`);
+    }
+
+    return {
+      outputPath,
+      filename: path.basename(outputPath),
+      width: command.width,
+      height: command.height,
+      sizeBytes: outputStats?.size ?? 0,
+      durationSeconds: command.durationSeconds,
+      warnings: command.warnings,
+      ffmpegCommandPreview: command.ffmpegCommandPreview,
+      notes: command.notes,
+      dryRun: Boolean(input.dryRun),
     };
-
-    emitProgress(0);
-    for (const commandName of commandCandidates) {
-      try {
-        if (input.commandRunner) {
-          result = await input.commandRunner(commandName, command.ffmpegArgs);
-        } else {
-          result = await runCommand(commandName, command.ffmpegArgs, {
-            onStderrChunk: (chunk) => {
-              const processedSeconds = parseFfmpegProgressSeconds(chunk);
-              if (processedSeconds != null) {
-                emitProgress(processedSeconds);
-              }
-            },
-            signal: input.signal,
-          });
-        }
-        break;
-      } catch (error) {
-        if (isEnoentError(error)) {
-          continue;
-        }
-        throw error;
-      }
+  } finally {
+    if (!input.dryRun && subtitleTrackPath) {
+      await rm(subtitleTrackPath, { force: true }).catch(() => undefined);
     }
-
-    if (!result) {
-      if (input.signal?.aborted) {
-        throw createAbortError();
-      }
-      throw new Error(buildMissingBinaryMessage("ffmpeg"));
-    }
-
-    if (result.code !== 0) {
-      const detail = getStderrTail(result.stderr) || result.stdout.trim() || "Unknown ffmpeg failure.";
-      throw new Error(`ffmpeg failed while rendering the timeline.\n${detail}`);
-    }
-
-    emitProgress(command.durationSeconds);
   }
-
-  const outputStats = input.dryRun ? null : await stat(outputPath);
-  if (outputStats && outputStats.size < 1024) {
-    throw new Error(`Rendered output is empty: ${outputPath}`);
-  }
-
-  return {
-    outputPath,
-    filename: path.basename(outputPath),
-    width: command.width,
-    height: command.height,
-    sizeBytes: outputStats?.size ?? 0,
-    durationSeconds: command.durationSeconds,
-    warnings: command.warnings,
-    ffmpegCommandPreview: command.ffmpegCommandPreview,
-    notes: command.notes,
-    dryRun: Boolean(input.dryRun),
-  };
 }

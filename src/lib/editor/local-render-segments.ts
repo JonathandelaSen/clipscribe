@@ -82,6 +82,13 @@ function hasReversedClip(project: EditorProjectRecord): boolean {
   return project.timeline.videoClips.some((clip) => clip.actions.reverse);
 }
 
+function hasSubtitleTrack(project: EditorProjectRecord): boolean {
+  return (
+    project.subtitles.enabled &&
+    (project.subtitles.source.kind !== "none" || project.subtitles.chunks.length > 0 || Boolean(project.subtitles.label))
+  );
+}
+
 export function getBrowserRenderProfile(name: BrowserRenderTierName): BrowserRenderProfile {
   return BROWSER_RENDER_PROFILES[name];
 }
@@ -94,7 +101,7 @@ export function selectBrowserRenderProfile(input: {
   const durationSeconds = input.durationSeconds ?? getBrowserTimelineDurationSeconds(input.project);
   const audioItemCount = input.project.timeline.audioItems.length;
   const clipCount = input.project.timeline.videoClips.length;
-  const subtitlesEnabled = input.project.subtitles.enabled;
+  const subtitlesEnabled = hasSubtitleTrack(input.project);
   const reversed = hasReversedClip(input.project);
 
   if (input.resolution === "4K") {
