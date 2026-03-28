@@ -1,5 +1,11 @@
 import type { CreatorVideoInfoBlock, CreatorVideoInfoGenerateResponse } from "@/lib/creator/types";
-import type { ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
+import { makeId } from "@/lib/history";
+import type {
+  ProjectAssetRecord,
+  ProjectExportRecord,
+  ProjectYouTubeUploadRecord,
+} from "@/lib/projects/types";
+import type { YouTubePublishResult, YouTubeUploadDraft } from "@/lib/youtube/types";
 
 export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] = [
   "titleIdeas",
@@ -11,6 +17,7 @@ export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] 
 ];
 
 export type YouTubePublishSourceMode = "local_file" | "project_asset" | "project_export";
+export type YouTubePublishView = "list" | "new";
 
 export interface YouTubePublishDraft {
   title: string;
@@ -34,6 +41,68 @@ export interface YouTubeProjectAssetOption {
   filename: string;
   createdAt: number;
   file: File;
+}
+
+export function buildProjectYouTubeUploadRecord(input: {
+  projectId: string;
+  sourceMode: YouTubePublishSourceMode;
+  sourceAssetId?: string;
+  sourceExportId?: string;
+  outputAssetId?: string;
+  sourceFilename: string;
+  draft: YouTubeUploadDraft;
+  result: YouTubePublishResult;
+  uploadedAt?: number;
+}): ProjectYouTubeUploadRecord {
+  return {
+    id: makeId("yt_upload"),
+    projectId: input.projectId,
+    uploadedAt: input.uploadedAt ?? Date.now(),
+    videoId: input.result.videoId,
+    watchUrl: input.result.watchUrl,
+    studioUrl: input.result.studioUrl,
+    sourceMode: input.sourceMode,
+    sourceAssetId: input.sourceAssetId,
+    sourceExportId: input.sourceExportId,
+    outputAssetId: input.outputAssetId,
+    sourceFilename: input.sourceFilename,
+    draft: {
+      title: input.draft.title,
+      description: input.draft.description,
+      privacyStatus: input.draft.privacyStatus,
+      tags: input.draft.tags.slice(),
+      categoryId: input.draft.categoryId,
+      defaultLanguage: input.draft.defaultLanguage,
+      publishAt: input.draft.publishAt,
+      recordingDate: input.draft.recordingDate,
+      localizations: input.draft.localizations.map((localization) => ({
+        locale: localization.locale,
+        title: localization.title,
+        description: localization.description,
+      })),
+    },
+    result: {
+      processingStatus: input.result.processing.processingStatus,
+      uploadStatus: input.result.processing.uploadStatus,
+      failureReason: input.result.processing.failureReason,
+      rejectionReason: input.result.processing.rejectionReason,
+      privacyStatus: input.result.processing.privacyStatus,
+      thumbnailState: input.result.thumbnail.state,
+      captionState: input.result.caption.state,
+    },
+  };
+}
+
+export function resolveYouTubePublishView(input: {
+  requestedView?: string | null;
+  assetId?: string | null;
+  exportId?: string | null;
+}): YouTubePublishView {
+  if (input.assetId?.trim() || input.exportId?.trim()) {
+    return "new";
+  }
+
+  return input.requestedView === "new" ? "new" : "list";
 }
 
 function normalizeTag(value: string): string {

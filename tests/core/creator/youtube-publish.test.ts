@@ -8,10 +8,13 @@ import {
   applySuggestedDescription,
   applySuggestedTags,
   applySuggestedTitle,
+  buildProjectYouTubeUploadRecord,
   getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
   resolveInitialYouTubePublishSelection,
+  resolveYouTubePublishView,
 } from "../../../src/lib/creator/youtube-publish";
+import type { YouTubePublishResult, YouTubeUploadDraft } from "../../../src/lib/youtube/types";
 
 function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetRecord {
   return {
@@ -248,4 +251,76 @@ test("resolveInitialYouTubePublishSelection honors valid deep links and falls ba
       sourceMode: "project_export",
     }
   );
+});
+
+test("resolveYouTubePublishView defaults to list and forces the new flow for deep links", () => {
+  assert.equal(resolveYouTubePublishView({ requestedView: null }), "list");
+  assert.equal(resolveYouTubePublishView({ requestedView: "new" }), "new");
+  assert.equal(resolveYouTubePublishView({ requestedView: "list", assetId: "asset_1" }), "new");
+  assert.equal(resolveYouTubePublishView({ requestedView: "list", exportId: "export_1" }), "new");
+});
+
+test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for project history", () => {
+  const draft: YouTubeUploadDraft = {
+    title: "Launch video",
+    description: "Long-form publish",
+    privacyStatus: "unlisted",
+    tags: ["clipscribe", "launch"],
+    categoryId: "28",
+    defaultLanguage: "en",
+    notifySubscribers: false,
+    embeddable: true,
+    license: "youtube",
+    publicStatsViewable: true,
+    publishAt: "2026-04-01T12:00",
+    selfDeclaredMadeForKids: false,
+    containsSyntheticMedia: true,
+    recordingDate: "2026-03-27",
+    localizations: [
+      {
+        locale: "es",
+        title: "Video lanzamiento",
+        description: "Descripcion",
+      },
+    ],
+  };
+  const result: YouTubePublishResult = {
+    ok: true,
+    videoId: "yt_123",
+    watchUrl: "https://youtube.com/watch?v=yt_123",
+    studioUrl: "https://studio.youtube.com/video/yt_123/edit",
+    processing: {
+      videoId: "yt_123",
+      processingStatus: "processing",
+      uploadStatus: "uploaded",
+      privacyStatus: "unlisted",
+    },
+    thumbnail: { state: "applied" },
+    caption: { state: "skipped" },
+  };
+
+  const record = buildProjectYouTubeUploadRecord({
+    projectId: "project_1",
+    sourceMode: "project_export",
+    sourceAssetId: "asset_1",
+    sourceExportId: "export_1",
+    outputAssetId: "asset_derived_1",
+    sourceFilename: "launch-cut.mp4",
+    draft,
+    result,
+    uploadedAt: 123_456,
+  });
+
+  assert.equal(record.projectId, "project_1");
+  assert.equal(record.uploadedAt, 123_456);
+  assert.equal(record.videoId, "yt_123");
+  assert.equal(record.sourceMode, "project_export");
+  assert.equal(record.sourceAssetId, "asset_1");
+  assert.equal(record.sourceExportId, "export_1");
+  assert.equal(record.outputAssetId, "asset_derived_1");
+  assert.deepEqual(record.draft.tags, ["clipscribe", "launch"]);
+  assert.equal(record.draft.localizations[0]?.locale, "es");
+  assert.equal(record.result.processingStatus, "processing");
+  assert.equal(record.result.thumbnailState, "applied");
+  assert.equal(record.result.captionState, "skipped");
 });

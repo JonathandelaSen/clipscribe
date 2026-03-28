@@ -9,6 +9,7 @@ import {
   resolveVideoInfoPromptFieldInstruction,
   resolveVideoInfoPromptSlotLine,
   sanitizeVideoInfoPromptProfile,
+  selectVideoInfoPromptCustomizationSnapshot,
   summarizeVideoInfoPromptEdits,
 } from "../../../src/lib/creator/prompt-customization";
 
@@ -77,6 +78,45 @@ test("createVideoInfoPromptCustomizationSnapshot reports run overrides and edite
   assert.equal(snapshot?.mode, "run_override");
   assert.equal(snapshot?.hash, computePromptCustomizationHash(snapshot?.effectiveProfile));
   assert.deepEqual(snapshot?.editedSections, ["globalInstructions", "field:titleIdeas"]);
+});
+
+test("selectVideoInfoPromptCustomizationSnapshot follows the active editor mode", () => {
+  const globalSnapshot = createVideoInfoPromptCustomizationSnapshot({
+    globalProfile: {
+      globalInstructions: "Global instruction.",
+    },
+  });
+  const runSnapshot = createVideoInfoPromptCustomizationSnapshot({
+    globalProfile: {
+      globalInstructions: "Global instruction.",
+    },
+    runProfile: {
+      fieldInstructions: {
+        titleIdeas: "Use emojis sometimes.",
+      },
+    },
+  });
+
+  assert.equal(
+    selectVideoInfoPromptCustomizationSnapshot("global", {
+      globalSnapshot,
+      runSnapshot,
+    }),
+    globalSnapshot
+  );
+  assert.equal(
+    selectVideoInfoPromptCustomizationSnapshot("run", {
+      globalSnapshot,
+      runSnapshot,
+    }),
+    runSnapshot
+  );
+  assert.equal(
+    selectVideoInfoPromptCustomizationSnapshot("run", {
+      globalSnapshot,
+    }),
+    globalSnapshot
+  );
 });
 
 test("resolveVideoInfoPromptSlotLine uses defaults unless explicitly replaced or omitted", () => {

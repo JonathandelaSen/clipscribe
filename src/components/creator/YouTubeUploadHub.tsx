@@ -36,12 +36,14 @@ import { toast } from "sonner";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
 import { resolveProjectVideoInfoHistory } from "@/lib/creator/video-info-storage";
 import {
+  buildProjectYouTubeUploadRecord,
   getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
   resolveInitialYouTubePublishSelection,
   type YouTubePublishDraft,
   type YouTubePublishSourceMode,
 } from "@/lib/creator/youtube-publish";
+import type { ProjectYouTubeUploadRecord } from "@/lib/projects/types";
 import { normalizeYouTubeRegionCode, parseYouTubeTagsInput } from "@/lib/youtube/drafts";
 import { publishToYouTubeFromBrowser } from "@/lib/youtube/browser-upload";
 import type {
@@ -67,6 +69,14 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -135,6 +145,30 @@ function formatDateTime(value: number | undefined) {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+function formatDateTimeInput(value: string) {
+  if (!value.trim()) return "Not scheduled";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
+function formatDateInput(value: string) {
+  if (!value.trim()) return "Not set";
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, {
+    dateStyle: "medium",
+  });
+}
+
+function formatFileSize(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "Unknown size";
+  return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function resultTone(state: YouTubePublishStepResult["state"]) {
@@ -225,11 +259,13 @@ export function YouTubeUploadHub({
   initialAssetId,
   initialExportId,
   embedded = false,
+  onUploadSuccess,
 }: {
   projectId?: string;
   initialAssetId?: string;
   initialExportId?: string;
   embedded?: boolean;
+  onUploadSuccess?: (record: ProjectYouTubeUploadRecord) => Promise<void> | void;
 } = {}) {
   const searchParams = useSearchParams();
   const {
@@ -289,6 +325,7 @@ export function YouTubeUploadHub({
   const [captionLanguage, setCaptionLanguage] = useState("");
   const [captionName, setCaptionName] = useState("");
   const [captionIsDraft, setCaptionIsDraft] = useState(false);
+  const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
 
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<YouTubeBrowserUploadProgress | null>(null);
@@ -545,6 +582,28 @@ export function YouTubeUploadHub({
       publishDraft.title.trim() &&
       publishDraft.description.trim()
   );
+  const categoryLabel = useMemo(
+    () => catalog?.categories.find((category) => category.id === categoryId)?.title ?? "Not set",
+    [catalog, categoryId]
+  );
+  const defaultLanguageLabel = useMemo(
+    () => catalog?.languages.find((language) => language.id === defaultLanguage)?.name ?? "Not set",
+    [catalog, defaultLanguage]
+  );
+  const captionLanguageLabel = useMemo(
+    () => catalog?.languages.find((language) => language.id === captionLanguage)?.name ?? (captionLanguage || "Not set"),
+    [captionLanguage, catalog]
+  );
+  const privacyLabel = useMemo(() => {
+    switch (privacyStatus) {
+      case "public":
+        return "Public";
+      case "unlisted":
+        return "Unlisted (hidden, share by link)";
+      default:
+        return "Private";
+    }
+  }, [privacyStatus]);
 
 
   const handleLocalVideoSelection = useCallback((file: File | null) => {
@@ -631,6 +690,7 @@ export function YouTubeUploadHub({
           }
         : null;
 
+    setIsConfirmDialogOpen(false);
     setIsUploading(true);
     setUploadProgress({
       phase: "initializing",
@@ -651,6 +711,24 @@ export function YouTubeUploadHub({
         onProgress: setUploadProgress,
       });
       setPublishResult(result);
+      if (projectId) {
+        const record = buildProjectYouTubeUploadRecord({
+          projectId,
+          sourceMode,
+          sourceAssetId: sourceMode === "project_asset" ? selectedAssetId || undefined : undefined,
+          sourceExportId: sourceMode === "project_export" ? selectedExportId || undefined : undefined,
+          outputAssetId: sourceMode === "project_export" ? selectedExportOption?.outputAssetId : undefined,
+          sourceFilename:
+            sourceMode === "project_asset"
+              ? selectedAssetOption?.filename || activeVideoFile.name
+              : sourceMode === "project_export"
+                ? selectedExportOption?.filename || activeVideoFile.name
+                : activeVideoFile.name,
+          draft: currentDraft,
+          result,
+        });
+        await onUploadSuccess?.(record);
+      }
       toast.success("YouTube upload finished");
     } catch (error) {
       const message = error instanceof Error ? error.message : "YouTube upload failed.";
@@ -667,6 +745,18 @@ export function YouTubeUploadHub({
   const selectedSourceLabel = selectedExportOption
     ? `${selectedExportOption.kind === "timeline" ? "Timeline" : "Short"} export • ${formatRelativeDate(selectedExportOption.createdAt)}`
     : "No export selected";
+  const sourceSummaryTitle =
+    sourceMode === "project_asset" ? "Project asset" : sourceMode === "project_export" ? "Project export" : "Local file";
+  const sourceSummaryLabel =
+    sourceMode === "project_asset" ? selectedAssetLabel : sourceMode === "project_export" ? selectedSourceLabel : "Local file";
+  const complianceRows = [
+    { label: "Notify subscribers", value: notifySubscribers ? "On" : "Off" },
+    { label: "Embeddable", value: embeddable ? "On" : "Off" },
+    { label: "Public stats viewable", value: publicStatsViewable ? "On" : "Off" },
+    { label: "Made for kids", value: selfDeclaredMadeForKids ? "Yes" : "No" },
+    { label: "Contains synthetic media", value: containsSyntheticMedia ? "Yes" : "No" },
+    { label: "License", value: license === "youtube" ? "Standard YouTube License" : "Creative Commons" },
+  ];
 
 
 
@@ -1209,7 +1299,7 @@ export function YouTubeUploadHub({
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="private">Private</SelectItem>
-                          <SelectItem value="unlisted">Unlisted</SelectItem>
+                          <SelectItem value="unlisted">Unlisted (hidden, share by link)</SelectItem>
                           <SelectItem value="public">Public</SelectItem>
                         </SelectContent>
                       </Select>
@@ -1652,16 +1742,16 @@ export function YouTubeUploadHub({
                     Uploads use your live OAuth session and will fail fast if it is not connected.
                   </div>
                   <Button
-                    onClick={() => void handleUpload()}
+                    onClick={() => setIsConfirmDialogOpen(true)}
                     disabled={!canUpload || isUploading}
                     className="min-w-[190px] bg-[linear-gradient(135deg,rgba(34,211,238,0.9),rgba(16,185,129,0.9))] font-semibold text-black hover:opacity-95"
                   >
                     {isUploading ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
-                      <Upload className="mr-2 h-4 w-4" />
+                      <FileText className="mr-2 h-4 w-4" />
                     )}
-                    Upload to YouTube
+                    {isUploading ? "Uploading to YouTube" : "Review upload"}
                   </Button>
                 </div>
               </CardContent>
@@ -1808,6 +1898,209 @@ export function YouTubeUploadHub({
           }}
         />
       )}
+
+      <Dialog open={isConfirmDialogOpen} onOpenChange={setIsConfirmDialogOpen}>
+        <DialogContent className="max-h-[88vh] overflow-hidden border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] p-0 text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-5xl">
+          <DialogHeader className="border-b border-white/8 px-6 py-5 text-left">
+            <DialogTitle className="text-2xl font-semibold tracking-tight text-white">Confirm YouTube upload</DialogTitle>
+            <DialogDescription className="text-sm text-white/55">
+              Review the final metadata and attached assets before the upload starts.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="max-h-[calc(88vh-170px)] overflow-y-auto px-6 py-6">
+            <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+              <div className="space-y-6">
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <ShieldCheck className="h-4 w-4 text-cyan-300" />
+                    Connected channel
+                  </div>
+                  <div className="grid gap-3">
+                    {channels.length > 0 ? (
+                      channels.map((channel) => (
+                        <div
+                          key={channel.id}
+                          className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3"
+                        >
+                          <div className="text-sm font-medium text-white">{channel.title}</div>
+                          <div className="mt-1 text-xs text-zinc-500">{channel.customUrl || channel.id}</div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-2xl border border-dashed border-white/10 bg-white/[0.02] px-4 py-3 text-sm text-zinc-500">
+                        No connected channel details available.
+                      </div>
+                    )}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <FileVideo className="h-4 w-4 text-cyan-300" />
+                    Video source
+                  </div>
+                  <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">{activeVideoFile?.name || "No file selected"}</div>
+                        <div className="mt-1 text-xs text-zinc-500">{sourceSummaryTitle} • {sourceSummaryLabel}</div>
+                      </div>
+                      <Badge className="border-white/10 bg-black/20 text-white/80">
+                        {activeVideoFile ? formatFileSize(activeVideoFile.size) : "No file"}
+                      </Badge>
+                    </div>
+                    {videoPreviewUrl ? (
+                      <video
+                        className="mt-4 aspect-video w-full rounded-2xl border border-white/10 bg-black"
+                        controls
+                        preload="metadata"
+                        src={videoPreviewUrl}
+                      />
+                    ) : null}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <FileText className="h-4 w-4 text-emerald-300" />
+                    Final metadata
+                  </div>
+                  <div className="space-y-4">
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                      <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Title</div>
+                      <div className="mt-2 text-lg font-medium text-white">{currentDraft.title.trim() || "Untitled"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                      <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Description</div>
+                      <div className="mt-2 max-h-56 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-zinc-200">
+                        {currentDraft.description.trim() || "No description"}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                      <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Tags</div>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {currentDraft.tags.length > 0 ? (
+                          currentDraft.tags.map((tag) => (
+                            <Badge key={tag} className="border-cyan-400/20 bg-cyan-400/10 text-cyan-100">
+                              {tag}
+                            </Badge>
+                          ))
+                        ) : (
+                          <span className="text-sm text-zinc-500">No tags</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+
+              <div className="space-y-6">
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <Sparkles className="h-4 w-4 text-fuchsia-300" />
+                    Publish settings
+                  </div>
+                  <div className="grid gap-3">
+                    {[
+                      { label: "Privacy", value: privacyLabel },
+                      { label: "Category", value: categoryLabel },
+                      { label: "Default language", value: defaultLanguageLabel },
+                      { label: "Recording date", value: formatDateInput(recordingDate) },
+                      { label: "Publish at", value: formatDateTimeInput(publishAt) },
+                    ].map((item) => (
+                      <div
+                        key={item.label}
+                        className="flex items-center justify-between gap-4 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3"
+                      >
+                        <div className="text-sm text-zinc-400">{item.label}</div>
+                        <div className="text-right text-sm font-medium text-white">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <ShieldAlert className="h-4 w-4 text-amber-300" />
+                    Compliance & distribution
+                  </div>
+                  <div className="grid gap-3">
+                    {complianceRows.map((item) => (
+                      <div
+                        key={item.label}
+                        className="flex items-center justify-between gap-4 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3"
+                      >
+                        <div className="text-sm text-zinc-400">{item.label}</div>
+                        <div className="text-sm font-medium text-white">{item.value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="rounded-[24px] border border-white/8 bg-black/20 p-5">
+                  <div className="mb-4 flex items-center gap-2 text-sm font-medium text-white">
+                    <FileImage className="h-4 w-4 text-orange-300" />
+                    Optional assets
+                  </div>
+                  <div className="grid gap-3">
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                      <div className="text-sm font-medium text-white">Thumbnail</div>
+                      <div className="mt-1 text-sm text-zinc-400">{thumbnailFile?.name || "No thumbnail attached"}</div>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                      <div className="text-sm font-medium text-white">Captions</div>
+                      {captionFile ? (
+                        <div className="mt-2 space-y-1 text-sm text-zinc-400">
+                          <div>{captionFile.name}</div>
+                          <div>{captionLanguageLabel}</div>
+                          <div>{captionName.trim() || fileStem(captionFile.name)}</div>
+                          <div>{captionIsDraft ? "Draft caption track" : "Publish caption track"}</div>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm text-zinc-400">No caption track attached</div>
+                      )}
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                      <div className="text-sm font-medium text-white">Localized metadata</div>
+                      <div className="mt-1 text-sm text-zinc-400">
+                        {currentDraft.localizations.length > 0
+                          ? `${currentDraft.localizations.length} localized override${currentDraft.localizations.length === 1 ? "" : "s"}`
+                          : "No localized overrides"}
+                      </div>
+                    </div>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="border-t border-white/8 px-6 py-4 sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              className="text-zinc-300 hover:bg-white/10 hover:text-white"
+              onClick={() => setIsConfirmDialogOpen(false)}
+              disabled={isUploading}
+            >
+              Back to edit
+            </Button>
+            <Button
+              type="button"
+              onClick={() => void handleUpload()}
+              disabled={!canUpload || isUploading}
+              className="min-w-[190px] bg-[linear-gradient(135deg,rgba(34,211,238,0.9),rgba(16,185,129,0.9))] font-semibold text-black hover:opacity-95"
+            >
+              {isUploading ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Upload className="mr-2 h-4 w-4" />
+              )}
+              Confirm upload
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

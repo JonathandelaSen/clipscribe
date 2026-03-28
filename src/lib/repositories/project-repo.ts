@@ -9,6 +9,7 @@ import type {
   ProjectAssetRecord,
   ProjectExportRecord,
   ProjectHistoryItem,
+  ProjectYouTubeUploadRecord,
 } from "@/lib/projects/types";
 
 export interface ProjectRepository {
@@ -30,6 +31,8 @@ export interface ProjectRepository {
   deleteShortProjectsBySuggestionGenerationId(generationId: string): Promise<void>;
   listProjectExports(projectId?: string): Promise<ProjectExportRecord[]>;
   putProjectExport(record: ProjectExportRecord): Promise<void>;
+  listProjectYouTubeUploads(projectId?: string): Promise<ProjectYouTubeUploadRecord[]>;
+  putProjectYouTubeUpload(record: ProjectYouTubeUploadRecord): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
   listProjectHistory(projectId?: string): Promise<ProjectHistoryItem[]>;
 }
@@ -44,6 +47,10 @@ export function sortProjectAssets(records: ProjectAssetRecord[]): ProjectAssetRe
 
 export function sortProjectExports(records: ProjectExportRecord[]): ProjectExportRecord[] {
   return [...records].sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export function sortProjectYouTubeUploads(records: ProjectYouTubeUploadRecord[]): ProjectYouTubeUploadRecord[] {
+  return [...records].sort((a, b) => b.uploadedAt - a.uploadedAt);
 }
 
 export function toHistoryItem(
@@ -253,10 +260,28 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
       await database.projectExports.put(record);
     },
 
+    async listProjectYouTubeUploads(projectId) {
+      const records = projectId
+        ? await database.projectYouTubeUploads.where("projectId").equals(projectId).toArray()
+        : await database.projectYouTubeUploads.toArray();
+      return sortProjectYouTubeUploads(records);
+    },
+
+    async putProjectYouTubeUpload(record) {
+      await database.projectYouTubeUploads.put(record);
+    },
+
     async deleteProject(projectId) {
       await database.transaction(
         "rw",
-        [database.projects, database.projectAssets, database.assetTranscripts, database.projectShorts, database.projectExports],
+        [
+          database.projects,
+          database.projectAssets,
+          database.assetTranscripts,
+          database.projectShorts,
+          database.projectExports,
+          database.projectYouTubeUploads,
+        ],
         async () => {
           await database.projects.delete(projectId);
 
@@ -269,6 +294,9 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
 
           const exports = await database.projectExports.where("projectId").equals(projectId).toArray();
           await database.projectExports.bulkDelete(exports.map((record) => record.id));
+
+          const youtubeUploads = await database.projectYouTubeUploads.where("projectId").equals(projectId).toArray();
+          await database.projectYouTubeUploads.bulkDelete(youtubeUploads.map((record) => record.id));
         }
       );
     },

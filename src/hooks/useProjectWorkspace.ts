@@ -3,7 +3,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createEditorAssetRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import { readMediaMetadata } from "@/lib/editor/media";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
-import type { ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
+import type {
+  ContentProjectRecord,
+  ProjectAssetRecord,
+  ProjectExportRecord,
+  ProjectYouTubeUploadRecord,
+} from "@/lib/projects/types";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
 
 const projectRepository = createDexieProjectRepository();
@@ -13,6 +18,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
   const [assets, setAssets] = useState<ProjectAssetRecord[]>([]);
   const [shortProjects, setShortProjects] = useState<CreatorShortProjectRecord[]>([]);
   const [exports, setExports] = useState<ProjectExportRecord[]>([]);
+  const [youtubeUploads, setYouTubeUploads] = useState<ProjectYouTubeUploadRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,6 +28,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
       setAssets([]);
       setShortProjects([]);
       setExports([]);
+      setYouTubeUploads([]);
       setIsLoading(false);
       return;
     }
@@ -29,16 +36,18 @@ export function useProjectWorkspace(projectId: string | undefined) {
     setIsLoading(true);
     setError(null);
     try {
-      const [projectRecord, projectAssets, shorts, projectExports] = await Promise.all([
+      const [projectRecord, projectAssets, shorts, projectExports, projectYouTubeUploads] = await Promise.all([
         projectRepository.getProject(projectId),
         projectRepository.listProjectAssets(projectId),
         projectRepository.listShortProjects(projectId),
         projectRepository.listProjectExports(projectId),
+        projectRepository.listProjectYouTubeUploads(projectId),
       ]);
       setProject(projectRecord ? (normalizeLegacyEditorProjectRecord(projectRecord) as ContentProjectRecord) : null);
       setAssets(projectAssets);
       setShortProjects(shorts);
       setExports(projectExports);
+      setYouTubeUploads(projectYouTubeUploads);
     } catch (err) {
       console.error("Failed to load project workspace", err);
       setError(err instanceof Error ? err.message : "Failed to load project workspace");
@@ -165,17 +174,34 @@ export function useProjectWorkspace(projectId: string | undefined) {
     [project, refresh, saveProject]
   );
 
+  const saveYouTubeUpload = useCallback(
+    async (record: ProjectYouTubeUploadRecord) => {
+      await projectRepository.putProjectYouTubeUpload(record);
+      if (project) {
+        await saveProject({
+          ...project,
+          updatedAt: Math.max(project.updatedAt, record.uploadedAt),
+          lastOpenedAt: Math.max(project.lastOpenedAt, record.uploadedAt),
+        });
+      }
+      await refresh();
+    },
+    [project, refresh, saveProject]
+  );
+
   return {
     project,
     assets,
     shortProjects,
     exports,
+    youtubeUploads,
     sourceAssets,
     activeSourceAsset,
     isLoading,
     error,
     refresh,
     saveProject,
+    saveYouTubeUpload,
     setActiveSourceAsset,
     addAssets,
     renameAsset,

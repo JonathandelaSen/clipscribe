@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { Clapperboard, Download, Film, Languages, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { AiMetadataHub } from "@/components/creator/AiMetadataHub";
+import { ProjectYouTubeUploadList } from "@/components/creator/ProjectYouTubeUploadList";
 import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
@@ -18,6 +19,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Toaster } from "@/components/ui/sonner";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
 import type { BackgroundTaskRecord } from "@/lib/background-tasks/types";
+import { resolveYouTubePublishView } from "@/lib/creator/youtube-publish";
 import { useProjectWorkspace } from "@/hooks/useProjectWorkspace";
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
@@ -69,18 +71,27 @@ function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: Backgroun
 }
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const tabParam = searchParams.get("tab");
+  const viewParam = searchParams.get("view");
   const initialAssetId = searchParams.get("assetId") ?? undefined;
   const initialExportId = searchParams.get("exportId") ?? undefined;
+  const selectedUploadId = searchParams.get("uploadId") ?? undefined;
   const currentTab: WorkspaceTab =
     tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
+  const publishView = resolveYouTubePublishView({
+    requestedView: viewParam,
+    assetId: initialAssetId,
+    exportId: initialExportId,
+  });
 
   const {
     project,
     assets,
     shortProjects,
     exports,
+    youtubeUploads,
     activeSourceAsset,
     isLoading,
     error,
@@ -88,6 +99,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     addAssets,
     renameAsset,
     deleteAsset,
+    saveYouTubeUpload,
     setActiveSourceAsset,
   } = useProjectWorkspace(projectId);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
@@ -223,6 +235,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : "No se pudo iniciar la nueva transcripción");
     }
+  };
+
+  const handleYouTubeUploadSuccess = async (record: (typeof youtubeUploads)[number]) => {
+    if (!project) return;
+    await saveYouTubeUpload(record);
+    const nextParams = new URLSearchParams(searchParams.toString());
+    nextParams.set("tab", "publish");
+    nextParams.set("view", "list");
+    nextParams.set("uploadId", record.id);
+    nextParams.delete("assetId");
+    nextParams.delete("exportId");
+    router.replace(`/projects/${encodeURIComponent(project.id)}?${nextParams.toString()}`);
   };
 
   if (isLoading) {
@@ -425,12 +449,21 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           )}
 
           {currentTab === "publish" && (
-            <YouTubeUploadHub
-              projectId={project.id}
-              initialAssetId={initialAssetId}
-              initialExportId={initialExportId}
-              embedded
-            />
+            publishView === "new" ? (
+              <YouTubeUploadHub
+                projectId={project.id}
+                initialAssetId={initialAssetId}
+                initialExportId={initialExportId}
+                embedded
+                onUploadSuccess={handleYouTubeUploadSuccess}
+              />
+            ) : (
+              <ProjectYouTubeUploadList
+                projectId={project.id}
+                uploads={youtubeUploads}
+                selectedUploadId={selectedUploadId}
+              />
+            )
           )}
 
           {currentTab === "exports" && (
@@ -467,7 +500,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                               variant="outline"
                               className="rounded-xl border-cyan-300/20 bg-cyan-400/10 text-cyan-50 hover:bg-cyan-400/15"
                             >
-                              <Link href={`/projects/${encodeURIComponent(project.id)}?tab=publish&exportId=${encodeURIComponent(record.id)}`}>
+                              <Link href={`/projects/${encodeURIComponent(project.id)}?tab=publish&view=new&exportId=${encodeURIComponent(record.id)}`}>
                                 <Upload className="mr-2 h-4 w-4" />
                                 Publish to YouTube
                               </Link>

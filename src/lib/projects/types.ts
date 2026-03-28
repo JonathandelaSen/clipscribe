@@ -38,6 +38,50 @@ export interface AssetTranscriptRecord {
 
 export type ProjectExportKind = "short" | "timeline";
 export type ProjectExportStatus = "completed" | "failed";
+export type ProjectYouTubeUploadSourceMode = "local_file" | "project_asset" | "project_export";
+export type ProjectYouTubeUploadStepState = "applied" | "skipped" | "failed";
+
+export interface ProjectYouTubeUploadDraftSnapshot {
+  title: string;
+  description: string;
+  privacyStatus: "private" | "unlisted" | "public";
+  tags: string[];
+  categoryId?: string;
+  defaultLanguage?: string;
+  publishAt?: string;
+  recordingDate?: string;
+  localizations: Array<{
+    locale: string;
+    title: string;
+    description: string;
+  }>;
+}
+
+export interface ProjectYouTubeUploadResultSnapshot {
+  processingStatus: string;
+  uploadStatus?: string;
+  failureReason?: string;
+  rejectionReason?: string;
+  privacyStatus?: string;
+  thumbnailState: ProjectYouTubeUploadStepState;
+  captionState: ProjectYouTubeUploadStepState;
+}
+
+export interface ProjectYouTubeUploadRecord {
+  id: string;
+  projectId: string;
+  uploadedAt: number;
+  videoId: string;
+  watchUrl: string;
+  studioUrl: string;
+  sourceMode: ProjectYouTubeUploadSourceMode;
+  sourceAssetId?: string;
+  sourceExportId?: string;
+  outputAssetId?: string;
+  sourceFilename: string;
+  draft: ProjectYouTubeUploadDraftSnapshot;
+  result: ProjectYouTubeUploadResultSnapshot;
+}
 
 export interface ProjectExportRecord {
   id: string;

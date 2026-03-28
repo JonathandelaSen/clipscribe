@@ -1,7 +1,13 @@
 import Dexie, { type EntityTable } from 'dexie';
 import type { CreatorLLMRunRecord } from '@/lib/creator/types';
 import type { CreatorShortProjectRecord } from '@/lib/creator/storage';
-import type { AssetTranscriptRecord, ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from '@/lib/projects/types';
+import type {
+  AssetTranscriptRecord,
+  ContentProjectRecord,
+  ProjectAssetRecord,
+  ProjectExportRecord,
+  ProjectYouTubeUploadRecord,
+} from '@/lib/projects/types';
 
 // Subclass Dexie to provide types
 export class AudioTranscriberDB extends Dexie {
@@ -10,6 +16,7 @@ export class AudioTranscriberDB extends Dexie {
   assetTranscripts!: EntityTable<AssetTranscriptRecord, 'assetId'>;
   projectShorts!: EntityTable<CreatorShortProjectRecord, 'id'>;
   projectExports!: EntityTable<ProjectExportRecord, 'id'>;
+  projectYouTubeUploads!: EntityTable<ProjectYouTubeUploadRecord, 'id'>;
   creatorLlmRuns!: EntityTable<CreatorLLMRunRecord, 'id'>;
 
   constructor() {
@@ -50,6 +57,18 @@ export class AudioTranscriberDB extends Dexie {
       projectShorts:
         'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
       projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
+    });
+
+    this.version(4).stores({
+      projects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio, activeSourceAssetId',
+      projectAssets: 'id, projectId, createdAt, updatedAt, kind, role, origin',
+      assetTranscripts: 'assetId, projectId, updatedAt, timestamp',
+      projectShorts:
+        'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
+      projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      projectYouTubeUploads:
+        'id, projectId, uploadedAt, videoId, sourceMode, sourceAssetId, sourceExportId, outputAssetId',
       creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
     });
   }

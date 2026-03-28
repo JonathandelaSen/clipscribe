@@ -119,3 +119,22 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
     .filter(Boolean)
     .join("\n");
 }
+
+export function buildCollapsedVideoInfoPromptPreview(promptText: string): {
+  displayText: string;
+  transcriptText: string;
+} {
+  const marker = "\nTranscript:\n";
+  const markerIndex = promptText.indexOf(marker);
+  if (markerIndex === -1) {
+    return {
+      displayText: promptText,
+      transcriptText: "",
+    };
+  }
+
+  return {
+    displayText: `${promptText.slice(0, markerIndex)}\n...\nTranscript:\n[see Transcript accordion below]`,
+    transcriptText: promptText.slice(markerIndex + marker.length),
+  };
+}

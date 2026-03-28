@@ -8,6 +8,7 @@ import { normalizeVideoInfoGenerateRequest } from "../../../src/lib/server/creat
 import { mapVideoInfoOpenAIResponse } from "../../../src/lib/server/creator/video-info/mapper";
 import { generateVideoInfoWithOpenAI } from "../../../src/lib/server/creator/video-info/openai";
 import {
+  buildCollapsedVideoInfoPromptPreview,
   buildVideoInfoPrompt,
   CREATOR_VIDEO_INFO_PROMPT_VERSION,
 } from "../../../src/lib/server/creator/video-info/prompt";
@@ -165,6 +166,15 @@ test("buildVideoInfoPrompt applies prompt customization layers and field instruc
   assert.match(prompt, /Always keep the wording creator-native/i);
   assert.match(prompt, /titleIdeas: Use emojis only when they sharpen the hook/i);
   assert.match(prompt, /chapters: Use concrete timestamps for chapters/i);
+});
+
+test("buildCollapsedVideoInfoPromptPreview keeps the transcript in the accordion payload only", () => {
+  const prompt = buildVideoInfoPrompt(baseRequest);
+  const preview = buildCollapsedVideoInfoPromptPreview(prompt);
+
+  assert.match(preview.displayText, /\n\.\.\.\nTranscript:\n\[see Transcript accordion below\]$/);
+  assert.doesNotMatch(preview.displayText, /\[0:00-0:06\]/);
+  assert.match(preview.transcriptText, /\[0:00-0:06\] This is the opening hook\./);
 });
 
 test("mapVideoInfoOpenAIResponse returns the expected video info payload", () => {

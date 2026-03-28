@@ -13,9 +13,11 @@ export default async function CreatorYouTubePage({
   if (projectId) {
     const target = new URLSearchParams({ tab: "publish" });
     if (assetId) {
+      target.set("view", "new");
       target.set("assetId", assetId);
     }
     if (exportId) {
+      target.set("view", "new");
       target.set("exportId", exportId);
     }
     redirect(`/projects/${encodeURIComponent(projectId)}?${target.toString()}`);

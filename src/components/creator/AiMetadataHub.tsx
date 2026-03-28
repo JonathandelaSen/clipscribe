@@ -31,6 +31,8 @@ import {
   resolveVideoInfoPromptFieldInstruction,
   resolveVideoInfoPromptSlotLine,
   sanitizeVideoInfoPromptProfile,
+  selectVideoInfoPromptCustomizationSnapshot,
+  type VideoInfoPromptEditorMode,
 } from "@/lib/creator/prompt-customization";
 import {
   appendProjectVideoInfoRecord,
@@ -38,7 +40,7 @@ import {
   removeProjectVideoInfoRecord,
   resolveProjectVideoInfoHistory,
 } from "@/lib/creator/video-info-storage";
-import { buildVideoInfoPrompt } from "@/lib/server/creator/video-info/prompt";
+import { buildCollapsedVideoInfoPromptPreview, buildVideoInfoPrompt } from "@/lib/server/creator/video-info/prompt";
 import type {
   CreatorPromptSlotOverrideMode,
   CreatorVideoInfoBlock,
@@ -66,8 +68,6 @@ type VideoInfoBlockOption = {
   label: string;
   accent: string;
 };
-
-type PromptEditorMode = "global" | "run";
 
 const PRIMARY_VIDEO_INFO_BLOCK_OPTIONS: VideoInfoBlockOption[] = [
   {
@@ -396,7 +396,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
   } = useCreatorAiSettings();
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
   const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>([]);
-  const [promptEditorMode, setPromptEditorMode] = useState<PromptEditorMode>("global");
+  const [promptEditorMode, setPromptEditorMode] = useState<VideoInfoPromptEditorMode>("global");
   const [globalPromptProfileDraft, setGlobalPromptProfileDraft] = useState<CreatorVideoInfoPromptProfile>(
     createEmptyVideoInfoPromptProfile()
   );
@@ -576,7 +576,14 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     [creatorVideoInfoRequestBase]
   );
 
-  const activePromptSnapshot = promptEditorMode === "global" ? globalPromptSnapshot : runPromptSnapshot;
+  const activePromptSnapshot = useMemo(
+    () =>
+      selectVideoInfoPromptCustomizationSnapshot(promptEditorMode, {
+        globalSnapshot: globalPromptSnapshot,
+        runSnapshot: runPromptSnapshot,
+      }),
+    [globalPromptSnapshot, promptEditorMode, runPromptSnapshot]
+  );
 
   const handleGenerateVideoInfo = useCallback(async (promptCustomization?: CreatorVideoInfoPromptCustomizationSnapshot) => {
     const creatorVideoInfoRequest = buildVideoInfoRequestWithPrompt(promptCustomization);
@@ -642,18 +649,17 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     () => (promptSummaryRequest ? buildVideoInfoPrompt(promptSummaryRequest) : ""),
     [promptSummaryRequest]
   );
-  const [promptPreviewDisplay, promptPreviewTranscript] = useMemo(() => {
-    const marker = "\nTranscript:\n";
-    const markerIndex = promptPreviewText.indexOf(marker);
-    if (markerIndex === -1) {
-      return [promptPreviewText, ""];
-    }
-    const transcriptPlaceholder = '{\n  "transcript": "[see Transcript accordion below]"\n}';
-    return [
-      `${promptPreviewText.slice(0, markerIndex)}${marker}${transcriptPlaceholder}`,
-      promptPreviewText.slice(markerIndex + marker.length),
-    ];
-  }, [promptPreviewText]);
+  const { displayText: promptPreviewDisplay, transcriptText: promptPreviewTranscript } = useMemo(
+    () => buildCollapsedVideoInfoPromptPreview(promptPreviewText),
+    [promptPreviewText]
+  );
+  const primaryGenerateLabel =
+    promptEditorMode === "run" && hasRunDraftEdits ? "Generate with this run only" : "Generate metadata";
+  const secondaryGenerateLabel =
+    promptEditorMode === "run" ? "Generate with saved globals" : "Generate with this run only";
+  const secondaryGenerateSnapshot = promptEditorMode === "run" ? globalPromptSnapshot : runPromptSnapshot;
+  const isGenerateDisabled =
+    !hasTranscriptContext || !hasOpenAIApiKey || isGeneratingVideoInfo || videoInfoBlocks.length === 0;
 
   return (
     <div className="min-h-0 space-y-6 bg-transparent px-0 py-0">
@@ -717,7 +723,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
 
             <Tabs
               value={promptEditorMode}
-              onValueChange={(value) => setPromptEditorMode(value as PromptEditorMode)}
+              onValueChange={(value) => setPromptEditorMode(value as VideoInfoPromptEditorMode)}
               className="mt-5"
             >
               <TabsList className="w-full justify-start">
@@ -929,8 +935,8 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
               <div className="flex flex-wrap items-center gap-3">
                 <Button
                   type="button"
-                  onClick={() => void handleGenerateVideoInfo(globalPromptSnapshot)}
-                  disabled={!hasTranscriptContext || !hasOpenAIApiKey || isGeneratingVideoInfo || videoInfoBlocks.length === 0}
+                  onClick={() => void handleGenerateVideoInfo(activePromptSnapshot)}
+                  disabled={isGenerateDisabled}
                   className="bg-[linear-gradient(135deg,rgba(34,211,238,0.95),rgba(16,185,129,0.95))] font-semibold text-black hover:opacity-95"
                 >
                   {isGeneratingVideoInfo ? (
@@ -938,22 +944,19 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
                   ) : (
                     <WandSparkles className="mr-2 h-4 w-4" />
                   )}
-                  Generate metadata
+                  {primaryGenerateLabel}
                 </Button>
                 <Button
                   type="button"
                   variant="ghost"
-                  onClick={() => void handleGenerateVideoInfo(runPromptSnapshot)}
+                  onClick={() => void handleGenerateVideoInfo(secondaryGenerateSnapshot)}
                   disabled={
-                    !hasTranscriptContext ||
-                    !hasOpenAIApiKey ||
-                    isGeneratingVideoInfo ||
-                    videoInfoBlocks.length === 0 ||
+                    isGenerateDisabled ||
                     !hasRunDraftEdits
                   }
                   className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
                 >
-                  Generate with this run only
+                  {secondaryGenerateLabel}
                 </Button>
               </div>
             </div>

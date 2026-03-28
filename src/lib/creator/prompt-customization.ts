@@ -8,6 +8,8 @@ import type {
   CreatorVideoInfoPromptSlot,
 } from "@/lib/creator/types";
 
+export type VideoInfoPromptEditorMode = "global" | "run";
+
 export const VIDEO_INFO_PROMPT_SLOT_ORDER: CreatorVideoInfoPromptSlot[] = [
   "persona",
 ];
@@ -233,6 +235,19 @@ export function createVideoInfoPromptCustomizationSnapshot(input: {
     hash: computePromptCustomizationHash(effectiveProfile),
     editedSections: summarizeVideoInfoPromptEdits(effectiveProfile),
   };
+}
+
+export function selectVideoInfoPromptCustomizationSnapshot(
+  editorMode: VideoInfoPromptEditorMode,
+  input: {
+    globalSnapshot?: CreatorVideoInfoPromptCustomizationSnapshot;
+    runSnapshot?: CreatorVideoInfoPromptCustomizationSnapshot;
+  }
+): CreatorVideoInfoPromptCustomizationSnapshot | undefined {
+  if (editorMode === "run") {
+    return input.runSnapshot ?? input.globalSnapshot;
+  }
+  return input.globalSnapshot;
 }
 
 export function resolveVideoInfoPromptSlotLine(
