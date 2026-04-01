@@ -88,7 +88,7 @@ test("restoreEditorProjectAfterCanceledExport keeps current edit and restores pr
     filename: "prev.mp4",
     aspectRatio: "16:9",
     resolution: "1080p",
-    engine: "browser",
+    engine: "system",
     status: "completed",
   };
   project.lastError = undefined;
@@ -111,7 +111,7 @@ test("restoreEditorProjectAfterCanceledExport keeps current edit and restores pr
   assert.equal(restored.updatedAt, 1234);
 });
 
-test("editor export records persist engine metadata and legacy project summaries default to browser", () => {
+test("editor export records persist system engine metadata and normalize legacy summaries to system", () => {
   const exportRecord = buildEditorExportRecord({
     projectId: "project_1",
     engine: "system",
@@ -139,7 +139,7 @@ test("editor export records persist engine metadata and legacy project summaries
     },
   } as ReturnType<typeof createEmptyEditorProject>);
 
-  assert.equal(normalizedProject.latestExport?.engine, "browser");
+  assert.equal(normalizedProject.latestExport?.engine, "system");
 });
 
 test("imported projects stay stable under persistence serialization helpers", async () => {

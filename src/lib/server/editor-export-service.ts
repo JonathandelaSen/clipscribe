@@ -11,6 +11,7 @@ import {
 import {
   exportEditorProjectWithSystemFfmpeg,
   isNodeEditorExportCanceledError,
+  type NodeEditorExportProgress,
   type NodeEditorExportAsset,
   type NodeEditorExportResult,
 } from "../editor/node-render";
@@ -138,11 +139,11 @@ export async function renderEditorSystemExport(
     assets: readonly EditorSystemExportUpload[];
     resolution: EditorResolution;
     signal?: AbortSignal;
+    onProgress?: (progress: NodeEditorExportProgress) => void;
   },
   dependencies: EditorSystemExportDependencies = {}
 ): Promise<RenderedEditorSystemExportResult> {
   const capability = getEditorExportCapability({
-    engine: "system",
     project: input.project,
     assets: input.assets.map(({ asset }) => ({ asset })),
   });
@@ -180,6 +181,7 @@ export async function renderEditorSystemExport(
       outputPath,
       overwrite: true,
       signal: input.signal,
+      onProgress: input.onProgress,
     });
     const bytes = toOwnedBytes(new Uint8Array(await readFile(result.outputPath)));
 

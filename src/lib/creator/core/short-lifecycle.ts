@@ -6,7 +6,6 @@ import type {
   CreatorShortEditorState,
   CreatorViralClip,
 } from "@/lib/creator/types";
-import { buildCompletedCreatorShortRenderResponse } from "../system-export-contract";
 import type {
   CreatorAISuggestionInputSummary,
   CreatorShortExportRecord,
@@ -358,34 +357,4 @@ export function buildCompletedShortExportRecord(input: {
     short,
     editor: input.editor,
   };
-}
-
-export function buildLocalBrowserRenderResponse(input: {
-  jobId: string;
-  createdAt: number;
-  short?: CreatorSuggestedShort;
-  clip?: CreatorViralClip;
-  plan?: CreatorShortPlan;
-  filename: string;
-  subtitleBurnedIn: boolean;
-  ffmpegCommandPreview: string[];
-  notes: string[];
-  renderModeUsed?: "fast_ass" | "png_parity";
-  encoderUsed?: string;
-  timingsMs?: CreatorShortExportRecord["timingsMs"];
-  counts?: CreatorShortExportRecord["counts"];
-}) {
-  return buildCompletedCreatorShortRenderResponse({
-    providerMode: "local-browser",
-    jobId: input.jobId,
-    createdAt: input.createdAt,
-    filename: input.filename,
-    subtitleBurnedIn: input.subtitleBurnedIn,
-    ffmpegCommandPreview: input.ffmpegCommandPreview,
-    notes: input.notes,
-    renderModeUsed: input.renderModeUsed,
-    encoderUsed: input.encoderUsed,
-    timingsMs: input.timingsMs,
-    counts: input.counts,
-  });
 }

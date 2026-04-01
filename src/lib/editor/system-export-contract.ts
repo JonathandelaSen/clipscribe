@@ -1,6 +1,7 @@
 import type { EditorAssetRecord, EditorResolution } from "./types";
 
 export const EDITOR_SYSTEM_EXPORT_FORM_FIELDS = {
+  requestId: "requestId",
   project: "project",
   resolution: "resolution",
   engine: "engine",

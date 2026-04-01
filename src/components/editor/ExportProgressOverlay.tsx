@@ -25,7 +25,7 @@ const PHASE_COPY: Record<
     preparing: {
       badge: "Preparing",
       title: "Preparing assets and subtitles",
-      description: "Setting up the browser render workspace, validating media, and staging caption frames.",
+      description: "Validating media, staging captions, and preparing the system export payload.",
       helper: "Keep this tab open while Timeline Studio assembles the export pipeline.",
       label: "Timeline Export",
     },
@@ -55,14 +55,14 @@ const PHASE_COPY: Record<
     preparing: {
       badge: "Preparing",
       title: "Preparing the bake pass",
-      description: "Staging the joined clips and building a temporary render timeline for the baked output.",
-      helper: "Keep this tab open while FFmpeg.wasm prepares the bake workspace.",
+      description: "Staging the joined clips and preparing the baked output for the system renderer.",
+      helper: "Keep this tab open while Timeline Studio assembles the bake payload.",
       label: "Bake Clip",
     },
     rendering: {
       badge: "Rendering",
       title: "Baking the joined clip",
-      description: "FFmpeg.wasm is rendering the selected joined block into one standalone clip.",
+      description: "System FFmpeg is rendering the selected joined block into one standalone clip.",
       helper: "Timeline interactions are paused until the baked clip is ready.",
       label: "Bake Clip",
     },
@@ -177,7 +177,7 @@ export function ExportProgressOverlay({
             </div>
             <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
               <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Engine</div>
-              <div className="mt-2 text-sm font-medium text-white">{engineLabel ?? "FFmpeg.wasm"}</div>
+              <div className="mt-2 text-sm font-medium text-white">{engineLabel ?? "System FFmpeg"}</div>
             </div>
             <div className="rounded-[1rem] border border-white/10 bg-black/20 p-3">
               <div className="text-[10px] uppercase tracking-[0.24em] text-white/42">Destination</div>

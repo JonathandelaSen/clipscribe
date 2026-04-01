@@ -183,6 +183,23 @@ function renderChunkToCanvas(input: {
   return canvas;
 }
 
+export async function renderEditorSubtitlePreviewBlob(input: {
+  width: number;
+  height: number;
+  text: string;
+  project: EditorProjectRecord;
+  signal?: AbortSignal;
+}): Promise<Blob | null> {
+  const text = String(input.text ?? "").trim();
+  if (!text) return null;
+
+  await ensureCanvasFont(input.signal);
+  throwIfBrowserRenderCanceled(input.signal);
+  const canvas = renderChunkToCanvas(input);
+  throwIfBrowserRenderCanceled(input.signal);
+  return canvas.convertToBlob({ type: "image/png" });
+}
+
 export async function renderTimelineSubtitlesToPngs(input: {
   chunks: TimelineCaptionChunk[];
   project: EditorProjectRecord;
@@ -204,14 +221,15 @@ export async function renderTimelineSubtitlesToPngs(input: {
     const safeEnd = typeof end === "number" && Number.isFinite(end) ? end : start + 2.5;
     if (safeEnd <= start) continue;
 
-    const canvas = renderChunkToCanvas({
+    const blob = await renderEditorSubtitlePreviewBlob({
       width: input.width,
       height: input.height,
       text,
       project: input.project,
+      signal: input.signal,
     });
     throwIfBrowserRenderCanceled(input.signal);
-    const blob = await canvas.convertToBlob({ type: "image/png" });
+    if (!blob) continue;
     throwIfBrowserRenderCanceled(input.signal);
     const pngBytes = new Uint8Array(await blob.arrayBuffer());
     frames.push({

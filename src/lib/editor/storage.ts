@@ -70,9 +70,9 @@ export function getDefaultEditorSubtitleStyle(
 
   return resolveCreatorSubtitleStyle(preset, {
     borderColor: "#111111",
-    borderWidth: 4.8,
-    shadowOpacity: 0.46,
-    shadowDistance: 3,
+    borderWidth: 12,
+    shadowOpacity: 0.52,
+    shadowDistance: 3.4,
   });
 }
 
@@ -304,7 +304,7 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
     latestExport: project.latestExport
       ? {
           ...(project.latestExport as LegacyEditorExportSummary),
-          engine: project.latestExport.engine === "browser" ? "browser" : "system",
+          engine: "system",
         }
       : undefined,
     timeline: {
@@ -331,7 +331,7 @@ export function normalizeLegacyEditorExportRecord(
 ): EditorExportRecord {
   return {
     ...record,
-    engine: record.engine === "browser" ? "browser" : "system",
+    engine: "system",
   };
 }
 
@@ -461,7 +461,7 @@ export function buildEditorExportRecord(input: {
   projectId: string;
   sourceAssetId?: string;
   outputAssetId?: string;
-  engine: EditorExportEngine;
+  engine?: EditorExportEngine;
   filename: string;
   mimeType: string;
   sizeBytes: number;
@@ -484,7 +484,7 @@ export function buildEditorExportRecord(input: {
     outputAssetId: input.outputAssetId,
     createdAt: input.createdAt ?? Date.now(),
     status: input.status ?? (input.error ? "failed" : "completed"),
-    engine: input.engine,
+    engine: input.engine ?? "system",
     filename: input.filename,
     mimeType: input.mimeType,
     sizeBytes: input.sizeBytes,

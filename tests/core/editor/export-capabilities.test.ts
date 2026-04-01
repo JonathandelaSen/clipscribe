@@ -48,7 +48,6 @@ test("system export capability passes for a supported upload-only timeline", () 
   const { project, asset } = createBaseProject();
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }],
   });
@@ -70,7 +69,6 @@ test("system export capability allows global subtitle burn-in on used assets", (
   };
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }],
   });
@@ -79,18 +77,29 @@ test("system export capability allows global subtitle burn-in on used assets", (
   assert.deepEqual(capability.reasons, []);
 });
 
-test("system export capability blocks non-upload assets on the timeline", () => {
+test("system export capability allows history-backed assets when the file is available", () => {
   const { project, asset } = createBaseProject();
   asset.sourceType = "history";
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }],
   });
 
+  assert.equal(capability.supported, true);
+  assert.deepEqual(capability.reasons, []);
+});
+
+test("system export capability blocks timelines with unresolved referenced assets", () => {
+  const { project } = createBaseProject();
+
+  const capability = getEditorExportCapability({
+    project,
+    assets: [],
+  });
+
   assert.equal(capability.supported, false);
-  assert.match(capability.reasons.join("\n"), /upload assets only/);
+  assert.match(capability.reasons.join("\n"), /unavailable for system export/);
 });
 
 test("system export capability blocks empty timelines", () => {
@@ -98,7 +107,6 @@ test("system export capability blocks empty timelines", () => {
   project.timeline.videoClips = [];
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }],
   });
@@ -139,7 +147,6 @@ test("system export capability accepts image-only timelines when the image asset
   ];
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }],
   });
@@ -167,7 +174,6 @@ test("system export capability ignores incompatible assets that are not used by 
   });
 
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets: [{ asset }, { asset: unusedAsset }],
   });

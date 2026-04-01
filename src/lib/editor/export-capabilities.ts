@@ -1,14 +1,13 @@
 import type {
   EditorAssetRecord,
-  EditorExportEngine,
   EditorProjectRecord,
   EditorResolution,
 } from "./types";
 
-export const EDITOR_EXPORT_ENGINE_LABELS: Record<EditorExportEngine, string> = {
-  browser: "FFmpeg.wasm",
+export const EDITOR_EXPORT_ENGINE_LABELS = {
   system: "System FFmpeg",
-};
+} as const;
+export const EDITOR_EXPORT_ENGINE_LABEL = EDITOR_EXPORT_ENGINE_LABELS.system;
 
 export const EDITOR_EXPORT_OUTPUT_LABEL = "MP4 video";
 
@@ -18,7 +17,7 @@ export interface EditorExportCapabilityResult {
 }
 
 type AssetWithRecord = {
-  asset: Pick<EditorAssetRecord, "id" | "filename" | "sourceType" | "captionSource">;
+  asset: Pick<EditorAssetRecord, "id" | "filename">;
 };
 
 export function getEditorExportOutputLabel(resolution: EditorResolution): string {
@@ -61,28 +60,19 @@ function getSystemExportReasons(
   }
 
   const relevantAssets = filterEditorAssetsForExport(project, assets);
-
-  for (const { asset } of relevantAssets) {
-    if (asset.sourceType !== "upload") {
-      reasons.push(`System FFmpeg supports upload assets only. "${asset.filename}" must use browser export.`);
-    }
+  const referencedAssetIds = getEditorExportReferencedAssetIds(project);
+  if (relevantAssets.length !== referencedAssetIds.size) {
+    reasons.push("One or more timeline assets are unavailable for system export. Reattach them before exporting.");
   }
 
   return reasons;
 }
 
 export function getEditorExportCapability(input: {
-  engine: EditorExportEngine;
   project: EditorProjectRecord;
   assets: readonly AssetWithRecord[];
 }): EditorExportCapabilityResult {
-  const reasons =
-    input.engine === "system"
-      ? getSystemExportReasons(input.project, input.assets)
-      : input.project.timeline.videoClips.length === 0 && input.project.timeline.imageItems.length === 0
-        ? ["Add at least one video clip or image track item to export the project."]
-        : [];
-
+  const reasons = getSystemExportReasons(input.project, input.assets);
   return {
     supported: reasons.length === 0,
     reasons,

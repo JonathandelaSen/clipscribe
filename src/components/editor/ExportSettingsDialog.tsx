@@ -1,12 +1,12 @@
 "use client";
 
-import { Cpu, Film, FolderOpen, Loader2 } from "lucide-react";
+import { Film, FolderOpen, Loader2 } from "lucide-react";
 
 import {
-  EDITOR_EXPORT_ENGINE_LABELS,
+  EDITOR_EXPORT_ENGINE_LABEL,
   EDITOR_EXPORT_OUTPUT_LABEL,
 } from "@/lib/editor/export-capabilities";
-import type { EditorExportEngine, EditorResolution } from "@/lib/editor/types";
+import type { EditorResolution } from "@/lib/editor/types";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -26,34 +26,29 @@ import {
 } from "@/components/ui/select";
 
 const RESOLUTION_OPTIONS: EditorResolution[] = ["720p", "1080p", "4K"];
-const ENGINE_OPTIONS: EditorExportEngine[] = ["browser", "system"];
 
 export function ExportSettingsDialog({
   open,
   onOpenChange,
   resolution,
-  engine,
   destinationName,
   canUseSavePicker,
   isPickingDestination,
   isSubmitting,
   blockingReasons,
   onResolutionChange,
-  onEngineChange,
   onPickDestination,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   resolution: EditorResolution;
-  engine: EditorExportEngine;
   destinationName?: string | null;
   canUseSavePicker: boolean;
   isPickingDestination: boolean;
   isSubmitting: boolean;
   blockingReasons: string[];
   onResolutionChange: (resolution: EditorResolution) => void;
-  onEngineChange: (engine: EditorExportEngine) => void;
   onPickDestination: () => void | Promise<void>;
   onConfirm: () => void | Promise<void>;
 }) {
@@ -71,21 +66,21 @@ export function ExportSettingsDialog({
             Export timeline
           </DialogTitle>
           <DialogDescription className="text-sm text-white/58">
-            Choose the render engine, resolution, and destination before the export starts. Active subtitles will be burned into the MP4.
+            Choose the resolution and destination before the export starts.
           </DialogDescription>
         </DialogHeader>
 
         <div className="relative space-y-5 px-6 py-5">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <section className="rounded-[1.15rem] border border-white/10 bg-black/20 p-4">
-              <div className="flex items-center gap-2 text-sm font-medium text-white/86">
-                <Film className="h-4 w-4 text-cyan-200" />
-                Output
-              </div>
-              <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5 text-sm text-white/78">
-                {EDITOR_EXPORT_OUTPUT_LABEL}
-              </div>
-              <div className="mt-3">
+          <section className="rounded-[1.15rem] border border-white/10 bg-black/20 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-white/86">
+              <Film className="h-4 w-4 text-cyan-200" />
+              Output
+            </div>
+            <div className="mt-3 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5 text-sm text-white/78">
+              {EDITOR_EXPORT_OUTPUT_LABEL}
+            </div>
+            <div className="mt-3 grid gap-4 sm:grid-cols-2">
+              <div>
                 <div className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/40">Resolution</div>
                 <Select value={resolution} onValueChange={(value) => onResolutionChange(value as EditorResolution)}>
                   <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
@@ -100,30 +95,14 @@ export function ExportSettingsDialog({
                   </SelectContent>
                 </Select>
               </div>
-            </section>
-
-            <section className="rounded-[1.15rem] border border-white/10 bg-black/20 p-4">
-              <div className="flex items-center gap-2 text-sm font-medium text-white/86">
-                <Cpu className="h-4 w-4 text-amber-200" />
-                Engine
-              </div>
-              <div className="mt-3">
+              <div>
                 <div className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/40">Renderer</div>
-                <Select value={engine} onValueChange={(value) => onEngineChange(value as EditorExportEngine)}>
-                  <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
-                    <SelectValue placeholder="Engine" />
-                  </SelectTrigger>
-                  <SelectContent className="border-white/10 bg-slate-950 text-white">
-                    {ENGINE_OPTIONS.map((option) => (
-                      <SelectItem key={option} value={option}>
-                        {EDITOR_EXPORT_ENGINE_LABELS[option]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5 text-sm text-white/78">
+                  {EDITOR_EXPORT_ENGINE_LABEL}
+                </div>
               </div>
-            </section>
-          </div>
+            </div>
+          </section>
 
           <section className="rounded-[1.15rem] border border-white/10 bg-black/20 p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -170,7 +149,7 @@ export function ExportSettingsDialog({
 
         <DialogFooter className="relative border-t border-white/8 px-6 py-4 sm:justify-between">
           <div className="text-xs uppercase tracking-[0.24em] text-white/38">
-            {EDITOR_EXPORT_ENGINE_LABELS[engine]} · {resolution}
+            {EDITOR_EXPORT_ENGINE_LABEL} · {resolution}
           </div>
           <div className="flex gap-2">
             <Button

@@ -67,7 +67,7 @@ import {
   type TimelineCaptionChunk,
 } from "@/lib/editor/core/captions";
 import {
-  EDITOR_EXPORT_ENGINE_LABELS,
+  EDITOR_EXPORT_ENGINE_LABEL,
   getEditorExportCapability,
 } from "@/lib/editor/export-capabilities";
 import {
@@ -126,7 +126,6 @@ import {
   type TimelineVideoBlockPlacement,
 } from "@/lib/editor/core/timeline";
 import { prepareTimelineClipBake } from "@/lib/editor/core/bake";
-import { localEditorExportService } from "@/lib/editor/export-service";
 import { buildEditorExportFilename } from "@/lib/editor/export-output";
 import {
   isEditorSavePickerSupported,
@@ -146,8 +145,10 @@ import {
   buildReversedClipPreviewCacheKey,
   renderReversedClipPreview,
 } from "@/lib/editor/preview-proxy";
-import { resolveEditorSubtitleTextLayout } from "@/lib/editor/subtitle-canvas";
-import { resetFFmpeg } from "@/lib/ffmpeg";
+import {
+  renderEditorSubtitlePreviewBlob,
+  resolveEditorSubtitleTextLayout,
+} from "@/lib/editor/subtitle-canvas";
 import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
@@ -168,7 +169,6 @@ import {
 import type {
   EditorAssetRecord,
   EditorAspectRatio,
-  EditorExportEngine,
   EditorProjectRecord,
   EditorResolution,
   ResolvedEditorAsset,
@@ -242,12 +242,6 @@ const EDITOR_SUBTITLE_TIMING_MODE_LABELS: Record<CreatorSubtitleTimingMode, stri
   pair: "2 words",
   triple: "3 words",
 };
-
-function getRenderTaskStatus(stage: BrowserRenderStage) {
-  if (stage === "preparing") return "preparing" as const;
-  if (stage === "rendering") return "running" as const;
-  return "finalizing" as const;
-}
 
 function getExportTaskMessage(stage: BrowserRenderStage) {
   if (stage === "preparing") return "Preparing export snapshot";
@@ -406,7 +400,7 @@ async function copyTextToClipboard(text: string) {
   }
 }
 
-function useObjectUrl(file: File | null | undefined) {
+function useObjectUrl(file: Blob | null | undefined) {
   const url = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
   useEffect(() => {
     return () => {
@@ -792,7 +786,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const deferredLibrarySearch = useDeferredValue(librarySearch);
   const [playheadSeconds, setPlayheadSeconds] = useState(0);
   const [exportResolution, setExportResolution] = useState<EditorResolution>("1080p");
-  const [exportEngine, setExportEngine] = useState<EditorExportEngine>("system");
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [exportDestination, setExportDestination] = useState<ExportDestination | null>(null);
   const [isPickingExportDestination, setIsPickingExportDestination] = useState(false);
@@ -813,6 +806,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [isSubtitleHistoryDialogOpen, setIsSubtitleHistoryDialogOpen] = useState(false);
   const [focusedJoinedClipId, setFocusedJoinedClipId] = useState<string | null>(null);
   const [timelinePreviewFrameSize, setTimelinePreviewFrameSize] = useState({ width: 0, height: 0 });
+  const [currentCaptionPreviewBlob, setCurrentCaptionPreviewBlob] = useState<Blob | null>(null);
   const [panelVisibility, setPanelVisibility] = useState<PanelVisibilityState>({
     left: true,
     center: true,
@@ -828,7 +822,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const isBakingClip = Boolean(activeBakeTask && isBackgroundTaskActive(activeBakeTask));
   const isRenderBusy = isExporting || isBakingClip;
   const isInteractionLocked = isBakingClip;
-  const systemExportProgressTimerRef = useRef<number | null>(null);
 
   const beginRenderSession = useCallback(() => {
     return createActiveBrowserRenderSession(++renderSessionCounterRef.current);
@@ -878,35 +871,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     };
   }, [panelVisibility.center, previewMode.kind, project?.aspectRatio]);
 
-  const stopSystemExportProgressRamp = useCallback(() => {
-    if (systemExportProgressTimerRef.current == null) return;
-    window.clearInterval(systemExportProgressTimerRef.current);
-    systemExportProgressTimerRef.current = null;
-  }, []);
-
-  const startSystemExportProgressRamp = useCallback((onProgress: (progress: number) => void) => {
-    stopSystemExportProgressRamp();
-    let currentProgress = 18;
-    systemExportProgressTimerRef.current = window.setInterval(() => {
-      if (currentProgress >= 92) return;
-      const remaining = 92 - currentProgress;
-      const step = Math.max(1, Math.round(remaining * 0.12));
-      currentProgress = Math.min(92, currentProgress + step);
-      onProgress(currentProgress);
-    }, 450);
-  }, [stopSystemExportProgressRamp]);
-
   const handleOpenExportDialog = useCallback(() => {
     setIsExportDialogOpen(true);
   }, []);
 
   const handleExportResolutionChange = useCallback((nextResolution: EditorResolution) => {
     setExportResolution(nextResolution);
-    setExportDestination(null);
-  }, []);
-
-  const handleExportEngineChange = useCallback((nextEngine: EditorExportEngine) => {
-    setExportEngine(nextEngine);
     setExportDestination(null);
   }, []);
 
@@ -1083,12 +1053,11 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     () =>
       project
         ? getEditorExportCapability({
-            engine: exportEngine,
             project,
             assets: resolvedAssets.map(({ asset }) => ({ asset })),
           })
         : { supported: false, reasons: [] as string[] },
-    [exportEngine, project, resolvedAssets]
+    [project, resolvedAssets]
   );
   const exportBlockingReasons = useMemo(() => {
     const reasons = [...exportCapability.reasons];
@@ -1439,6 +1408,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       timelinePreviewFrameSize.height / subtitlePreviewRenderSize.height
     );
   }, [subtitlePreviewRenderSize, timelinePreviewFrameSize.height, timelinePreviewFrameSize.width]);
+  const currentCaptionPreviewUrl = useObjectUrl(currentCaptionPreviewBlob);
   const timelineImagePreviewLayout = useMemo(() => {
     if (
       !isTimelinePreview ||
@@ -1689,6 +1659,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isRenderBusy]);
+
+  useEffect(() => {
+    if (!project || !currentCaption || !subtitlePreviewRenderSize || !project.subtitles.enabled) {
+      setCurrentCaptionPreviewBlob(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    void renderEditorSubtitlePreviewBlob({
+      width: subtitlePreviewRenderSize.width,
+      height: subtitlePreviewRenderSize.height,
+      text: String(currentCaption.text ?? ""),
+      project,
+      signal: controller.signal,
+    })
+      .then((blob) => {
+        if (controller.signal.aborted) return;
+        setCurrentCaptionPreviewBlob(blob);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        setCurrentCaptionPreviewBlob(null);
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [currentCaption, project, subtitlePreviewRenderSize]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -2519,38 +2517,36 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
           session.controller.abort();
-          resetFFmpeg();
           bakeSessionRef.current = null;
           toast("Bake canceled");
         });
 
         try {
-          const result = await localEditorExportService.exportProject({
+          session.stage = "rendering";
+          task.update({
+            status: "running",
+            progress: 18,
+            message: "Baking joined clip",
+          });
+          const systemResult = await requestSystemEditorExport({
             project: bakeProject,
             resolvedAssets: bakeResolvedAssets,
-            historyMap,
             resolution: exportResolution,
-            onProgress: (progress) => {
+            signal: session.controller.signal,
+            onServerProgress: (progressPct) => {
               task.update({
                 status: "running",
-                progress,
+                progress: 18 + progressPct * 0.74,
                 message: "Baking joined clip",
               });
             },
-            renderLifecycle: {
-              signal: session.controller.signal,
-              onStageChange: (stage) => {
-                const currentSession = bakeSessionRef.current;
-                if (!currentSession || currentSession.id !== session.id) return;
-                currentSession.stage = stage;
-                task.update({
-                  status: getRenderTaskStatus(stage),
-                  progress: stage === "handoff" ? 96 : undefined,
-                  message: getBakeTaskMessage(stage),
-                });
-              },
-            },
           });
+          session.stage = "handoff";
+          const result = {
+            file: systemResult.file,
+            width: systemResult.width,
+            height: systemResult.height,
+          };
           if (bakeSessionRef.current?.id !== session.id || task.isCanceled()) return;
 
           task.update({
@@ -2635,7 +2631,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
           toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
         } catch (error) {
-          if (isBrowserRenderCanceledError(error) || session.controller.signal.aborted || task.isCanceled()) {
+          if (
+            isBrowserRenderCanceledError(error) ||
+            isAbortLikeError(error) ||
+            session.controller.signal.aborted ||
+            task.isCanceled()
+          ) {
             return;
           }
           const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
@@ -3460,7 +3461,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return;
     }
 
-    const selectedEngine = exportEngine;
     const selectedResolution = exportResolution;
     const destination = exportDestination;
     const usesSavePicker = Boolean(isSavePickerSupported && destination);
@@ -3470,7 +3470,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     startTimelineExport({
       projectId,
       title: `Exporting ${project.name}`,
-      message: `${selectedResolution} · ${EDITOR_EXPORT_ENGINE_LABELS[selectedEngine]}`,
+      message: `${selectedResolution} · ${EDITOR_EXPORT_ENGINE_LABEL}`,
       run: async (task) => {
         const session = beginRenderSession();
         exportSessionRef.current = session;
@@ -3482,72 +3482,39 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
           session.controller.abort();
-          if (selectedEngine === "browser") {
-            resetFFmpeg();
-          }
-          stopSystemExportProgressRamp();
           exportSessionRef.current = null;
           toast("Export canceled");
         });
 
         try {
-          const result =
-            selectedEngine === "browser"
-              ? await localEditorExportService.exportProject({
-                  project: exportSnapshot,
-                  resolvedAssets,
-                  historyMap,
-                  resolution: selectedResolution,
-                  onProgress: (progress) => {
-                    task.update({
-                      status: "running",
-                      progress,
-                      message: "Rendering timeline export",
-                    });
-                  },
-                  renderLifecycle: {
-                    signal: session.controller.signal,
-                    onStageChange: (stage) => {
-                      const currentSession = exportSessionRef.current;
-                      if (!currentSession || currentSession.id !== session.id) return;
-                      currentSession.stage = stage;
-                      task.update({
-                        status: getRenderTaskStatus(stage),
-                        progress: stage === "handoff" ? 96 : undefined,
-                        message: getExportTaskMessage(stage),
-                      });
-                    },
-                  },
-                })
-              : await (async () => {
-                  task.update({
-                    status: "running",
-                    progress: 18,
-                    message: "Rendering timeline export",
-                  });
-                  startSystemExportProgressRamp((progress) => {
-                    task.update({
-                      status: "running",
-                      progress,
-                      message: "Rendering timeline export",
-                    });
-                  });
-                  const systemResult = await requestSystemEditorExport({
-                    project: exportSnapshot,
-                    resolvedAssets,
-                    resolution: selectedResolution,
-                    signal: session.controller.signal,
-                  });
-                  stopSystemExportProgressRamp();
-                  return {
-                    file: systemResult.file,
-                    width: systemResult.width,
-                    height: systemResult.height,
-                    warnings: systemResult.warnings,
-                    ffmpegCommandPreview: systemResult.debugFfmpegCommand,
-                    notes: systemResult.debugNotes,
-                  };
-                })();
+          session.stage = "rendering";
+          task.update({
+            status: "running",
+            progress: 18,
+            message: "Rendering timeline export",
+          });
+          const systemResult = await requestSystemEditorExport({
+            project: exportSnapshot,
+            resolvedAssets,
+            resolution: selectedResolution,
+            signal: session.controller.signal,
+            onServerProgress: (progressPct) => {
+              task.update({
+                status: "running",
+                progress: 18 + progressPct * 0.74,
+                message: "Rendering timeline export",
+              });
+            },
+          });
+          session.stage = "handoff";
+          const result = {
+            file: systemResult.file,
+            width: systemResult.width,
+            height: systemResult.height,
+            warnings: systemResult.warnings,
+            ffmpegCommandPreview: systemResult.debugFfmpegCommand,
+            notes: systemResult.debugNotes,
+          };
           if (exportSessionRef.current?.id !== session.id || task.isCanceled()) return;
 
           task.update({
@@ -3588,7 +3555,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           const exportRecord = buildEditorExportRecord({
             projectId: exportSnapshot.id,
             outputAssetId: outputAsset.id,
-            engine: selectedEngine,
             filename: recordedFilename,
             mimeType: result.file.type,
             sizeBytes: result.file.size,
@@ -3638,7 +3604,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
           toast.success(`Exported ${recordedFilename}`);
         } catch (err) {
-          stopSystemExportProgressRamp();
           if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted || task.isCanceled()) {
             return;
           }
@@ -3651,7 +3616,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           try {
             const failedRecord = buildEditorExportRecord({
               projectId: exportSnapshot.id,
-              engine: selectedEngine,
               filename: usesSavePicker && destination
                 ? destination.name
                 : buildEditorExportFilename(exportSnapshot.name, exportSnapshot.aspectRatio, selectedResolution),
@@ -3681,7 +3645,6 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           toast.error(toastMessage);
           throw err;
         } finally {
-          stopSystemExportProgressRamp();
           if (exportSessionRef.current?.id === session.id) {
             exportSessionRef.current = null;
           }
@@ -3695,17 +3658,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     beginRenderSession,
     exportBlockingReasons,
     exportDestination,
-    exportEngine,
     exportResolution,
-    historyMap,
     isSavePickerSupported,
     project,
     projectDuration,
     resolvedAssets,
     projectId,
     startTimelineExport,
-    startSystemExportProgressRamp,
-    stopSystemExportProgressRamp,
   ]);
 
   const handleCopyLastError = useCallback(async () => {
@@ -4289,7 +4248,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       </div>
                                     )
                                   ) : null}
-                                  {project.subtitles.enabled && currentCaption && currentCaptionLayout && currentCaptionStyle ? (
+                                  {project.subtitles.enabled && currentCaptionPreviewUrl ? (
+                                    // eslint-disable-next-line @next/next/no-img-element
+                                    <img
+                                      src={currentCaptionPreviewUrl}
+                                      alt=""
+                                      className="pointer-events-none absolute inset-0 h-full w-full select-none"
+                                      draggable={false}
+                                    />
+                                  ) : project.subtitles.enabled && currentCaption && currentCaptionLayout && currentCaptionStyle ? (
                                     <div
                                       className="pointer-events-none absolute text-center"
                                       style={{
@@ -5219,14 +5186,14 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                 </label>
                               </div>
                               <label className="text-xs text-white/55">
-                                Outline Width · {(selectedSubtitleTrack.style?.borderWidth ?? 3).toFixed(1)}
+                                Outline Width · {(selectedSubtitleTrack.style?.borderWidth ?? 12).toFixed(1)}
                               </label>
                               <input
                                 type="range"
                                 min={0}
-                                max={8}
+                                max={32}
                                 step={0.1}
-                                value={selectedSubtitleTrack.style?.borderWidth ?? 3}
+                                value={selectedSubtitleTrack.style?.borderWidth ?? 12}
                                 onChange={(event) =>
                                   updateSubtitleTrack((subtitles) => ({
                                     ...subtitles,
@@ -6480,14 +6447,12 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         open={isExportDialogOpen}
         onOpenChange={setIsExportDialogOpen}
         resolution={exportResolution}
-        engine={exportEngine}
         destinationName={exportDestination?.name}
         canUseSavePicker={isSavePickerSupported}
         isPickingDestination={isPickingExportDestination}
         isSubmitting={isExporting}
         blockingReasons={exportBlockingReasons}
         onResolutionChange={handleExportResolutionChange}
-        onEngineChange={handleExportEngineChange}
         onPickDestination={handlePickExportDestination}
         onConfirm={handleExport}
       />

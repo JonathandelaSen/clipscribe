@@ -6,7 +6,7 @@ import path from "node:path";
 import { buildEditorAssFilterExpression, buildEditorAssSubtitleDocument } from "./ass-subtitles";
 import { buildProjectSubtitleTimeline } from "./core/captions";
 import { getEditorExportCapability } from "./export-capabilities";
-import { buildEditorExportPlan } from "./core/export-plan";
+import { buildEditorExportPlan, type ResolvedExportInput } from "./core/export-plan";
 import type { CommandRunResult, CommandRunner } from "./node-media";
 import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
 import type { EditorAssetRecord, EditorProjectRecord, EditorResolution } from "./types";
@@ -47,6 +47,8 @@ export interface NodeEditorExportResult {
   notes: string[];
   dryRun: boolean;
 }
+
+const STILL_IMAGE_EXPORT_FPS = 30;
 
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -157,13 +159,34 @@ function assertCliExportSupported(
   assets: readonly NodeEditorExportAsset[]
 ) {
   const capability = getEditorExportCapability({
-    engine: "system",
     project,
     assets,
   });
   if (!capability.supported) {
     throw new Error(capability.reasons.join("\n"));
   }
+}
+
+function isStillImageCompatibilityExport(project: EditorProjectRecord): boolean {
+  return project.timeline.videoClips.length === 0 && project.timeline.imageItems.length > 0;
+}
+
+function buildNodeEditorInputArgs(input: {
+  inputs: readonly ResolvedExportInput[];
+  imageFramerate?: number | null;
+}): string[] {
+  return input.inputs.flatMap((item) => {
+    if (item.asset.kind !== "image") {
+      return ["-i", item.path];
+    }
+
+    const args = ["-loop", "1"];
+    if (typeof input.imageFramerate === "number" && Number.isFinite(input.imageFramerate) && input.imageFramerate > 0) {
+      args.push("-framerate", String(input.imageFramerate));
+    }
+    args.push("-i", item.path);
+    return args;
+  });
 }
 
 export function buildNodeEditorExportCommand(input: {
@@ -194,6 +217,7 @@ export function buildNodeEditorExportCommand(input: {
     })),
     resolution: input.resolution,
   });
+  const useStillImageCompatibilityPreset = isStillImageCompatibilityExport(input.project);
 
   let filterComplex = exportPlan.filterComplex;
   let videoTrackLabel = exportPlan.videoTrackLabel;
@@ -210,7 +234,10 @@ export function buildNodeEditorExportCommand(input: {
 
   const ffmpegArgs = [
     input.overwrite ? "-y" : "-n",
-    ...exportPlan.ffmpegArgs,
+    ...buildNodeEditorInputArgs({
+      inputs: exportPlan.inputs,
+      imageFramerate: useStillImageCompatibilityPreset ? STILL_IMAGE_EXPORT_FPS : null,
+    }),
     "-filter_complex",
     filterComplex,
     ...mapArgs,
@@ -220,11 +247,26 @@ export function buildNodeEditorExportCommand(input: {
     "veryfast",
     "-crf",
     input.resolution === "4K" ? "24" : "22",
-    "-movflags",
-    "+faststart",
   ];
+  if (useStillImageCompatibilityPreset) {
+    ffmpegArgs.push(
+      "-r",
+      String(STILL_IMAGE_EXPORT_FPS),
+      "-tune",
+      "stillimage",
+      "-pix_fmt",
+      "yuv420p"
+    );
+  }
+  ffmpegArgs.push(
+    "-movflags",
+    "+faststart"
+  );
   if (exportPlan.mixedAudioLabel) {
     ffmpegArgs.push("-c:a", "aac", "-b:a", "192k");
+  }
+  if (useStillImageCompatibilityPreset) {
+    ffmpegArgs.push("-t", exportPlan.durationSeconds.toFixed(3), "-shortest");
   }
   ffmpegArgs.push(input.outputPath);
 
@@ -248,8 +290,11 @@ export function buildNodeEditorExportCommand(input: {
         : exportPlan.mixedAudioLabel
           ? "Clip audio only."
           : "No audio track.",
+      useStillImageCompatibilityPreset
+        ? `Still-image compatibility preset enabled: ${STILL_IMAGE_EXPORT_FPS}fps looped image inputs, CFR output, tune=stillimage, yuv420p, and explicit duration clamp.`
+        : "Standard CLI export preset.",
       input.subtitleTrackPath ? "Global subtitle track burned in via ASS." : "No subtitle burn-in is rendered.",
-      input.resolution === "4K" ? "4K uses a slightly higher CRF preset." : "Standard CLI export preset.",
+      input.resolution === "4K" ? "4K uses a slightly higher CRF preset." : "Standard CRF preset.",
     ],
   };
 }

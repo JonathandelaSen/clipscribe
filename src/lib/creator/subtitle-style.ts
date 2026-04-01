@@ -6,6 +6,7 @@ import type {
 
 type SubtitleStylePreset = CreatorVerticalEditorPreset["subtitleStyle"];
 export const CREATOR_SUBTITLE_MAX_LETTER_WIDTH = 1.5;
+export const CREATOR_SUBTITLE_MAX_BORDER_WIDTH = 32;
 
 const HEX_COLOR_RE = /^#?([a-fA-F0-9]{6})$/;
 
@@ -159,7 +160,7 @@ export function resolveCreatorSubtitleStyle(
     borderWidth: clampNumber(
       pickFiniteNumber(input?.borderWidth, input?.outlineWidth, defaults.borderWidth) ?? defaults.borderWidth,
       0,
-      8
+      CREATOR_SUBTITLE_MAX_BORDER_WIDTH
     ),
     shadowColor: normalizeHexColor(input?.shadowColor, defaults.shadowColor),
     shadowOpacity: clampNumber(

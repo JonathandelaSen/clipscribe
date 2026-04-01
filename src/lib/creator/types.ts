@@ -342,7 +342,7 @@ export interface CreatorShortEditorState {
 
 export interface CreatorShortRenderResponse {
   ok: true;
-  providerMode: CreatorAIProviderMode | "mock-render" | "local-browser" | "system";
+  providerMode: CreatorAIProviderMode | "mock-render" | "system";
   jobId: string;
   status: "queued" | "processing" | "completed";
   createdAt: number;

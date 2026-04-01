@@ -125,6 +125,41 @@ test("renderEditorSystemExport returns bytes and cleans up temp files on success
   await assert.rejects(() => access(tempRoot));
 });
 
+test("renderEditorSystemExport accepts history-backed assets when a source file is provided", async () => {
+  const { project, asset, file } = createRenderableUpload();
+  asset.sourceType = "history";
+
+  const result = await renderEditorSystemExport(
+    {
+      project,
+      resolution: "1080p",
+      assets: [{ asset, file }],
+    },
+    {
+      exportProject: async (input) => {
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(1024, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: path.basename(input.outputPath),
+          width: 1920,
+          height: 1080,
+          sizeBytes: 1024,
+          durationSeconds: 8,
+          warnings: [],
+          ffmpegCommandPreview: ["ffmpeg", "-i", "clip.mp4"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+    }
+  );
+
+  assert.equal(result.sizeBytes, 1024);
+  assert.equal(result.width, 1920);
+  assert.equal(result.height, 1080);
+});
+
 test("renderEditorSystemExport cleans up temp files when the export is aborted", async () => {
   const { project, asset, file } = createRenderableUpload();
   const controller = new AbortController();

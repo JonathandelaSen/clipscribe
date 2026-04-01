@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CREATOR_SUBTITLE_MAX_BORDER_WIDTH,
   CREATOR_SUBTITLE_MAX_LETTER_WIDTH,
   cssTextShadowFromStyle,
   getDefaultCreatorSubtitleStyle,
@@ -60,6 +61,14 @@ test("resolveCreatorSubtitleStyle clamps letter width into the supported export 
   });
 
   assert.equal(style.letterWidth, CREATOR_SUBTITLE_MAX_LETTER_WIDTH);
+});
+
+test("resolveCreatorSubtitleStyle clamps border width into the supported export range", () => {
+  const style = resolveCreatorSubtitleStyle("clean_caption", {
+    borderWidth: 999,
+  });
+
+  assert.equal(style.borderWidth, CREATOR_SUBTITLE_MAX_BORDER_WIDTH);
 });
 
 test("resolveCreatorSubtitleStyle honors switching text case back to original", () => {

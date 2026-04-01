@@ -4,8 +4,17 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { exportEditorProjectWithSystemFfmpeg } from "../../../src/lib/editor/node-render";
-import { createDefaultVideoClip, createEditorAssetRecord, createEmptyEditorProject } from "../../../src/lib/editor/storage";
+import {
+  buildNodeEditorExportCommand,
+  exportEditorProjectWithSystemFfmpeg,
+} from "../../../src/lib/editor/node-render";
+import {
+  createDefaultAudioTrack,
+  createDefaultImageTrackItem,
+  createDefaultVideoClip,
+  createEditorAssetRecord,
+  createEmptyEditorProject,
+} from "../../../src/lib/editor/storage";
 
 async function createTempDirectory() {
   return mkdtemp(path.join(os.tmpdir(), "clipscribe-node-render-test-"));
@@ -42,6 +51,58 @@ function createRenderableProject() {
   project.assetIds = [asset.id];
   project.timeline.videoClips = [clip];
   return { project, asset };
+}
+
+function createImageOnlyRenderableProject(input: { withAudio: boolean }) {
+  const project = createEmptyEditorProject({
+    id: input.withAudio ? "image_audio_project" : "image_only_project",
+    now: 200,
+    name: input.withAudio ? "Image + Audio" : "Image Only",
+    aspectRatio: "16:9",
+  });
+  const image = createEditorAssetRecord({
+    projectId: project.id,
+    kind: "image",
+    filename: "cover.png",
+    mimeType: "image/png",
+    sizeBytes: 64,
+    durationSeconds: 0,
+    width: 1920,
+    height: 1080,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+    id: `${project.id}_image`,
+    now: 200,
+  });
+
+  project.assetIds = [image.id];
+  project.timeline.imageItems = [createDefaultImageTrackItem({ assetId: image.id, label: "Cover" })];
+
+  const assets: Array<{ asset: typeof image; absolutePath: string }> = [
+    { asset: image, absolutePath: "/media/cover.png" },
+  ];
+
+  if (input.withAudio) {
+    const audio = createEditorAssetRecord({
+      projectId: project.id,
+      kind: "audio",
+      filename: "bed.mp3",
+      mimeType: "audio/mpeg",
+      sizeBytes: 64,
+      durationSeconds: 12,
+      hasAudio: true,
+      sourceType: "upload",
+      captionSource: { kind: "none" },
+      id: `${project.id}_audio`,
+      now: 200,
+    });
+    project.assetIds.push(audio.id);
+    project.timeline.audioItems = [createDefaultAudioTrack({ assetId: audio.id, durationSeconds: 12 })];
+    assets.push({ asset: audio, absolutePath: "/media/bed.mp3" });
+  }
+
+  return { project, assets };
 }
 
 test("exportEditorProjectWithSystemFfmpeg returns render details after a successful mocked ffmpeg run", async (t) => {
@@ -148,6 +209,56 @@ test("exportEditorProjectWithSystemFfmpeg emits progress callbacks when renderin
 
   assert.equal(percents[0], 0);
   assert.equal(percents[percents.length - 1], 100);
+});
+
+test("buildNodeEditorExportCommand uses the still-image compatibility preset for image-only timelines with audio", () => {
+  const { project, assets } = createImageOnlyRenderableProject({ withAudio: true });
+
+  const command = buildNodeEditorExportCommand({
+    project,
+    assets,
+    resolution: "1080p",
+    outputPath: "/tmp/image-audio.mp4",
+    overwrite: true,
+  });
+
+  assert.deepEqual(command.ffmpegArgs.slice(0, 6), ["-y", "-loop", "1", "-framerate", "30", "-i"]);
+  assert.ok(command.ffmpegArgs.includes("-r"));
+  assert.ok(command.ffmpegArgs.includes("30"));
+  assert.ok(command.ffmpegArgs.includes("-tune"));
+  assert.ok(command.ffmpegArgs.includes("stillimage"));
+  assert.ok(command.ffmpegArgs.includes("-pix_fmt"));
+  assert.ok(command.ffmpegArgs.includes("yuv420p"));
+  assert.ok(command.ffmpegArgs.includes("-shortest"));
+  assert.ok(command.ffmpegArgs.includes("+faststart"));
+  assert.ok(command.ffmpegArgs.includes("-t"));
+  assert.ok(command.ffmpegArgs.includes("12.000"));
+  assert.match(command.notes.join("\n"), /Still-image compatibility preset enabled/);
+});
+
+test("buildNodeEditorExportCommand keeps the still-image compatibility preset for image-only timelines without audio", () => {
+  const { project, assets } = createImageOnlyRenderableProject({ withAudio: false });
+
+  const command = buildNodeEditorExportCommand({
+    project,
+    assets,
+    resolution: "1080p",
+    outputPath: "/tmp/image-only.mp4",
+    overwrite: true,
+  });
+
+  assert.deepEqual(command.ffmpegArgs.slice(0, 6), ["-y", "-loop", "1", "-framerate", "30", "-i"]);
+  assert.ok(command.ffmpegArgs.includes("-r"));
+  assert.ok(command.ffmpegArgs.includes("-tune"));
+  assert.ok(command.ffmpegArgs.includes("stillimage"));
+  assert.ok(command.ffmpegArgs.includes("-pix_fmt"));
+  assert.ok(command.ffmpegArgs.includes("yuv420p"));
+  assert.ok(command.ffmpegArgs.includes("-t"));
+  assert.ok(command.ffmpegArgs.includes("5.000"));
+  assert.ok(command.ffmpegArgs.includes("-shortest"));
+  assert.ok(command.ffmpegArgs.includes("-movflags"));
+  assert.ok(command.ffmpegArgs.includes("+faststart"));
+  assert.ok(!command.ffmpegArgs.includes("-c:a"));
 });
 
 test("exportEditorProjectWithSystemFfmpeg falls back to the bundled binary when ffmpeg is missing on PATH", async (t) => {

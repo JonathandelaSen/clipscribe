@@ -53,7 +53,7 @@ function toEditorExportRecord(record: ProjectExportRecord): EditorExportRecord {
     outputAssetId: record.outputAssetId,
     createdAt: record.createdAt,
     status: record.status,
-    engine: record.engine === "system" ? "system" : "browser",
+    engine: "system",
     filename: record.filename,
     mimeType: record.mimeType,
     sizeBytes: record.sizeBytes,
