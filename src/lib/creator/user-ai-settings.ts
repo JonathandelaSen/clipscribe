@@ -6,6 +6,7 @@ export const CREATOR_AI_SETTINGS_STORAGE_KEY = "clipscribe.creator-ai-settings.v
 
 export interface CreatorAISettings {
   openAIApiKey: string;
+  elevenLabsApiKey: string;
   promptProfiles?: CreatorPromptProfiles;
   updatedAt: number;
 }
@@ -22,8 +23,19 @@ export function sanitizeOpenAIApiKey(value: string): string {
   return value.trim();
 }
 
+export function sanitizeElevenLabsApiKey(value: string): string {
+  return value.trim();
+}
+
 export function maskOpenAIApiKey(value: string): string {
   const trimmed = sanitizeOpenAIApiKey(value);
+  if (!trimmed) return "";
+  if (trimmed.length <= 10) return `${trimmed.slice(0, 3)}...${trimmed.slice(-2)}`;
+  return `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}`;
+}
+
+export function maskElevenLabsApiKey(value: string): string {
+  const trimmed = sanitizeElevenLabsApiKey(value);
   if (!trimmed) return "";
   if (trimmed.length <= 10) return `${trimmed.slice(0, 3)}...${trimmed.slice(-2)}`;
   return `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}`;
@@ -37,6 +49,7 @@ export function readCreatorAISettings(storage: StorageLike): CreatorAISettings |
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
     const openAIApiKey = sanitizeOpenAIApiKey(String(parsed.openAIApiKey ?? ""));
+    const elevenLabsApiKey = sanitizeElevenLabsApiKey(String(parsed.elevenLabsApiKey ?? ""));
     const rawPromptProfiles = isRecord(parsed.promptProfiles) ? parsed.promptProfiles : null;
     const promptProfiles: CreatorPromptProfiles = {};
     const videoInfoProfile = sanitizeVideoInfoPromptProfile(rawPromptProfiles?.video_info);
@@ -46,12 +59,13 @@ export function readCreatorAISettings(storage: StorageLike): CreatorAISettings |
     const updatedAt = Number(parsed.updatedAt ?? Date.now());
     const settings: CreatorAISettings = {
       openAIApiKey,
+      elevenLabsApiKey,
       updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
     };
     if (Object.keys(promptProfiles).length > 0) {
       settings.promptProfiles = promptProfiles;
     }
-    return openAIApiKey || settings.promptProfiles ? settings : null;
+    return openAIApiKey || elevenLabsApiKey || settings.promptProfiles ? settings : null;
   } catch {
     return null;
   }
@@ -61,6 +75,7 @@ export function writeCreatorAISettings(
   storage: StorageLike,
   input: {
     openAIApiKey?: string;
+    elevenLabsApiKey?: string;
     promptProfiles?: CreatorPromptProfiles;
   }
 ): CreatorAISettings {
@@ -72,6 +87,7 @@ export function writeCreatorAISettings(
 
   const next: CreatorAISettings = {
     openAIApiKey: sanitizeOpenAIApiKey(input.openAIApiKey ?? ""),
+    elevenLabsApiKey: sanitizeElevenLabsApiKey(input.elevenLabsApiKey ?? ""),
     updatedAt: Date.now(),
   };
   if (Object.keys(nextPromptProfiles).length > 0) {

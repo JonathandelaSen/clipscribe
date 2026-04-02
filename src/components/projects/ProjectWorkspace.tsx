@@ -12,6 +12,7 @@ import { ProjectYouTubeUploadList } from "@/components/creator/ProjectYouTubeUpl
 import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { ProjectVoiceoverWorkspace } from "@/components/projects/ProjectVoiceoverWorkspace";
 import { YouTubeUploadHub } from "@/components/creator/YouTubeUploadHub";
 import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorkspace";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
 import type { ProjectExportRecord } from "@/lib/projects/types";
 
-type WorkspaceTab = "assets" | "transcripts" | "shorts" | "timeline" | "ai_metadata" | "publish" | "exports";
+type WorkspaceTab = "assets" | "transcripts" | "voiceover" | "shorts" | "timeline" | "ai_metadata" | "publish" | "exports";
 
 function formatRelativeDate(timestamp: number) {
   return new Intl.DateTimeFormat("es", {
@@ -79,7 +80,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const initialExportId = searchParams.get("exportId") ?? undefined;
   const selectedUploadId = searchParams.get("uploadId") ?? undefined;
   const currentTab: WorkspaceTab =
-    tabParam === "transcripts" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
+    tabParam === "transcripts" || tabParam === "voiceover" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
   const publishView = resolveYouTubePublishView({
     requestedView: viewParam,
     assetId: initialAssetId,
@@ -91,16 +92,20 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     assets,
     shortProjects,
     exports,
+    voiceovers,
     youtubeUploads,
     activeSourceAsset,
     isLoading,
     error,
     refresh,
+    saveProject,
+    saveVoiceoverDraft,
+    saveGeneratedVoiceover,
     addAssets,
     renameAsset,
     deleteAsset,
-    saveYouTubeUpload,
     setActiveSourceAsset,
+    saveYouTubeUpload,
   } = useProjectWorkspace(projectId);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("es");
@@ -437,6 +442,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                     }
                   : undefined
               }
+            />
+          )}
+
+          {currentTab === "voiceover" && (
+            <ProjectVoiceoverWorkspace
+              project={project}
+              assets={assets}
+              voiceovers={voiceovers}
+              saveProject={saveProject}
+              saveVoiceoverDraft={saveVoiceoverDraft}
+              saveGeneratedVoiceover={saveGeneratedVoiceover}
+              renameAsset={renameAsset}
             />
           )}
 

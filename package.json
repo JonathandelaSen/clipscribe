@@ -20,6 +20,7 @@
     "check:strict": "./node_modules/.bin/eslint src/lib/creator/core src/lib/creator/local-render.ts src/components/CreatorHub.tsx tests/core/creator tests/core/transcriber/history-updates.test.ts tests/core/transcriber/progress.test.ts && ./node_modules/.bin/tsc --noEmit --pretty false && npm run test:contracts && npm run test"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.41.1",
     "@ffmpeg/core": "^0.12.10",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",

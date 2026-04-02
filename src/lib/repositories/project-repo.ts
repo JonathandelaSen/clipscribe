@@ -9,8 +9,10 @@ import type {
   ProjectAssetRecord,
   ProjectExportRecord,
   ProjectHistoryItem,
+  ProjectVoiceoverRecord,
   ProjectYouTubeUploadRecord,
 } from "@/lib/projects/types";
+import { sortProjectVoiceovers } from "@/lib/voiceover/utils";
 
 export interface ProjectRepository {
   listProjects(): Promise<ContentProjectRecord[]>;
@@ -31,6 +33,8 @@ export interface ProjectRepository {
   deleteShortProjectsBySuggestionGenerationId(generationId: string): Promise<void>;
   listProjectExports(projectId?: string): Promise<ProjectExportRecord[]>;
   putProjectExport(record: ProjectExportRecord): Promise<void>;
+  listProjectVoiceovers(projectId?: string): Promise<ProjectVoiceoverRecord[]>;
+  putProjectVoiceover(record: ProjectVoiceoverRecord): Promise<void>;
   listProjectYouTubeUploads(projectId?: string): Promise<ProjectYouTubeUploadRecord[]>;
   putProjectYouTubeUpload(record: ProjectYouTubeUploadRecord): Promise<void>;
   deleteProject(projectId: string): Promise<void>;
@@ -167,9 +171,11 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
     },
 
     async deleteAsset(assetId) {
-      await database.transaction("rw", database.projectAssets, database.assetTranscripts, async () => {
+      await database.transaction("rw", database.projectAssets, database.assetTranscripts, database.projectVoiceovers, async () => {
         await database.projectAssets.delete(assetId);
         await database.assetTranscripts.delete(assetId);
+        const linkedVoiceovers = await database.projectVoiceovers.where("assetId").equals(assetId).toArray();
+        await database.projectVoiceovers.bulkDelete(linkedVoiceovers.map((record) => record.id));
       });
     },
 
@@ -260,6 +266,17 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
       await database.projectExports.put(record);
     },
 
+    async listProjectVoiceovers(projectId) {
+      const records = projectId
+        ? await database.projectVoiceovers.where("projectId").equals(projectId).toArray()
+        : await database.projectVoiceovers.toArray();
+      return sortProjectVoiceovers(records);
+    },
+
+    async putProjectVoiceover(record) {
+      await database.projectVoiceovers.put(record);
+    },
+
     async listProjectYouTubeUploads(projectId) {
       const records = projectId
         ? await database.projectYouTubeUploads.where("projectId").equals(projectId).toArray()
@@ -280,6 +297,7 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
           database.assetTranscripts,
           database.projectShorts,
           database.projectExports,
+          database.projectVoiceovers,
           database.projectYouTubeUploads,
         ],
         async () => {
@@ -294,6 +312,9 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
 
           const exports = await database.projectExports.where("projectId").equals(projectId).toArray();
           await database.projectExports.bulkDelete(exports.map((record) => record.id));
+
+          const voiceovers = await database.projectVoiceovers.where("projectId").equals(projectId).toArray();
+          await database.projectVoiceovers.bulkDelete(voiceovers.map((record) => record.id));
 
           const youtubeUploads = await database.projectYouTubeUploads.where("projectId").equals(projectId).toArray();
           await database.projectYouTubeUploads.bulkDelete(youtubeUploads.map((record) => record.id));

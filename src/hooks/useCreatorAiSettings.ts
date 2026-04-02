@@ -7,6 +7,7 @@ import {
   CREATOR_AI_SETTINGS_STORAGE_KEY,
   type CreatorAISettings,
   clearCreatorAISettings,
+  maskElevenLabsApiKey,
   maskOpenAIApiKey,
   readCreatorAISettings,
   writeCreatorAISettings,
@@ -65,6 +66,18 @@ export function useCreatorAiSettings() {
     if (typeof window === "undefined") return null;
     const next = writeCreatorAISettings(window.localStorage, {
       openAIApiKey: value,
+      elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+      promptProfiles: settings?.promptProfiles,
+    });
+    emitChange();
+    return next;
+  }, [settings]);
+
+  const saveElevenLabsApiKey = useCallback((value: string) => {
+    if (typeof window === "undefined") return null;
+    const next = writeCreatorAISettings(window.localStorage, {
+      openAIApiKey: settings?.openAIApiKey ?? "",
+      elevenLabsApiKey: value,
       promptProfiles: settings?.promptProfiles,
     });
     emitChange();
@@ -83,18 +96,35 @@ export function useCreatorAiSettings() {
     }
     const next = writeCreatorAISettings(window.localStorage, {
       openAIApiKey: settings?.openAIApiKey ?? "",
+      elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
       promptProfiles: nextPromptProfiles,
     });
     emitChange();
     return next;
-  }, [settings?.openAIApiKey, settings?.promptProfiles]);
+  }, [settings?.elevenLabsApiKey, settings?.openAIApiKey, settings?.promptProfiles]);
 
   const clearOpenAIApiKey = useCallback(() => {
     if (typeof window === "undefined") return;
     const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
-    if (hasPromptProfiles) {
+    if (hasPromptProfiles || (settings?.elevenLabsApiKey ?? "").trim()) {
       writeCreatorAISettings(window.localStorage, {
         openAIApiKey: "",
+        elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+        promptProfiles: settings?.promptProfiles,
+      });
+    } else {
+      clearCreatorAISettings(window.localStorage);
+    }
+    emitChange();
+  }, [settings]);
+
+  const clearElevenLabsApiKey = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
+    if (hasPromptProfiles || (settings?.openAIApiKey ?? "").trim()) {
+      writeCreatorAISettings(window.localStorage, {
+        openAIApiKey: settings?.openAIApiKey ?? "",
+        elevenLabsApiKey: "",
         promptProfiles: settings?.promptProfiles,
       });
     } else {
@@ -109,28 +139,39 @@ export function useCreatorAiSettings() {
       ...(settings?.promptProfiles ?? {}),
     };
     delete nextPromptProfiles.video_info;
-    if ((settings?.openAIApiKey ?? "").trim() || Object.keys(nextPromptProfiles).length > 0) {
+    if (
+      (settings?.openAIApiKey ?? "").trim() ||
+      (settings?.elevenLabsApiKey ?? "").trim() ||
+      Object.keys(nextPromptProfiles).length > 0
+    ) {
       writeCreatorAISettings(window.localStorage, {
         openAIApiKey: settings?.openAIApiKey ?? "",
+        elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
         promptProfiles: nextPromptProfiles,
       });
     } else {
       clearCreatorAISettings(window.localStorage);
     }
     emitChange();
-  }, [settings?.openAIApiKey, settings?.promptProfiles]);
+  }, [settings?.elevenLabsApiKey, settings?.openAIApiKey, settings?.promptProfiles]);
 
   const openAIApiKey = settings?.openAIApiKey ?? "";
+  const elevenLabsApiKey = settings?.elevenLabsApiKey ?? "";
   const videoInfoPromptProfile = settings?.promptProfiles?.video_info;
 
   return {
     settings,
     openAIApiKey,
+    elevenLabsApiKey,
     hasOpenAIApiKey: openAIApiKey.length > 0,
+    hasElevenLabsApiKey: elevenLabsApiKey.length > 0,
     maskedOpenAIApiKey: openAIApiKey ? maskOpenAIApiKey(openAIApiKey) : "",
+    maskedElevenLabsApiKey: elevenLabsApiKey ? maskElevenLabsApiKey(elevenLabsApiKey) : "",
     videoInfoPromptProfile,
     saveOpenAIApiKey,
+    saveElevenLabsApiKey,
     clearOpenAIApiKey,
+    clearElevenLabsApiKey,
     saveVideoInfoPromptProfile,
     clearVideoInfoPromptProfile,
   };

@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { 
+  AudioLines,
   CalendarClock,
   ChevronLeft, 
   ChevronRight, 
@@ -40,6 +41,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const projectLinks = [
     { id: "assets", label: "Assets", icon: Film },
     { id: "transcripts", label: "Transcripts", icon: Languages },
+    { id: "voiceover", label: "Voiceover", icon: AudioLines },
     { id: "shorts", label: "Shorts", icon: Clapperboard },
     { id: "timeline", label: "Editor", icon: Scissors },
     { id: "ai_metadata", label: "AI Metadata", icon: WandSparkles },

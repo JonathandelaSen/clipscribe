@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   clearCreatorAISettings,
+  maskElevenLabsApiKey,
   maskOpenAIApiKey,
   readCreatorAISettings,
   writeCreatorAISettings,
@@ -33,6 +34,17 @@ test("writeCreatorAISettings persists a trimmed OpenAI key", () => {
   assert.equal(saved.openAIApiKey, "sk-proj-1234567890");
   assert.ok(typeof saved.updatedAt === "number");
   assert.equal(loaded?.openAIApiKey, "sk-proj-1234567890");
+  assert.equal(loaded?.elevenLabsApiKey, "");
+});
+
+test("writeCreatorAISettings persists a trimmed ElevenLabs key", () => {
+  const storage = createStorage();
+
+  const saved = writeCreatorAISettings(storage, { elevenLabsApiKey: "  xi-1234567890  " });
+  const loaded = readCreatorAISettings(storage);
+
+  assert.equal(saved.elevenLabsApiKey, "xi-1234567890");
+  assert.equal(loaded?.elevenLabsApiKey, "xi-1234567890");
 });
 
 test("readCreatorAISettings keeps prompt profiles even without an API key", () => {
@@ -85,4 +97,8 @@ test("clearCreatorAISettings removes persisted settings", () => {
 
 test("maskOpenAIApiKey keeps only a short prefix and suffix", () => {
   assert.equal(maskOpenAIApiKey("sk-proj-1234567890"), "sk-proj...7890");
+});
+
+test("maskElevenLabsApiKey keeps only a short prefix and suffix", () => {
+  assert.equal(maskElevenLabsApiKey("xi-1234567890"), "xi-1234...7890");
 });

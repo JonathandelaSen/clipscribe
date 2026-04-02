@@ -6,6 +6,7 @@ import type {
   ContentProjectRecord,
   ProjectAssetRecord,
   ProjectExportRecord,
+  ProjectVoiceoverRecord,
   ProjectYouTubeUploadRecord,
 } from '@/lib/projects/types';
 
@@ -16,6 +17,7 @@ export class AudioTranscriberDB extends Dexie {
   assetTranscripts!: EntityTable<AssetTranscriptRecord, 'assetId'>;
   projectShorts!: EntityTable<CreatorShortProjectRecord, 'id'>;
   projectExports!: EntityTable<ProjectExportRecord, 'id'>;
+  projectVoiceovers!: EntityTable<ProjectVoiceoverRecord, 'id'>;
   projectYouTubeUploads!: EntityTable<ProjectYouTubeUploadRecord, 'id'>;
   creatorLlmRuns!: EntityTable<CreatorLLMRunRecord, 'id'>;
 
@@ -67,6 +69,19 @@ export class AudioTranscriberDB extends Dexie {
       projectShorts:
         'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
       projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      projectYouTubeUploads:
+        'id, projectId, uploadedAt, videoId, sourceMode, sourceAssetId, sourceExportId, outputAssetId',
+      creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
+    });
+
+    this.version(5).stores({
+      projects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio, activeSourceAssetId',
+      projectAssets: 'id, projectId, createdAt, updatedAt, kind, role, origin',
+      assetTranscripts: 'assetId, projectId, updatedAt, timestamp',
+      projectShorts:
+        'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
+      projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      projectVoiceovers: 'id, projectId, assetId, createdAt, provider, model',
       projectYouTubeUploads:
         'id, projectId, uploadedAt, videoId, sourceMode, sourceAssetId, sourceExportId, outputAssetId',
       creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'

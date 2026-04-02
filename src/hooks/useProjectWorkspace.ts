@@ -7,9 +7,12 @@ import type {
   ContentProjectRecord,
   ProjectAssetRecord,
   ProjectExportRecord,
+  ProjectVoiceoverRecord,
   ProjectYouTubeUploadRecord,
 } from "@/lib/projects/types";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
+import type { ProjectVoiceoverDraft } from "@/lib/voiceover/types";
+import { normalizeProjectVoiceoverDraft } from "@/lib/voiceover/utils";
 
 const projectRepository = createDexieProjectRepository();
 
@@ -18,6 +21,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
   const [assets, setAssets] = useState<ProjectAssetRecord[]>([]);
   const [shortProjects, setShortProjects] = useState<CreatorShortProjectRecord[]>([]);
   const [exports, setExports] = useState<ProjectExportRecord[]>([]);
+  const [voiceovers, setVoiceovers] = useState<ProjectVoiceoverRecord[]>([]);
   const [youtubeUploads, setYouTubeUploads] = useState<ProjectYouTubeUploadRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -28,6 +32,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
       setAssets([]);
       setShortProjects([]);
       setExports([]);
+      setVoiceovers([]);
       setYouTubeUploads([]);
       setIsLoading(false);
       return;
@@ -36,17 +41,19 @@ export function useProjectWorkspace(projectId: string | undefined) {
     setIsLoading(true);
     setError(null);
     try {
-      const [projectRecord, projectAssets, shorts, projectExports, projectYouTubeUploads] = await Promise.all([
+      const [projectRecord, projectAssets, shorts, projectExports, projectVoiceovers, projectYouTubeUploads] = await Promise.all([
         projectRepository.getProject(projectId),
         projectRepository.listProjectAssets(projectId),
         projectRepository.listShortProjects(projectId),
         projectRepository.listProjectExports(projectId),
+        projectRepository.listProjectVoiceovers(projectId),
         projectRepository.listProjectYouTubeUploads(projectId),
       ]);
       setProject(projectRecord ? (normalizeLegacyEditorProjectRecord(projectRecord) as ContentProjectRecord) : null);
       setAssets(projectAssets);
       setShortProjects(shorts);
       setExports(projectExports);
+      setVoiceovers(projectVoiceovers);
       setYouTubeUploads(projectYouTubeUploads);
     } catch (err) {
       console.error("Failed to load project workspace", err);
@@ -74,6 +81,40 @@ export function useProjectWorkspace(projectId: string | undefined) {
     await projectRepository.putProject(record);
     setProject(record);
   }, []);
+
+  const saveVoiceoverDraft = useCallback(
+    async (draft: ProjectVoiceoverDraft) => {
+      if (!project) return;
+      const now = Date.now();
+      await saveProject({
+        ...project,
+        voiceoverDraft: normalizeProjectVoiceoverDraft({
+          ...draft,
+          updatedAt: now,
+        }),
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+    },
+    [project, saveProject]
+  );
+
+  const saveGeneratedVoiceover = useCallback(
+    async (input: { asset: ProjectAssetRecord; voiceover: ProjectVoiceoverRecord }) => {
+      if (!project) return;
+      const now = Math.max(project.updatedAt, input.voiceover.createdAt, input.asset.updatedAt);
+      await projectRepository.bulkPutAssets([input.asset]);
+      await projectRepository.putProjectVoiceover(input.voiceover);
+      await saveProject({
+        ...project,
+        assetIds: project.assetIds.includes(input.asset.id) ? project.assetIds : [...project.assetIds, input.asset.id],
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+      await refresh();
+    },
+    [project, refresh, saveProject]
+  );
 
   const setActiveSourceAsset = useCallback(
     async (assetId: string) => {
@@ -194,6 +235,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
     assets,
     shortProjects,
     exports,
+    voiceovers,
     youtubeUploads,
     sourceAssets,
     activeSourceAsset,
@@ -201,6 +243,8 @@ export function useProjectWorkspace(projectId: string | undefined) {
     error,
     refresh,
     saveProject,
+    saveVoiceoverDraft,
+    saveGeneratedVoiceover,
     saveYouTubeUpload,
     setActiveSourceAsset,
     addAssets,

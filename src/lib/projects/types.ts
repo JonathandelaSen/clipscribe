@@ -9,16 +9,18 @@ import type {
   CreatorVideoInfoProjectRecord,
   CreatorViralClip,
 } from "@/lib/creator/types";
+import type { ProjectVoiceoverDraft, ProjectVoiceoverRecord } from "@/lib/voiceover/types";
 
 export type ContentProjectRecord = EditorProjectRecord & {
   activeSourceAssetId?: string;
   /** @deprecated Use youtubeVideoInfoHistory instead. Kept for migration from legacy single-record shape. */
   youtubeVideoInfo?: CreatorVideoInfoProjectRecord;
   youtubeVideoInfoHistory?: CreatorVideoInfoProjectRecord[];
+  voiceoverDraft?: ProjectVoiceoverDraft;
 };
 
 export type ProjectAssetRole = "source" | "derived" | "support";
-export type ProjectAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual";
+export type ProjectAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio";
 
 export interface ProjectAssetRecord extends EditorAssetRecord {
   role: ProjectAssetRole;
@@ -120,3 +122,5 @@ export type ProjectHistoryItem = HistoryItem & {
   projectId: string;
   assetId: string;
 };
+
+export type { ProjectVoiceoverRecord };
