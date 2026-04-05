@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import {
+  filterCreatorShortProjectsBySourceAsset,
   getAiSuggestionCreatorShortProjects,
   getManualCreatorShortProjects,
   groupCreatorShortProjectsBySuggestionGeneration,
@@ -12,7 +13,7 @@ import { createDexieCreatorShortsRepository } from "@/lib/repositories/creator-s
 
 const creatorShortsRepository = createDexieCreatorShortsRepository();
 
-export function useCreatorShortsLibrary(projectId?: string) {
+export function useCreatorShortsLibrary(projectId?: string, sourceAssetId?: string) {
   const [projects, setProjects] = useState<CreatorShortProjectRecord[]>([]);
   const [exports, setExports] = useState<CreatorShortExportRecord[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -85,17 +86,22 @@ export function useCreatorShortsLibrary(projectId?: string) {
     return groupCreatorShortExportsByProjectId(exports);
   }, [exports]);
 
+  const visibleProjects = useMemo(() => {
+    if (!sourceAssetId) return [];
+    return filterCreatorShortProjectsBySourceAsset(projects, sourceAssetId);
+  }, [projects, sourceAssetId]);
+
   const manualProjects = useMemo(() => {
-    return getManualCreatorShortProjects(projects);
-  }, [projects]);
+    return getManualCreatorShortProjects(visibleProjects);
+  }, [visibleProjects]);
 
   const aiSuggestionProjects = useMemo(() => {
-    return getAiSuggestionCreatorShortProjects(projects);
-  }, [projects]);
+    return getAiSuggestionCreatorShortProjects(visibleProjects);
+  }, [visibleProjects]);
 
   const aiSuggestionsByGeneration = useMemo(() => {
-    return groupCreatorShortProjectsBySuggestionGeneration(projects);
-  }, [projects]);
+    return groupCreatorShortProjectsBySuggestionGeneration(visibleProjects);
+  }, [visibleProjects]);
 
   const hasAiSuggestionsForSignature = useCallback(
     (signature: string) => aiSuggestionProjects.some((record) => record.suggestionSourceSignature === signature),

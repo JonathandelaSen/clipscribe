@@ -133,6 +133,44 @@ test("buildShortProjectRecord generates default name for new record", () => {
   assert.equal(record.origin, "manual");
 });
 
+test("buildShortProjectRecord does not reuse an existing record from a different source asset", () => {
+  const existing = buildShortProjectRecord({
+    status: "draft",
+    now: 1000,
+    newId: "shortproj_existing",
+    projectId: "proj_1",
+    sourceAssetId: "media_1",
+    sourceFilename: "source-a.mp4",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    clip: sampleClip,
+    plan: samplePlan,
+    editor: sampleEditor,
+    savedRecords: [],
+    secondsToClock: (s) => `${s}s`,
+  });
+
+  const record = buildShortProjectRecord({
+    status: "draft",
+    now: 2000,
+    newId: "shortproj_new",
+    projectId: "proj_1",
+    sourceAssetId: "media_2",
+    sourceFilename: "source-b.mp4",
+    transcriptId: "tx_1",
+    subtitleId: "sub_1",
+    clip: sampleClip,
+    plan: samplePlan,
+    editor: sampleEditor,
+    savedRecords: [existing],
+    secondsToClock: (s) => `${s}s`,
+  });
+
+  assert.equal(record.id, "shortproj_new");
+  assert.equal(record.createdAt, 2000);
+  assert.equal(record.sourceAssetId, "media_2");
+});
+
 test("AI suggestion helpers build normalized signatures and records", () => {
   const signatureA = buildAiSuggestionSourceSignature({
     projectId: "proj_1",

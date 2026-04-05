@@ -201,3 +201,99 @@ test("deleteProject removes the associated YouTube upload history", async () => 
     ["upload_2"]
   );
 });
+
+test("deleteAsset removes linked export outputs and keeps upload history by clearing stale references", async () => {
+  const database = new InMemoryProjectDb();
+  const repository = createDexieProjectRepository(database as never);
+
+  await database.projectAssets.put({
+    id: "asset_drop",
+    projectId: "project_1",
+    role: "derived",
+    origin: "timeline-export",
+    sourceType: "upload",
+    kind: "video",
+    filename: "export.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 2048,
+    durationSeconds: 10,
+    captionSource: { kind: "none" },
+    createdAt: 100,
+    updatedAt: 100,
+  });
+  await database.projectAssets.put({
+    id: "asset_keep",
+    projectId: "project_1",
+    role: "source",
+    origin: "upload",
+    sourceType: "upload",
+    kind: "video",
+    filename: "source.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 1024,
+    durationSeconds: 10,
+    captionSource: { kind: "none" },
+    createdAt: 100,
+    updatedAt: 100,
+  });
+  await database.projectExports.put({
+    id: "export_drop",
+    projectId: "project_1",
+    kind: "timeline",
+    createdAt: 100,
+    status: "completed",
+    filename: "export.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 2048,
+    outputAssetId: "asset_drop",
+  });
+  await database.projectExports.put({
+    id: "export_keep",
+    projectId: "project_1",
+    kind: "timeline",
+    createdAt: 200,
+    status: "completed",
+    filename: "other-export.mp4",
+    mimeType: "video/mp4",
+    sizeBytes: 2048,
+    outputAssetId: "asset_keep",
+  });
+  await repository.putProjectYouTubeUpload(
+    createUpload({
+      id: "upload_history",
+      sourceMode: "project_export",
+      sourceAssetId: "asset_drop",
+      sourceExportId: "export_drop",
+      outputAssetId: "asset_drop",
+    })
+  );
+  await repository.putProjectYouTubeUpload(
+    createUpload({
+      id: "upload_keep",
+      uploadedAt: 2_000,
+      sourceMode: "project_export",
+      sourceAssetId: "asset_keep",
+      sourceExportId: "export_keep",
+      outputAssetId: "asset_keep",
+    })
+  );
+
+  await repository.deleteAsset("asset_drop");
+
+  assert.equal(await database.projectAssets.get("asset_drop"), undefined);
+  assert.equal(await database.projectExports.get("export_drop"), undefined);
+  assert.deepEqual(
+    (await repository.listProjectExports("project_1")).map((record) => record.id),
+    ["export_keep"]
+  );
+
+  const uploads = await repository.listProjectYouTubeUploads("project_1");
+  const preservedHistory = uploads.find((upload) => upload.id === "upload_history");
+  const unaffectedUpload = uploads.find((upload) => upload.id === "upload_keep");
+  assert.equal(preservedHistory?.sourceAssetId, undefined);
+  assert.equal(preservedHistory?.sourceExportId, undefined);
+  assert.equal(preservedHistory?.outputAssetId, undefined);
+  assert.equal(unaffectedUpload?.sourceAssetId, "asset_keep");
+  assert.equal(unaffectedUpload?.sourceExportId, "export_keep");
+  assert.equal(unaffectedUpload?.outputAssetId, "asset_keep");
+});

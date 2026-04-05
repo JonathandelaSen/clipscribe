@@ -171,12 +171,50 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
     },
 
     async deleteAsset(assetId) {
-      await database.transaction("rw", database.projectAssets, database.assetTranscripts, database.projectVoiceovers, async () => {
-        await database.projectAssets.delete(assetId);
-        await database.assetTranscripts.delete(assetId);
-        const linkedVoiceovers = await database.projectVoiceovers.where("assetId").equals(assetId).toArray();
-        await database.projectVoiceovers.bulkDelete(linkedVoiceovers.map((record) => record.id));
-      });
+      await database.transaction(
+        "rw",
+        [
+          database.projectAssets,
+          database.assetTranscripts,
+          database.projectVoiceovers,
+          database.projectExports,
+          database.projectYouTubeUploads,
+        ],
+        async () => {
+          await database.projectAssets.delete(assetId);
+          await database.assetTranscripts.delete(assetId);
+          const linkedVoiceovers = await database.projectVoiceovers.where("assetId").equals(assetId).toArray();
+          await database.projectVoiceovers.bulkDelete(linkedVoiceovers.map((record) => record.id));
+          const linkedExports = await database.projectExports
+            .filter((record) => record.outputAssetId === assetId)
+            .toArray();
+          const linkedExportIds = linkedExports.map((record) => record.id);
+          await database.projectExports.bulkDelete(linkedExportIds);
+
+          const uploadsToSanitize = await database.projectYouTubeUploads
+            .filter(
+              (record) =>
+                record.sourceAssetId === assetId ||
+                record.outputAssetId === assetId ||
+                (!!record.sourceExportId && linkedExportIds.includes(record.sourceExportId))
+            )
+            .toArray();
+
+          if (uploadsToSanitize.length > 0) {
+            await database.projectYouTubeUploads.bulkPut(
+              uploadsToSanitize.map((record) => ({
+                ...record,
+                sourceAssetId: record.sourceAssetId === assetId ? undefined : record.sourceAssetId,
+                outputAssetId: record.outputAssetId === assetId ? undefined : record.outputAssetId,
+                sourceExportId:
+                  record.sourceExportId && linkedExportIds.includes(record.sourceExportId)
+                    ? undefined
+                    : record.sourceExportId,
+              }))
+            );
+          }
+        }
+      );
     },
 
     async getAssetTranscript(assetId) {

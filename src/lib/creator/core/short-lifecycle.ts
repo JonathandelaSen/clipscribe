@@ -61,6 +61,7 @@ export function findExistingShortProjectRecord(
     origin?: CreatorShortProjectOrigin;
     suggestionGenerationId?: string;
     projectId: string;
+    sourceAssetId: string;
     transcriptId: string;
     subtitleId: string;
     shortId: string;
@@ -76,6 +77,7 @@ export function findExistingShortProjectRecord(
       (options.origin == null || record.origin === options.origin) &&
       (options.suggestionGenerationId == null || record.suggestionGenerationId === options.suggestionGenerationId) &&
       record.projectId === options.projectId &&
+      record.sourceAssetId === options.sourceAssetId &&
       record.transcriptId === options.transcriptId &&
       record.subtitleId === options.subtitleId &&
       record.shortId === options.shortId
@@ -120,6 +122,7 @@ export function buildShortProjectRecord(input: {
     origin,
     suggestionGenerationId: input.suggestionGenerationId,
     projectId: input.projectId,
+    sourceAssetId: input.sourceAssetId,
     transcriptId: input.transcriptId,
     subtitleId: input.subtitleId,
     shortId: short.id,

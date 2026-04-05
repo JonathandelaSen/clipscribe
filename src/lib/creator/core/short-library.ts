@@ -20,6 +20,14 @@ export function sortCreatorShortExports(records: CreatorShortExportRecord[]): Cr
   return [...records].sort((a, b) => b.createdAt - a.createdAt);
 }
 
+export function filterCreatorShortProjectsBySourceAsset(
+  records: CreatorShortProjectRecord[],
+  sourceAssetId?: string
+): CreatorShortProjectRecord[] {
+  if (!sourceAssetId) return [...records];
+  return records.filter((record) => record.sourceAssetId === sourceAssetId);
+}
+
 export function groupCreatorShortExportsByProjectId(exports: CreatorShortExportRecord[]): Map<string, CreatorShortExportRecord[]> {
   const map = new Map<string, CreatorShortExportRecord[]>();
   for (const exportRecord of exports) {

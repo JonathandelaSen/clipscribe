@@ -31,7 +31,7 @@ import type {
   CreatorShortSystemExportTimingsMs,
   CreatorViralClip,
 } from "@/lib/creator/types";
-import type { SubtitleChunk } from "@/lib/history";
+import { shiftSubtitleChunks, type SubtitleChunk } from "@/lib/history";
 
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -61,6 +61,16 @@ function nowMs() {
 
 function roundMs(value: number): number {
   return Number(Math.max(0, value).toFixed(2));
+}
+
+export function rebaseSubtitleChunksForTrim(
+  subtitleChunks: SubtitleChunk[],
+  trimOffsetSeconds: number
+): SubtitleChunk[] {
+  if (!Number.isFinite(trimOffsetSeconds) || Math.abs(trimOffsetSeconds) < 0.001) {
+    return subtitleChunks;
+  }
+  return shiftSubtitleChunks(subtitleChunks, -trimOffsetSeconds);
 }
 
 function createRenderRequestId() {
@@ -311,6 +321,7 @@ export async function requestSystemCreatorShortExport(
   }
 
   const trimOffset = trimResult.trimmedOffsetSeconds;
+  const exportSubtitleChunks = rebaseSubtitleChunksForTrim(input.subtitleChunks ?? [], trimOffset);
   const adjustedShort = trimOffset > 0
     ? {
         ...short,
@@ -380,7 +391,7 @@ export async function requestSystemCreatorShortExport(
 
   const subtitleStartedAt = nowMs();
   const semanticSubtitles = buildCreatorSemanticSubtitlePayload({
-    subtitleChunks: input.subtitleChunks ?? [],
+    subtitleChunks: exportSubtitleChunks,
     short: adjustedShort,
     editor: input.editor,
     timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
@@ -391,7 +402,7 @@ export async function requestSystemCreatorShortExport(
   const subtitleAtlases =
     subtitleRenderMode === "png_parity"
       ? await renderSubtitleAtlases(
-          input.subtitleChunks ?? [],
+          exportSubtitleChunks,
           adjustedShort,
           input.editor,
           adjustedExactTrimAfterSeekSeconds,
@@ -401,6 +412,11 @@ export async function requestSystemCreatorShortExport(
   const subtitlePreparationMs = roundMs(nowMs() - subtitleStartedAt);
   emitProgress(PROGRESS.subtitlesReady);
   throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+  if (trimOffset > 0 && exportSubtitleChunks.length > 0) {
+    logDebug(
+      `Rebased ${exportSubtitleChunks.length} subtitle chunk(s) by ${trimOffset.toFixed(2)}s after source trim.`
+    );
+  }
   logDebug(
     `Subtitle mode selected: ${subtitleRenderMode}; semantic events=${semanticSubtitles?.chunks.length ?? 0}; png atlases=${subtitleAtlases.length}; prep=${subtitlePreparationMs}ms.`
   );

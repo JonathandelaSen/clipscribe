@@ -19,6 +19,7 @@ import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorks
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
 import type { BackgroundTaskRecord } from "@/lib/background-tasks/types";
@@ -96,6 +97,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     exports,
     voiceovers,
     youtubeUploads,
+    sourceAssets,
     activeSourceAsset,
     isLoading,
     error,
@@ -158,7 +160,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               project.timeline.imageItems.some((item) => item.assetId === asset.id)
             )
         );
-        const isDerivedOutput = exports.some((record) => record.outputAssetId === asset.id);
         const activeTranscription = getTaskForResource({
           kind: "transcription",
           projectId,
@@ -167,12 +168,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         if (hasTranscript) blockers.push("transcripts");
         if (usedInShorts) blockers.push("shorts");
         if (usedInTimeline) blockers.push("timeline");
-        if (isDerivedOutput) blockers.push("exports");
         if (activeTranscription && isBackgroundTaskActive(activeTranscription)) blockers.push("background task");
         return [asset.id, blockers] as const;
       })
     );
-  }, [assets, exports, getTaskForResource, project, projectHistory, projectId, shortProjects]);
+  }, [assets, getTaskForResource, project, projectHistory, projectId, shortProjects]);
 
   useEffect(() => {
     void refresh();
@@ -380,8 +380,31 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 <CardContent className="space-y-5">
                   {activeSourceAsset ? (
                     <>
-                      <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/60">
-                        Fuente activa: <span className="font-medium text-white/90">{activeSourceAsset.filename}</span>
+                      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+                        <div className="space-y-2">
+                          <div className="text-sm font-medium text-white/60">Source Media</div>
+                          <Select
+                            value={activeSourceAsset.id}
+                            onValueChange={(assetId) => {
+                              void setActiveSourceAsset(assetId);
+                            }}
+                            disabled={sourceAssets.length === 0 || isActiveSourceTranscribing}
+                          >
+                            <SelectTrigger className="w-full border-white/10 bg-white/[0.03] text-white/90 hover:bg-white/[0.06]">
+                              <SelectValue placeholder="Select audio or video source" />
+                            </SelectTrigger>
+                            <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                              {sourceAssets.map((asset) => (
+                                <SelectItem key={asset.id} value={asset.id} className="focus:bg-cyan-500/20 cursor-pointer">
+                                  {asset.filename} ({asset.kind})
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/60">
+                          Fuente activa: <span className="font-medium text-white/90">{activeSourceAsset.filename}</span>
+                        </div>
                       </div>
                       <LanguageSelector
                         value={transcriptionLanguage}

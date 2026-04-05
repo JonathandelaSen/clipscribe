@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  filterCreatorShortProjectsBySourceAsset,
   getAiSuggestionCreatorShortProjects,
   getManualCreatorShortProjects,
   groupCreatorShortProjectsBySuggestionGeneration,
@@ -186,4 +187,49 @@ test("groupCreatorShortProjectsBySuggestionGeneration groups and sorts AI batche
   assert.equal(groups[1].generatedAt, 240);
   assert.equal(groups[1].sourceSignature, "sig_1");
   assert.deepEqual(groups[1].projects.map((record) => record.id), ["ai_1", "ai_2"]);
+});
+
+test("filterCreatorShortProjectsBySourceAsset keeps manual and AI records isolated per source file", () => {
+  const assetBManual: CreatorShortProjectRecord = {
+    ...manualRecord,
+    id: "manual_2",
+    sourceAssetId: "asset_2",
+    sourceFilename: "source-b.mp4",
+    createdAt: 400,
+    updatedAt: 420,
+    name: "Manual short B",
+  };
+  const assetBAi: CreatorShortProjectRecord = {
+    ...aiRecordC,
+    id: "ai_4",
+    sourceAssetId: "asset_2",
+    sourceFilename: "source-b.mp4",
+    suggestionGenerationId: "gen_3",
+    suggestionGeneratedAt: 410,
+    suggestionSourceSignature: "sig_3",
+    createdAt: 405,
+    updatedAt: 415,
+  };
+
+  const records = [manualRecord, aiRecordA, aiRecordB, assetBManual, assetBAi];
+  const assetARecords = filterCreatorShortProjectsBySourceAsset(records, "asset_1");
+  const assetBRecords = filterCreatorShortProjectsBySourceAsset(records, "asset_2");
+
+  assert.deepEqual(
+    getManualCreatorShortProjects(assetARecords).map((record) => record.id),
+    ["manual_1"]
+  );
+  assert.deepEqual(
+    groupCreatorShortProjectsBySuggestionGeneration(assetARecords).map((group) => group.generationId),
+    ["gen_1"]
+  );
+
+  assert.deepEqual(
+    getManualCreatorShortProjects(assetBRecords).map((record) => record.id),
+    ["manual_2"]
+  );
+  assert.deepEqual(
+    groupCreatorShortProjectsBySuggestionGeneration(assetBRecords).map((group) => group.generationId),
+    ["gen_3"]
+  );
 });

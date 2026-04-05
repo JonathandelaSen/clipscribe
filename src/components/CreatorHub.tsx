@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -99,6 +99,13 @@ import {
   restoreShortProjectAfterCanceledExport,
   shouldReuseShortProjectId,
 } from "@/lib/creator/core/short-lifecycle";
+import {
+  getNextActiveShortPreviewId,
+  getShortPreviewProgressPct,
+  getShortPreviewSeekTime,
+  isLikelyVideoSourceFilename,
+  resolveShortPreviewBoundary,
+} from "@/lib/creator/core/short-preview";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { createEditorAssetRecord } from "@/lib/editor/storage";
 import { buildCompletedCreatorShortRenderResponse } from "@/lib/creator/system-export-contract";
@@ -841,15 +848,145 @@ function AiSuggestionPreviewCard({
   transcriptPreview,
   onOpenEditor,
   onDelete,
+  isPreviewActive,
+  onTogglePreview,
+  previewSourceUrl,
+  previewSourceFilename,
+  previewSourceIsVideo,
+  isPreviewSourceLoading,
 }: {
   project: CreatorShortProjectRecord;
   transcriptPreview: string;
   onOpenEditor: () => void;
   onDelete: () => void;
+  isPreviewActive: boolean;
+  onTogglePreview: (projectId: string) => void;
+  previewSourceUrl: string | null;
+  previewSourceFilename: string | null;
+  previewSourceIsVideo: boolean;
+  isPreviewSourceLoading: boolean;
 }) {
+  const [expandedItem, setExpandedItem] = useState<string>("");
+  const [previewCurrentTime, setPreviewCurrentTime] = useState(project.clip.startSeconds);
+  const [isPreviewMuted, setIsPreviewMuted] = useState(true);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const shouldAutoplayPreviewRef = useRef(false);
+  const hasPrimedPreviewFrameRef = useRef(false);
+  const displayCurrentTime = isPreviewActive ? previewCurrentTime : project.clip.startSeconds;
+  const previewProgressPct = getShortPreviewProgressPct(displayCurrentTime, project.clip);
+  const hasPreviewVideo = !!previewSourceUrl && previewSourceIsVideo;
+  const inferredPreviewFilename = previewSourceFilename || project.sourceFilename;
+  const previewStatus = isPreviewSourceLoading
+    ? "loading"
+    : hasPreviewVideo
+      ? "ready"
+      : isLikelyVideoSourceFilename(inferredPreviewFilename)
+        ? "missing"
+        : "audio_only";
+
+  useEffect(() => {
+    hasPrimedPreviewFrameRef.current = false;
+  }, [previewSourceUrl, project.id]);
+
+  useEffect(() => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+
+    if (!isPreviewActive) {
+      video.pause();
+      return;
+    }
+
+    if (!hasPreviewVideo || !shouldAutoplayPreviewRef.current) return;
+    if (video.readyState < 1) return;
+    video.muted = isPreviewMuted;
+    if (video.currentTime < project.clip.startSeconds || video.currentTime >= project.clip.endSeconds) {
+      video.currentTime = project.clip.startSeconds;
+    }
+    shouldAutoplayPreviewRef.current = false;
+    void video.play().catch((error) => {
+      console.error("Failed to start AI suggestion preview", error);
+    });
+  }, [hasPreviewVideo, isPreviewActive, isPreviewMuted, project.clip.endSeconds, project.clip.startSeconds]);
+
+  useEffect(() => {
+    if (isPreviewActive && !hasPreviewVideo && !isPreviewSourceLoading) {
+      onTogglePreview(project.id);
+    }
+  }, [hasPreviewVideo, isPreviewActive, isPreviewSourceLoading, onTogglePreview, project.id]);
+
+  const handlePreviewToggle = useCallback(() => {
+    if (!hasPreviewVideo) {
+      return;
+    }
+
+    const video = previewVideoRef.current;
+    if (isPreviewActive) {
+      video?.pause();
+      setPreviewCurrentTime(video?.currentTime ?? previewCurrentTime);
+      onTogglePreview(project.id);
+      return;
+    }
+
+    if (video && (video.currentTime < project.clip.startSeconds || video.currentTime >= project.clip.endSeconds)) {
+      video.currentTime = project.clip.startSeconds;
+      setPreviewCurrentTime(project.clip.startSeconds);
+    }
+    shouldAutoplayPreviewRef.current = true;
+    onTogglePreview(project.id);
+  }, [hasPreviewVideo, isPreviewActive, onTogglePreview, previewCurrentTime, project.clip.endSeconds, project.clip.startSeconds, project.id]);
+
+  const handlePreviewMuteToggle = useCallback(() => {
+    const video = previewVideoRef.current;
+    setIsPreviewMuted((current) => {
+      const next = !current;
+      if (video) {
+        video.muted = next;
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePreviewSeek = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      if (!hasPreviewVideo) return;
+      const video = previewVideoRef.current;
+      if (!video) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      const progressPct = ((event.clientX - rect.left) / rect.width) * 100;
+      const seekTime = getShortPreviewSeekTime(progressPct, project.clip);
+      video.currentTime = seekTime;
+      setPreviewCurrentTime(seekTime);
+    },
+    [hasPreviewVideo, project.clip]
+  );
+
+  const handlePreviewTimeUpdate = useCallback(() => {
+    const video = previewVideoRef.current;
+    if (!video) return;
+    const boundary = resolveShortPreviewBoundary(video.currentTime, project.clip);
+    if (boundary.shouldStop) {
+      video.pause();
+      video.currentTime = boundary.nextTimeSeconds;
+      setPreviewCurrentTime(boundary.nextTimeSeconds);
+      if (isPreviewActive) onTogglePreview(project.id);
+      return;
+    }
+    setPreviewCurrentTime(boundary.nextTimeSeconds);
+  }, [isPreviewActive, onTogglePreview, project.clip, project.id]);
+
+  const previewStatusLabel =
+    previewStatus === "loading"
+      ? "Loading preview..."
+      : previewStatus === "audio_only"
+        ? "Audio-only source"
+        : previewStatus === "missing"
+          ? "Source video missing"
+          : "Preview this recommended short";
+
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 px-5 flex flex-col">
-      <Accordion type="single" collapsible className="w-full">
+      <Accordion type="single" collapsible className="w-full" value={expandedItem} onValueChange={setExpandedItem}>
         <AccordionItem value={project.id} className="border-none">
         <AccordionTrigger className="py-5 text-left hover:no-underline">
           <div className="min-w-0 flex-1 space-y-3">
@@ -889,6 +1026,120 @@ function AiSuggestionPreviewCard({
             </div>
           </div>
         </AccordionTrigger>
+        <div className="pb-5">
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(14,14,20,0.98),rgba(8,8,12,0.98))]">
+            <div className="relative aspect-video bg-black">
+              {hasPreviewVideo && previewSourceUrl ? (
+                <video
+                  ref={previewVideoRef}
+                  key={`${project.id}:${previewSourceUrl}`}
+                  src={previewSourceUrl}
+                  playsInline
+                  preload="metadata"
+                  className="h-full w-full object-contain"
+                  onLoadedData={() => {
+                    const video = previewVideoRef.current;
+                    if (!video) return;
+                    video.muted = isPreviewMuted;
+                    if (!hasPrimedPreviewFrameRef.current) {
+                      hasPrimedPreviewFrameRef.current = true;
+                      if (Math.abs(video.currentTime - project.clip.startSeconds) > 0.05) {
+                        video.currentTime = project.clip.startSeconds;
+                        return;
+                      }
+                    }
+                    setPreviewCurrentTime(video.currentTime);
+                    if (isPreviewActive && shouldAutoplayPreviewRef.current) {
+                      shouldAutoplayPreviewRef.current = false;
+                      void video.play().catch((error) => {
+                        console.error("Failed to start AI suggestion preview", error);
+                      });
+                    }
+                  }}
+                  onSeeked={() => {
+                    const video = previewVideoRef.current;
+                    if (!video) return;
+                    setPreviewCurrentTime(video.currentTime);
+                    if (isPreviewActive && shouldAutoplayPreviewRef.current) {
+                      shouldAutoplayPreviewRef.current = false;
+                      void video.play().catch((error) => {
+                        console.error("Failed to start AI suggestion preview", error);
+                      });
+                    }
+                  }}
+                  onTimeUpdate={handlePreviewTimeUpdate}
+                />
+              ) : (
+                <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(232,121,249,0.18),transparent_45%),linear-gradient(135deg,rgba(34,211,238,0.12),rgba(249,115,22,0.06)_45%,rgba(0,0,0,0.92))] px-5 py-4">
+                  <div className="flex h-full flex-col justify-between">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/55">
+                        {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                      </span>
+                      <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
+                        {project.clip.durationSeconds.toFixed(1)}s
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="text-base font-semibold text-white/92">{project.plan.title}</div>
+                      <div className="text-sm leading-relaxed text-white/62">
+                        {previewStatus === "loading"
+                          ? "Preparing the original source clip for inline playback."
+                          : previewStatus === "audio_only"
+                            ? "This source only has audio, so there is no inline video preview here."
+                            : previewStatus === "missing"
+                              ? "The local source file is no longer available in the browser storage."
+                              : "Press play to watch and listen to the exact recommended moment before opening the editor."}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent px-4 pb-3 pt-8">
+                <div className="flex items-center justify-between gap-3 text-[11px] text-white/65">
+                  <span>{secondsToClock(Math.max(0, displayCurrentTime - project.clip.startSeconds))}</span>
+                  <span>{secondsToClock(project.clip.durationSeconds)}</span>
+                </div>
+                <div
+                  className={cn(
+                    "mt-2 h-1.5 rounded-full",
+                    hasPreviewVideo ? "cursor-pointer bg-white/20" : "bg-white/10"
+                  )}
+                  onClick={handlePreviewSeek}
+                >
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-orange-400 via-fuchsia-400 to-cyan-300 transition-[width] duration-100"
+                    style={{ width: `${previewProgressPct}%` }}
+                  />
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handlePreviewToggle}
+                      disabled={!hasPreviewVideo || isPreviewSourceLoading}
+                      className="rounded-full bg-white/10 p-1.5 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={isPreviewActive ? "Pause" : "Play"}
+                    >
+                      {isPreviewActive ? <Pause className="h-4 w-4 text-white" /> : <Play className="h-4 w-4 text-white" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handlePreviewMuteToggle}
+                      disabled={!hasPreviewVideo || isPreviewSourceLoading}
+                      className="rounded-full bg-white/10 p-1.5 transition-colors hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={isPreviewMuted ? "Unmute" : "Mute"}
+                    >
+                      {isPreviewMuted ? <VolumeX className="h-4 w-4 text-white/70" /> : <Volume2 className="h-4 w-4 text-white" />}
+                    </button>
+                  </div>
+                  <div className="text-[11px] text-white/55">{previewStatusLabel}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
         <AccordionContent className="space-y-4 pb-5">
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             <SuggestionDetailField label="Clip title" value={project.clip.title} />
@@ -941,6 +1192,98 @@ function AiSuggestionPreviewCard({
           Open in Editor
         </Button>
       </div>
+    </div>
+  );
+}
+
+function AiSuggestionBatchGroups({
+  groups,
+  getTranscriptPreview,
+  onOpenEditor,
+  onDeleteProject,
+  onDeleteGeneration,
+  activePreviewProjectId,
+  onTogglePreview,
+  previewSourceUrl,
+  previewSourceFilename,
+  previewSourceIsVideo,
+  isPreviewSourceLoading,
+}: {
+  groups: Array<{
+    generationId: string;
+    generatedAt: number;
+    inputSummary?: {
+      niche?: string;
+      audience?: string;
+      tone?: string;
+      transcriptVersionLabel?: string;
+      subtitleVersionLabel?: string;
+    };
+    projects: CreatorShortProjectRecord[];
+  }>;
+  getTranscriptPreview: (project: CreatorShortProjectRecord) => string;
+  onOpenEditor: (project: CreatorShortProjectRecord) => void;
+  onDeleteProject: (project: CreatorShortProjectRecord) => void;
+  onDeleteGeneration: (generationId: string, generationLabel: string) => void;
+  activePreviewProjectId: string;
+  onTogglePreview: (projectId: string) => void;
+  previewSourceUrl: string | null;
+  previewSourceFilename: string | null;
+  previewSourceIsVideo: boolean;
+  isPreviewSourceLoading: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      {groups.map((group) => (
+        <div key={group.generationId} className="rounded-2xl border border-white/10 bg-black/20 p-5">
+          <div className="mb-4 flex items-start justify-between gap-3">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-fuchsia-100">
+                  AI
+                </span>
+                <span className="text-sm font-semibold text-white/90">
+                  {new Date(group.generatedAt).toLocaleString()}
+                </span>
+                <span className="text-xs text-white/45">
+                  {group.projects.length} suggestion{group.projects.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div className="text-xs leading-relaxed text-white/55">
+                {formatAiSuggestionInputSummary(group.inputSummary)}
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
+              onClick={() => onDeleteGeneration(group.generationId, new Date(group.generatedAt).toLocaleString())}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete batch
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+            {group.projects.map((project) => (
+              <AiSuggestionPreviewCard
+                key={project.id}
+                project={project}
+                transcriptPreview={getTranscriptPreview(project)}
+                onOpenEditor={() => onOpenEditor(project)}
+                onDelete={() => onDeleteProject(project)}
+                isPreviewActive={activePreviewProjectId === project.id}
+                onTogglePreview={onTogglePreview}
+                previewSourceUrl={previewSourceUrl}
+                previewSourceFilename={previewSourceFilename}
+                previewSourceIsVideo={previewSourceIsVideo}
+                isPreviewSourceLoading={isPreviewSourceLoading}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -1167,14 +1510,21 @@ export function CreatorHub({
   const isToolLocked = !!lockedTool;
   const isVideoInfoPage = lockedTool === "video_info";
   const isShortsPage = lockedTool === "clip_lab";
+  const sourceSelectorLabel = activeTool === "clip_lab" ? "Source file" : "Project";
+  const sourceSelectorPlaceholder =
+    activeTool === "clip_lab"
+      ? (isLoadingHistory ? "Loading source files..." : "Select source file")
+      : (isLoadingHistory ? "Loading projects..." : "Select project");
 
   const [mediaUrl, setMediaUrl] = useState<string | null>(null);
   const [mediaFilename, setMediaFilename] = useState<string | null>(null);
   const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [isMediaPreviewLoading, setIsMediaPreviewLoading] = useState(false);
   const [isVideoMedia, setIsVideoMedia] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
+  const [activeSuggestionPreviewProjectId, setActiveSuggestionPreviewProjectId] = useState("");
   const [previewFrameWidth, setPreviewFrameWidth] = useState(0);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFrameElRef = useRef<HTMLDivElement | null>(null);
@@ -1243,7 +1593,7 @@ export function CreatorHub({
     deleteProject,
     deleteSuggestionGeneration,
     hasAiSuggestionsForSignature,
-  } = useCreatorShortsLibrary(selectedProjectRootId);
+  } = useCreatorShortsLibrary(selectedProjectRootId, selectedSourceAssetId);
   const {
     runs: llmRuns,
     refresh: refreshLlmRuns,
@@ -1360,6 +1710,7 @@ export function CreatorHub({
 
     async function loadMedia() {
       if (!selectedProject) {
+        setIsMediaPreviewLoading(false);
         setMediaUrl(null);
         setMediaFilename(null);
         setMediaFile(null);
@@ -1368,9 +1719,11 @@ export function CreatorHub({
       }
 
       try {
+        setIsMediaPreviewLoading(true);
         const record = selectedSourceAssetId ? await db.projectAssets.get(selectedSourceAssetId) : undefined;
         if (cancelled) return;
         if (!record?.fileBlob) {
+          setIsMediaPreviewLoading(false);
           setMediaUrl(null);
           setMediaFilename(null);
           setMediaFile(null);
@@ -1382,9 +1735,11 @@ export function CreatorHub({
         setMediaFilename(record.fileBlob.name);
         setMediaFile(record.fileBlob);
         setIsVideoMedia(record.fileBlob.type.includes("video") || /\.(mp4|webm|mov|mkv)$/i.test(record.fileBlob.name));
+        setIsMediaPreviewLoading(false);
       } catch (error) {
         console.error("Failed to load media preview", error);
         if (!cancelled) {
+          setIsMediaPreviewLoading(false);
           setMediaUrl(null);
           setMediaFilename(null);
           setMediaFile(null);
@@ -1415,7 +1770,14 @@ export function CreatorHub({
     setShowSafeZones(true);
     setIntroOverlay(getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(getDefaultCreatorTextOverlayState("outro"));
+    setActiveSuggestionPreviewProjectId("");
   }, [selectedProject?.id]);
+
+  useEffect(() => {
+    if (hubView !== "start" && hubView !== "ai_lab") {
+      setActiveSuggestionPreviewProjectId("");
+    }
+  }, [hubView]);
 
   // Video event callbacks — attached as JSX props on the <video>, no effect needed
   const handleVideoTimeUpdate = useCallback(() => {
@@ -1844,6 +2206,20 @@ export function CreatorHub({
     if (!aiSuggestionSourceSignature) return [];
     return aiSuggestionsByGeneration.filter((group) => group.sourceSignature === aiSuggestionSourceSignature);
   }, [aiSuggestionSourceSignature, aiSuggestionsByGeneration]);
+
+  const resolveAiSuggestionTranscriptPreview = useCallback(
+    (project: CreatorShortProjectRecord) => {
+      if (selectedSubtitle && project.subtitleId === selectedSubtitle.id) {
+        return summarizeClipText(project.clip, selectedSubtitle.chunks, 200);
+      }
+      return project.clip.reason;
+    },
+    [selectedSubtitle]
+  );
+
+  const handleToggleAiSuggestionPreview = useCallback((projectId: string) => {
+    setActiveSuggestionPreviewProjectId((currentId) => getNextActiveShortPreviewId(currentId, projectId));
+  }, []);
 
   const defaultAiSuggestionEditorState = useMemo<CreatorShortEditorState>(
     () => ({
@@ -2919,7 +3295,7 @@ export function CreatorHub({
                 </div>
 
                 <div>
-                  <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Project</label>
+                  <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">{sourceSelectorLabel}</label>
                   <Select
                     value={selectedProject?.id ?? ""}
                     onValueChange={(value) => {
@@ -2930,7 +3306,7 @@ export function CreatorHub({
                     disabled={isLoadingHistory || history.length === 0}
                   >
                     <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
-                      <SelectValue placeholder={isLoadingHistory ? "Loading projects..." : "Select project"} />
+                      <SelectValue placeholder={sourceSelectorPlaceholder} />
                     </SelectTrigger>
                     <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
                       {history.map((item) => (
@@ -3401,7 +3777,7 @@ export function CreatorHub({
                     className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
                     onClick={() => {
                       if (!manualFallbackClip || !manualFallbackPlan) {
-                        toast.error("Select a source asset first.");
+                        toast.error("Select a source file first.");
                         return;
                       }
                       setActiveSavedShortProjectId("");
@@ -3515,60 +3891,24 @@ export function CreatorHub({
                       </span>
                     </div>
 
-                    <div className="space-y-4">
-                      {aiSuggestionsByGeneration.map((group) => (
-                        <div key={group.generationId} className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                          <div className="mb-4 flex items-start justify-between gap-3">
-                            <div className="space-y-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-fuchsia-100">
-                                  AI
-                                </span>
-                                <span className="text-sm font-semibold text-white/90">
-                                  {new Date(group.generatedAt).toLocaleString()}
-                                </span>
-                                <span className="text-xs text-white/45">
-                                  {group.projects.length} suggestion{group.projects.length === 1 ? "" : "s"}
-                                </span>
-                              </div>
-                              <div className="text-xs leading-relaxed text-white/55">
-                                {formatAiSuggestionInputSummary(group.inputSummary)}
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
-                              onClick={() =>
-                                void handleDeleteAiSuggestionGeneration(
-                                  group.generationId,
-                                  new Date(group.generatedAt).toLocaleString()
-                                )
-                              }
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete batch
-                            </Button>
-                          </div>
-
-                          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                            {group.projects.map((project) => (
-                              <AiSuggestionPreviewCard
-                                key={project.id}
-                                project={project}
-                                transcriptPreview={project.clip.reason}
-                                onOpenEditor={() => {
-                                  applySavedShortProject(project);
-                                  setHubView("editor");
-                                }}
-                                onDelete={() => void handleDeleteShortProject(project)}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
+                    <AiSuggestionBatchGroups
+                      groups={aiSuggestionsByGeneration}
+                      getTranscriptPreview={resolveAiSuggestionTranscriptPreview}
+                      onOpenEditor={(project) => {
+                        applySavedShortProject(project);
+                        setHubView("editor");
+                      }}
+                      onDeleteProject={(project) => void handleDeleteShortProject(project)}
+                      onDeleteGeneration={(generationId, generationLabel) =>
+                        void handleDeleteAiSuggestionGeneration(generationId, generationLabel)
+                      }
+                      activePreviewProjectId={activeSuggestionPreviewProjectId}
+                      onTogglePreview={handleToggleAiSuggestionPreview}
+                      previewSourceUrl={mediaUrl}
+                      previewSourceFilename={mediaFilename}
+                      previewSourceIsVideo={isVideoMedia}
+                      isPreviewSourceLoading={isMediaPreviewLoading}
+                    />
                   </div>
                 )}
               </div>
@@ -3615,60 +3955,24 @@ export function CreatorHub({
                   </CardHeader>
                   <CardContent className="space-y-4 max-h-[42rem] overflow-auto pr-1">
                     {matchingAiSuggestionGenerations.length > 0 ? (
-                      matchingAiSuggestionGenerations.map((group) => (
-                        <div key={group.generationId} className="rounded-2xl border border-white/10 bg-black/20 p-5">
-                          <div className="mb-4 flex items-start justify-between gap-3">
-                            <div className="space-y-2">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full border border-fuchsia-400/20 bg-fuchsia-400/10 px-2.5 py-1 text-[11px] font-medium uppercase tracking-wide text-fuchsia-100">
-                                  AI Batch
-                                </span>
-                                <span className="text-sm font-semibold text-white/90">
-                                  {new Date(group.generatedAt).toLocaleString()}
-                                </span>
-                              </div>
-                              <div className="text-xs leading-relaxed text-white/55">
-                                {formatAiSuggestionInputSummary(group.inputSummary)}
-                              </div>
-                            </div>
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              className="bg-white/5 text-white/75 hover:bg-red-500/15 hover:text-red-100"
-                              onClick={() =>
-                                void handleDeleteAiSuggestionGeneration(
-                                  group.generationId,
-                                  new Date(group.generatedAt).toLocaleString()
-                                )
-                              }
-                            >
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete batch
-                            </Button>
-                          </div>
-
-                          <div className="space-y-3">
-                            {group.projects.map((project) => {
-                              const textPreview = selectedSubtitle
-                                ? summarizeClipText(project.clip, selectedSubtitle.chunks, 200)
-                                : project.clip.hook;
-                              return (
-                                <AiSuggestionPreviewCard
-                                  key={project.id}
-                                  project={project}
-                                  transcriptPreview={textPreview}
-                                  onOpenEditor={() => {
-                                    applySavedShortProject(project);
-                                    setHubView("editor");
-                                  }}
-                                  onDelete={() => void handleDeleteShortProject(project)}
-                                />
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))
+                      <AiSuggestionBatchGroups
+                        groups={matchingAiSuggestionGenerations}
+                        getTranscriptPreview={resolveAiSuggestionTranscriptPreview}
+                        onOpenEditor={(project) => {
+                          applySavedShortProject(project);
+                          setHubView("editor");
+                        }}
+                        onDeleteProject={(project) => void handleDeleteShortProject(project)}
+                        onDeleteGeneration={(generationId, generationLabel) =>
+                          void handleDeleteAiSuggestionGeneration(generationId, generationLabel)
+                        }
+                        activePreviewProjectId={activeSuggestionPreviewProjectId}
+                        onTogglePreview={handleToggleAiSuggestionPreview}
+                        previewSourceUrl={mediaUrl}
+                        previewSourceFilename={mediaFilename}
+                        previewSourceIsVideo={isVideoMedia}
+                        isPreviewSourceLoading={isMediaPreviewLoading}
+                      />
                     ) : (
                       <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-8 text-center text-sm text-white/60">
                         <Flame className="w-8 h-8 mx-auto text-white/20 mb-3" />
@@ -4570,7 +4874,7 @@ export function CreatorHub({
                               <div className="text-xs text-white/50 bg-white/5 border border-white/10 rounded-lg p-2">
                                 {selectedProject && (!selectedTranscript || !selectedSubtitle)
                                   ? "Select a transcript + subtitle source to enable save/export."
-                                  : "Pick a source project to start editing and saving shorts."}
+                                  : "Pick a source file to start editing and saving shorts."}
                               </div>
                             )}
                             <div className="pt-2 flex flex-wrap gap-2">

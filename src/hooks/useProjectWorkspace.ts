@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createEditorAssetRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import { readMediaMetadata } from "@/lib/editor/media";
 import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
+import { getActiveProjectSourceAsset, getSelectableProjectSourceAssets } from "@/lib/projects/source-assets";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type {
   ContentProjectRecord,
@@ -80,13 +81,12 @@ export function useProjectWorkspace(projectId: string | undefined) {
   }, [refresh]);
 
   const sourceAssets = useMemo(
-    () => assets.filter((asset) => asset.role === "source" && (asset.kind === "video" || asset.kind === "audio")),
+    () => getSelectableProjectSourceAssets(assets),
     [assets]
   );
 
   const activeSourceAsset = useMemo(() => {
-    if (!sourceAssets.length) return undefined;
-    return sourceAssets.find((asset) => asset.id === project?.activeSourceAssetId) ?? sourceAssets[0];
+    return getActiveProjectSourceAsset(sourceAssets, project?.activeSourceAssetId);
   }, [project?.activeSourceAssetId, sourceAssets]);
 
   const saveProject = useCallback(async (record: ContentProjectRecord) => {
