@@ -1,7 +1,7 @@
 import type { CreatorShortsGenerateRequest } from "../../../creator/types";
 import { buildTimedTranscriptLines } from "../shared/transcript-format";
 
-export const CREATOR_SHORTS_PROMPT_VERSION = "creator-shorts-v2";
+export const CREATOR_SHORTS_PROMPT_VERSION = "creator-shorts-v3";
 
 export function buildShortsPrompt(request: CreatorShortsGenerateRequest): string {
   const timedTranscript = buildTimedTranscriptLines(request.transcriptChunks);
@@ -11,6 +11,9 @@ export function buildShortsPrompt(request: CreatorShortsGenerateRequest): string
     "Return valid JSON only.",
     "Decide the short candidates directly from the transcript and timestamps.",
     "Do not invent timestamps or clip ranges that are not grounded in the timed transcript.",
+    "startSeconds and endSeconds must be JSON numbers measured in absolute seconds from the start of the source.",
+    "Never use mm:ss, hh:mm:ss, timestamp strings, or any colon-based time format.",
+    "If the transcript shows [6:04-6:31], you must return startSeconds: 364 and endSeconds: 391.",
     "Return 3 to 6 ranked shorts in descending score order.",
     "Each short must be 15 to 60 seconds long, ideally 20 to 45 seconds.",
     "Each short is one complete suggestion: timing, score, title, rationale, caption, intro text, and end card text.",

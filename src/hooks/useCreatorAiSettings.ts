@@ -2,16 +2,24 @@
 
 import { useCallback, useSyncExternalStore } from "react";
 
-import type { CreatorPromptProfiles, CreatorVideoInfoPromptProfile } from "@/lib/creator/types";
+import type {
+  CreatorAIFeatureSettings,
+  CreatorAIFeatureSettingsMap,
+  CreatorLLMFeature,
+  CreatorPromptProfiles,
+  CreatorVideoInfoPromptProfile,
+} from "@/lib/creator/types";
 import {
   CREATOR_AI_SETTINGS_STORAGE_KEY,
   type CreatorAISettings,
   clearCreatorAISettings,
   maskElevenLabsApiKey,
+  maskGeminiApiKey,
   maskOpenAIApiKey,
   readCreatorAISettings,
   writeCreatorAISettings,
 } from "@/lib/creator/user-ai-settings";
+
 const localListeners = new Set<() => void>();
 
 function emitChange() {
@@ -61,31 +69,104 @@ function getServerSnapshot() {
 
 export function useCreatorAiSettings() {
   const settings = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  const credentials = settings?.credentials;
+  const featureSettings = settings?.featureSettings;
+
+  const writeSettings = useCallback((input: {
+    openAIApiKey?: string;
+    geminiApiKey?: string;
+    elevenLabsApiKey?: string;
+    featureSettings?: CreatorAIFeatureSettingsMap;
+    promptProfiles?: CreatorPromptProfiles;
+  }) => {
+    if (typeof window === "undefined") return null;
+    const next = writeCreatorAISettings(window.localStorage, input);
+    emitChange();
+    return next;
+  }, []);
 
   const saveOpenAIApiKey = useCallback((value: string) => {
-    if (typeof window === "undefined") return null;
-    const next = writeCreatorAISettings(window.localStorage, {
+    return writeSettings({
       openAIApiKey: value,
-      elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+      geminiApiKey: credentials?.geminiApiKey ?? "",
+      elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+      featureSettings,
       promptProfiles: settings?.promptProfiles,
     });
-    emitChange();
-    return next;
-  }, [settings]);
+  }, [credentials?.elevenLabsApiKey, credentials?.geminiApiKey, featureSettings, settings?.promptProfiles, writeSettings]);
+
+  const saveGeminiApiKey = useCallback((value: string) => {
+    return writeSettings({
+      openAIApiKey: credentials?.openAIApiKey ?? "",
+      geminiApiKey: value,
+      elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+      featureSettings,
+      promptProfiles: settings?.promptProfiles,
+    });
+  }, [credentials?.elevenLabsApiKey, credentials?.openAIApiKey, featureSettings, settings?.promptProfiles, writeSettings]);
 
   const saveElevenLabsApiKey = useCallback((value: string) => {
-    if (typeof window === "undefined") return null;
-    const next = writeCreatorAISettings(window.localStorage, {
-      openAIApiKey: settings?.openAIApiKey ?? "",
+    return writeSettings({
+      openAIApiKey: credentials?.openAIApiKey ?? "",
+      geminiApiKey: credentials?.geminiApiKey ?? "",
       elevenLabsApiKey: value,
+      featureSettings,
       promptProfiles: settings?.promptProfiles,
     });
-    emitChange();
-    return next;
-  }, [settings]);
+  }, [credentials?.geminiApiKey, credentials?.openAIApiKey, featureSettings, settings?.promptProfiles, writeSettings]);
+
+  const saveFeatureSettings = useCallback(
+    (feature: CreatorLLMFeature, nextFeatureSettings: CreatorAIFeatureSettings | undefined) => {
+      const nextSettings: CreatorAIFeatureSettingsMap = {
+        ...(featureSettings ?? {}),
+      };
+      if (nextFeatureSettings) {
+        nextSettings[feature] = nextFeatureSettings;
+      } else {
+        delete nextSettings[feature];
+      }
+
+      return writeSettings({
+        openAIApiKey: credentials?.openAIApiKey ?? "",
+        geminiApiKey: credentials?.geminiApiKey ?? "",
+        elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+        featureSettings: nextSettings,
+        promptProfiles: settings?.promptProfiles,
+      });
+    },
+    [
+      credentials?.elevenLabsApiKey,
+      credentials?.geminiApiKey,
+      credentials?.openAIApiKey,
+      featureSettings,
+      settings?.promptProfiles,
+      writeSettings,
+    ]
+  );
+
+  const saveFeatureModel = useCallback(
+    (feature: CreatorLLMFeature, model: string, provider?: CreatorAIFeatureSettings["provider"]) => {
+      const current = featureSettings?.[feature] ?? {};
+      return saveFeatureSettings(feature, {
+        provider: provider ?? current.provider,
+        model,
+      });
+    },
+    [featureSettings, saveFeatureSettings]
+  );
+
+  const saveFeatureProvider = useCallback(
+    (feature: CreatorLLMFeature, provider: CreatorAIFeatureSettings["provider"]) => {
+      const current = featureSettings?.[feature] ?? {};
+      return saveFeatureSettings(feature, {
+        provider,
+        model: current.model,
+      });
+    },
+    [featureSettings, saveFeatureSettings]
+  );
 
   const saveVideoInfoPromptProfile = useCallback((profile: CreatorVideoInfoPromptProfile | undefined) => {
-    if (typeof window === "undefined") return null;
     const nextPromptProfiles: CreatorPromptProfiles = {
       ...(settings?.promptProfiles ?? {}),
     };
@@ -94,44 +175,75 @@ export function useCreatorAiSettings() {
     } else {
       delete nextPromptProfiles.video_info;
     }
-    const next = writeCreatorAISettings(window.localStorage, {
-      openAIApiKey: settings?.openAIApiKey ?? "",
-      elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+    return writeSettings({
+      openAIApiKey: credentials?.openAIApiKey ?? "",
+      geminiApiKey: credentials?.geminiApiKey ?? "",
+      elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+      featureSettings,
       promptProfiles: nextPromptProfiles,
     });
-    emitChange();
-    return next;
-  }, [settings?.elevenLabsApiKey, settings?.openAIApiKey, settings?.promptProfiles]);
+  }, [
+    credentials?.elevenLabsApiKey,
+    credentials?.geminiApiKey,
+    credentials?.openAIApiKey,
+    featureSettings,
+    settings?.promptProfiles,
+    writeSettings,
+  ]);
 
   const clearOpenAIApiKey = useCallback(() => {
     if (typeof window === "undefined") return;
     const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
-    if (hasPromptProfiles || (settings?.elevenLabsApiKey ?? "").trim()) {
-      writeCreatorAISettings(window.localStorage, {
+    const hasFeatureSettings = Boolean(featureSettings && Object.keys(featureSettings).length > 0);
+    if (hasPromptProfiles || hasFeatureSettings || (credentials?.elevenLabsApiKey ?? "").trim() || (credentials?.geminiApiKey ?? "").trim()) {
+      writeSettings({
         openAIApiKey: "",
-        elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+        geminiApiKey: credentials?.geminiApiKey ?? "",
+        elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+        featureSettings,
         promptProfiles: settings?.promptProfiles,
       });
     } else {
       clearCreatorAISettings(window.localStorage);
+      emitChange();
     }
-    emitChange();
-  }, [settings]);
+  }, [credentials?.elevenLabsApiKey, credentials?.geminiApiKey, featureSettings, settings, writeSettings]);
+
+  const clearGeminiApiKey = useCallback(() => {
+    if (typeof window === "undefined") return;
+    const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
+    const hasFeatureSettings = Boolean(featureSettings && Object.keys(featureSettings).length > 0);
+    if (hasPromptProfiles || hasFeatureSettings || (credentials?.elevenLabsApiKey ?? "").trim() || (credentials?.openAIApiKey ?? "").trim()) {
+      writeSettings({
+        openAIApiKey: credentials?.openAIApiKey ?? "",
+        geminiApiKey: "",
+        elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+        featureSettings,
+        promptProfiles: settings?.promptProfiles,
+      });
+    } else {
+      clearCreatorAISettings(window.localStorage);
+      emitChange();
+    }
+  }, [credentials?.elevenLabsApiKey, credentials?.openAIApiKey, featureSettings, settings, writeSettings]);
 
   const clearElevenLabsApiKey = useCallback(() => {
     if (typeof window === "undefined") return;
     const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
-    if (hasPromptProfiles || (settings?.openAIApiKey ?? "").trim()) {
-      writeCreatorAISettings(window.localStorage, {
-        openAIApiKey: settings?.openAIApiKey ?? "",
+    const hasFeatureSettings = Boolean(featureSettings && Object.keys(featureSettings).length > 0);
+    if (hasPromptProfiles || hasFeatureSettings || (credentials?.openAIApiKey ?? "").trim() || (credentials?.geminiApiKey ?? "").trim()) {
+      writeSettings({
+        openAIApiKey: credentials?.openAIApiKey ?? "",
+        geminiApiKey: credentials?.geminiApiKey ?? "",
         elevenLabsApiKey: "",
+        featureSettings,
         promptProfiles: settings?.promptProfiles,
       });
     } else {
       clearCreatorAISettings(window.localStorage);
+      emitChange();
     }
-    emitChange();
-  }, [settings]);
+  }, [credentials?.geminiApiKey, credentials?.openAIApiKey, featureSettings, settings, writeSettings]);
 
   const clearVideoInfoPromptProfile = useCallback(() => {
     if (typeof window === "undefined") return;
@@ -140,37 +252,61 @@ export function useCreatorAiSettings() {
     };
     delete nextPromptProfiles.video_info;
     if (
-      (settings?.openAIApiKey ?? "").trim() ||
-      (settings?.elevenLabsApiKey ?? "").trim() ||
+      (credentials?.openAIApiKey ?? "").trim() ||
+      (credentials?.geminiApiKey ?? "").trim() ||
+      (credentials?.elevenLabsApiKey ?? "").trim() ||
+      Object.keys(featureSettings ?? {}).length > 0 ||
       Object.keys(nextPromptProfiles).length > 0
     ) {
-      writeCreatorAISettings(window.localStorage, {
-        openAIApiKey: settings?.openAIApiKey ?? "",
-        elevenLabsApiKey: settings?.elevenLabsApiKey ?? "",
+      writeSettings({
+        openAIApiKey: credentials?.openAIApiKey ?? "",
+        geminiApiKey: credentials?.geminiApiKey ?? "",
+        elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+        featureSettings,
         promptProfiles: nextPromptProfiles,
       });
     } else {
       clearCreatorAISettings(window.localStorage);
+      emitChange();
     }
-    emitChange();
-  }, [settings?.elevenLabsApiKey, settings?.openAIApiKey, settings?.promptProfiles]);
+  }, [
+    credentials?.elevenLabsApiKey,
+    credentials?.geminiApiKey,
+    credentials?.openAIApiKey,
+    featureSettings,
+    settings?.promptProfiles,
+    writeSettings,
+  ]);
 
-  const openAIApiKey = settings?.openAIApiKey ?? "";
-  const elevenLabsApiKey = settings?.elevenLabsApiKey ?? "";
+  const openAIApiKey = credentials?.openAIApiKey ?? "";
+  const geminiApiKey = credentials?.geminiApiKey ?? "";
+  const elevenLabsApiKey = credentials?.elevenLabsApiKey ?? "";
   const videoInfoPromptProfile = settings?.promptProfiles?.video_info;
 
   return {
     settings,
+    credentials,
+    featureSettings,
     openAIApiKey,
+    geminiApiKey,
     elevenLabsApiKey,
     hasOpenAIApiKey: openAIApiKey.length > 0,
+    hasGeminiApiKey: geminiApiKey.length > 0,
     hasElevenLabsApiKey: elevenLabsApiKey.length > 0,
     maskedOpenAIApiKey: openAIApiKey ? maskOpenAIApiKey(openAIApiKey) : "",
+    maskedGeminiApiKey: geminiApiKey ? maskGeminiApiKey(geminiApiKey) : "",
     maskedElevenLabsApiKey: elevenLabsApiKey ? maskElevenLabsApiKey(elevenLabsApiKey) : "",
+    shortsFeatureSettings: featureSettings?.shorts,
+    videoInfoFeatureSettings: featureSettings?.video_info,
     videoInfoPromptProfile,
     saveOpenAIApiKey,
+    saveGeminiApiKey,
     saveElevenLabsApiKey,
+    saveFeatureSettings,
+    saveFeatureModel,
+    saveFeatureProvider,
     clearOpenAIApiKey,
+    clearGeminiApiKey,
     clearElevenLabsApiKey,
     saveVideoInfoPromptProfile,
     clearVideoInfoPromptProfile,

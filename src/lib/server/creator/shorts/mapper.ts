@@ -5,6 +5,7 @@ import {
   type CreatorShortsGenerateRequest,
   type CreatorShortsGenerateResponse,
   type CreatorSuggestedShort,
+  type CreatorLLMProvider,
 } from "../../../creator/types";
 import { CreatorAIError } from "../shared/errors";
 import { getRuntimeSeconds } from "../shared/transcript-format";
@@ -18,9 +19,9 @@ function isRecord(value: unknown): value is LooseRecord {
 function readFiniteNumber(value: unknown, field: string): number {
   const next = Number(value);
   if (!Number.isFinite(next)) {
-    throw new CreatorAIError(`OpenAI response missing valid ${field}.`, {
+    throw new CreatorAIError(`Provider response missing valid ${field}.`, {
       status: 502,
-      code: "invalid_openai_response",
+      code: "invalid_provider_response",
     });
   }
   return next;
@@ -28,9 +29,9 @@ function readFiniteNumber(value: unknown, field: string): number {
 
 function readNonEmptyString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) {
-    throw new CreatorAIError(`OpenAI response missing valid ${field}.`, {
+    throw new CreatorAIError(`Provider response missing valid ${field}.`, {
       status: 502,
-      code: "invalid_openai_response",
+      code: "invalid_provider_response",
     });
   }
   return value.trim();
@@ -52,12 +53,16 @@ function deriveSourceChunkIndexes(chunks: SubtitleChunk[], startSeconds: number,
   return indexes;
 }
 
-function createEmptyShortsResponse(request: CreatorShortsGenerateRequest, model: string): CreatorShortsGenerateResponse {
+function createEmptyShortsResponse(
+  request: CreatorShortsGenerateRequest,
+  provider: CreatorLLMProvider,
+  model: string
+): CreatorShortsGenerateResponse {
   const runtimeSeconds = getRuntimeSeconds(request);
 
   return {
     ok: true,
-    providerMode: "openai",
+    providerMode: provider,
     model,
     generatedAt: Date.now(),
     runtimeSeconds,
@@ -74,7 +79,7 @@ function parseShorts(
   runtimeSeconds: number
 ): CreatorSuggestedShort[] {
   if (!Array.isArray(candidate) || candidate.length === 0) {
-    throw new CreatorAIError("OpenAI did not return any shorts.", {
+    throw new CreatorAIError("The provider did not return any shorts.", {
       status: 502,
       code: "missing_shorts",
     });
@@ -84,9 +89,9 @@ function parseShorts(
 
   return candidate.map((row, index) => {
     if (!isRecord(row)) {
-      throw new CreatorAIError("OpenAI returned an invalid short entry.", {
+      throw new CreatorAIError("The provider returned an invalid short entry.", {
         status: 502,
-        code: "invalid_openai_response",
+        code: "invalid_provider_response",
       });
     }
 
@@ -95,7 +100,7 @@ function parseShorts(
     const score = Math.round(readFiniteNumber(row.score, `shorts[${index}].score`));
 
     if (startSeconds < 0 || endSeconds <= startSeconds || endSeconds > runtimeSeconds) {
-      throw new CreatorAIError("OpenAI returned clip timestamps outside the source bounds.", {
+      throw new CreatorAIError("The provider returned clip timestamps outside the source bounds.", {
         status: 502,
         code: "invalid_clip_range",
       });
@@ -103,7 +108,7 @@ function parseShorts(
 
     const sourceChunkIndexes = deriveSourceChunkIndexes(request.transcriptChunks, startSeconds, endSeconds);
     if (sourceChunkIndexes.length === 0) {
-      throw new CreatorAIError("OpenAI returned a clip that does not overlap any transcript chunk.", {
+      throw new CreatorAIError("The provider returned a clip that does not overlap any transcript chunk.", {
         status: 502,
         code: "invalid_clip_range",
       });
@@ -168,23 +173,30 @@ function normalizeLegacyPayload(candidate: LooseRecord): LooseRecord {
   };
 }
 
-export function mapShortsOpenAIResponse(
+export function mapShortsLlmResponse(
   request: CreatorShortsGenerateRequest,
   candidate: unknown,
+  provider: CreatorLLMProvider,
   model: string
 ): CreatorShortsGenerateResponse {
   if (!isRecord(candidate)) {
-    throw new CreatorAIError("OpenAI returned a non-object JSON payload.", {
+    throw new CreatorAIError("The provider returned a non-object JSON payload.", {
       status: 502,
-      code: "invalid_openai_response",
+      code: "invalid_provider_response",
     });
   }
 
   const normalized = normalizeLegacyPayload(candidate);
-  const response = createEmptyShortsResponse(request, model);
+  const response = createEmptyShortsResponse(request, provider, model);
   response.shorts = parseShorts(request, normalized.shorts, response.runtimeSeconds);
   response.viralClips = response.shorts.map(toCreatorViralClip);
   response.shortsPlans = response.shorts.map(toCreatorShortPlan);
 
   return response;
 }
+
+export const mapShortsOpenAIResponse = (
+  request: CreatorShortsGenerateRequest,
+  candidate: unknown,
+  model: string
+) => mapShortsLlmResponse(request, candidate, "openai", model);

@@ -6,87 +6,18 @@ import type {
   CreatorLLMOperation,
   CreatorLLMRunInputSummary,
   CreatorLLMRunRecord,
-  CreatorLLMUsage,
 } from "../../../creator/types";
 import { CreatorAIError } from "./errors";
-
-type LooseRecord = Record<string, unknown>;
-
-type OpenAIMessage = {
-  role: "system" | "user";
-  content: string;
-};
-
-function isRecord(value: unknown): value is LooseRecord {
-  return !!value && typeof value === "object";
-}
-
-function extractAssistantText(payload: unknown): string | null {
-  if (!isRecord(payload)) return null;
-
-  const choices = payload.choices;
-  if (!Array.isArray(choices) || choices.length === 0) return null;
-  const first = choices[0];
-  if (!isRecord(first)) return null;
-  const message = first.message;
-  if (!isRecord(message)) return null;
-  const content = message.content;
-
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const textParts = content
-      .map((part) => {
-        if (!isRecord(part)) return "";
-        if (part.type !== "text") return "";
-        return typeof part.text === "string" ? part.text : "";
-      })
-      .filter(Boolean);
-
-    return textParts.length ? textParts.join("\n") : null;
-  }
-
-  return null;
-}
-
-function safeJsonParse(value: string): unknown {
-  try {
-    return JSON.parse(value);
-  } catch {
-    return null;
-  }
-}
-
-function toOpenAIErrorMessage(status: number, providerMessage: string): string {
-  try {
-    const parsed = JSON.parse(providerMessage);
-    if (parsed?.error?.message) {
-      return `OpenAI API Error: ${parsed.error.message}`;
-    }
-  } catch {}
-
-  if (status === 401) return "OpenAI authentication failed. Check the API key saved in this browser.";
-  if (status === 429) return "OpenAI rejected the request because of quota or rate limits.";
-  if (status >= 500) return "OpenAI is temporarily unavailable. Please retry in a moment.";
-  return providerMessage || `OpenAI request failed (${status}).`;
-}
-
-function normalizeUsage(payload: unknown): CreatorLLMUsage | undefined {
-  if (!isRecord(payload) || !isRecord(payload.usage)) return undefined;
-  const promptTokens = typeof payload.usage.prompt_tokens === "number" ? payload.usage.prompt_tokens : undefined;
-  const completionTokens =
-    typeof payload.usage.completion_tokens === "number" ? payload.usage.completion_tokens : undefined;
-  const totalTokens = typeof payload.usage.total_tokens === "number" ? payload.usage.total_tokens : undefined;
-
-  if (promptTokens == null && completionTokens == null && totalTokens == null) {
-    return undefined;
-  }
-
-  return {
-    promptTokens,
-    completionTokens,
-    totalTokens,
-  };
-}
+import {
+  estimateCreatorProviderCost,
+  extractOpenAICompatAssistantText,
+  normalizeOpenAICompatUsage,
+  requestOpenAICompatJson,
+  safeJsonParse,
+  toCreatorProviderErrorCode,
+  toCreatorProviderErrorMessage,
+  type CreatorRuntimeMessage,
+} from "./provider-registry";
 
 export function stableJsonStringify(value: unknown): string {
   if (Array.isArray(value)) {
@@ -120,14 +51,24 @@ export function buildBaseInputSummary(input: CreatorGenerationSourceInput): Crea
   };
 }
 
-function estimateOpenAICostUsd(model: string, usage?: CreatorLLMUsage): number | null {
-  void model;
-  void usage;
-  return null;
+function compactPreview(value: string, maxLength = 220): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength)}...` : compact;
+}
+
+function buildInvalidJsonResponseMessage(provider: CreatorLLMRunRecord["provider"], assistantText: string): string {
+  const providerLabel = provider === "gemini" ? "Gemini" : "OpenAI";
+  const mmssMatch = assistantText.match(/:\s*(\d{1,2}:\d{2}(?::\d{2})?)/);
+  if (mmssMatch?.[1]) {
+    return `${providerLabel} returned invalid JSON. It appears to have used a timestamp like "${mmssMatch[1]}" instead of a numeric seconds value.`;
+  }
+
+  return `${providerLabel} returned malformed JSON. Preview: ${compactPreview(assistantText)}`;
 }
 
 function buildRunRecord(input: {
   feature: CreatorLLMFeature;
+  provider: CreatorLLMRunRecord["provider"];
   operation: CreatorLLMOperation;
   model: string;
   projectId?: string;
@@ -144,15 +85,18 @@ function buildRunRecord(input: {
   requestPayloadRaw: unknown | null;
   responsePayloadRaw: unknown | null;
   parsedOutputSnapshot: unknown | null;
-  usage?: CreatorLLMUsage;
+  usage?: CreatorLLMRunRecord["usage"];
   status: CreatorLLMRunRecord["status"];
+  apiKeySource?: CreatorLLMRunRecord["apiKeySource"];
   errorCode?: string;
   errorMessage?: string;
 }): CreatorLLMRunRecord {
+  const estimatedCostUsd = estimateCreatorProviderCost(input.provider, input.model, input.usage);
+
   return {
     id: randomUUID(),
     feature: input.feature,
-    provider: "openai",
+    provider: input.provider,
     operation: input.operation,
     model: input.model,
     projectId: input.projectId,
@@ -169,7 +113,9 @@ function buildRunRecord(input: {
     promptVersion: input.promptVersion,
     inputSummary: input.inputSummary,
     usage: input.usage,
-    estimatedCostUsd: estimateOpenAICostUsd(input.model, input.usage),
+    estimatedCostUsd,
+    estimatedCostSource: estimatedCostUsd == null ? "unavailable" : "estimated",
+    apiKeySource: input.apiKeySource,
     requestPayloadRaw: input.requestPayloadRaw,
     responsePayloadRaw: input.responsePayloadRaw,
     parsedOutputSnapshot: input.parsedOutputSnapshot,
@@ -194,11 +140,13 @@ export function withValidationErrorTrace(
   };
 }
 
-export async function runTrackedOpenAIJson(input: {
+export async function runTrackedCreatorJson(input: {
   apiKey: string;
+  apiKeySource: CreatorLLMRunRecord["apiKeySource"];
+  provider: CreatorLLMRunRecord["provider"];
   model: string;
   temperature: number;
-  messages: OpenAIMessage[];
+  messages: CreatorRuntimeMessage[];
   feature: CreatorLLMFeature;
   operation: CreatorLLMOperation;
   promptVersion: string;
@@ -207,8 +155,10 @@ export async function runTrackedOpenAIJson(input: {
   projectId?: string;
   sourceAssetId?: string;
   sourceSignature?: string;
+  signal?: AbortSignal;
 }): Promise<{ parsed: unknown; llmRun: CreatorLLMRunRecord; rawProviderPayload: unknown }> {
   const requestPayloadRaw = {
+    provider: input.provider,
     model: input.model,
     temperature: input.temperature,
     response_format: { type: "json_object" as const },
@@ -220,43 +170,37 @@ export async function runTrackedOpenAIJson(input: {
   let fetchDurationMs: number | undefined;
 
   try {
-    const response = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${input.apiKey}`,
-      },
-      body: JSON.stringify(requestPayloadRaw),
-      cache: "no-store",
+    const { response, responseText, payload } = await requestOpenAICompatJson({
+      provider: input.provider,
+      apiKey: input.apiKey,
+      model: input.model,
+      temperature: input.temperature,
+      messages: input.messages,
+      signal: input.signal,
     });
 
     const fetchCompletedAt = Date.now();
     fetchDurationMs = Math.max(0, fetchCompletedAt - startedAt);
-    const rawResponseText = await response.text();
-    const completedAt = Date.now();
-    responsePayloadRaw = safeJsonParse(rawResponseText) ?? rawResponseText;
+    responsePayloadRaw = payload;
 
     if (!response.ok) {
-      const providerMessage = String(rawResponseText ?? "").slice(0, 400);
-      const code =
-        response.status === 401
-          ? "openai_auth_error"
-          : response.status === 429
-            ? "openai_rate_limited"
-            : "openai_request_failed";
+      const providerMessage = String(responseText ?? "").slice(0, 400);
+      const code = toCreatorProviderErrorCode(input.provider, response.status);
+      const message = toCreatorProviderErrorMessage(input.provider, response.status, providerMessage);
 
-      throw new CreatorAIError(toOpenAIErrorMessage(response.status, providerMessage), {
+      throw new CreatorAIError(message, {
         status: response.status >= 500 ? 502 : response.status,
         code,
         trace: buildRunRecord({
           feature: input.feature,
+          provider: input.provider,
           operation: input.operation,
           model: input.model,
           projectId: input.projectId,
           sourceAssetId: input.sourceAssetId,
           sourceSignature: input.sourceSignature,
           startedAt,
-          completedAt,
+          completedAt: fetchCompletedAt,
           fetchDurationMs,
           temperature: input.temperature,
           requestFingerprint: input.requestFingerprint,
@@ -266,61 +210,30 @@ export async function runTrackedOpenAIJson(input: {
           responsePayloadRaw,
           parsedOutputSnapshot: null,
           status: "provider_error",
+          apiKeySource: input.apiKeySource,
           errorCode: code,
-          errorMessage: toOpenAIErrorMessage(response.status, providerMessage),
-        }),
-      });
-    }
-
-    const assistantText = extractAssistantText(responsePayloadRaw);
-    if (!assistantText) {
-      throw new CreatorAIError("OpenAI response did not contain assistant content.", {
-        status: 502,
-        code: "invalid_openai_response",
-        trace: buildRunRecord({
-          feature: input.feature,
-          operation: input.operation,
-          model: input.model,
-          projectId: input.projectId,
-          sourceAssetId: input.sourceAssetId,
-          sourceSignature: input.sourceSignature,
-          startedAt,
-          completedAt,
-          fetchDurationMs,
-          temperature: input.temperature,
-          requestFingerprint: input.requestFingerprint,
-          promptVersion: input.promptVersion,
-          inputSummary: input.inputSummary,
-          requestPayloadRaw,
-          responsePayloadRaw,
-          parsedOutputSnapshot: null,
-          status: "parse_error",
-          errorCode: "invalid_openai_response",
-          errorMessage: "OpenAI response did not contain assistant content.",
+          errorMessage: message,
         }),
       });
     }
 
     const parseStartedAt = Date.now();
-    const parsed = safeJsonParse(assistantText);
-    const parseCompletedAt = Date.now();
-    const parseDurationMs = Math.max(0, parseCompletedAt - parseStartedAt);
-
-    if (!parsed) {
-      throw new CreatorAIError("OpenAI returned malformed JSON.", {
+    const assistantText = extractOpenAICompatAssistantText(responsePayloadRaw);
+    if (!assistantText) {
+      throw new CreatorAIError(`${input.provider === "gemini" ? "Gemini" : "OpenAI"} response did not contain assistant content.`, {
         status: 502,
-        code: "invalid_openai_response",
+        code: `invalid_${input.provider}_response`,
         trace: buildRunRecord({
           feature: input.feature,
+          provider: input.provider,
           operation: input.operation,
           model: input.model,
           projectId: input.projectId,
           sourceAssetId: input.sourceAssetId,
           sourceSignature: input.sourceSignature,
           startedAt,
-          completedAt,
+          completedAt: Date.now(),
           fetchDurationMs,
-          parseDurationMs,
           temperature: input.temperature,
           requestFingerprint: input.requestFingerprint,
           promptVersion: input.promptVersion,
@@ -328,37 +241,80 @@ export async function runTrackedOpenAIJson(input: {
           requestPayloadRaw,
           responsePayloadRaw,
           parsedOutputSnapshot: null,
+          usage: normalizeOpenAICompatUsage(responsePayloadRaw),
           status: "parse_error",
-          errorCode: "invalid_openai_response",
-          errorMessage: "OpenAI returned malformed JSON.",
+          apiKeySource: input.apiKeySource,
+          errorCode: `invalid_${input.provider}_response`,
+          errorMessage: `${input.provider === "gemini" ? "Gemini" : "OpenAI"} response did not contain assistant content.`,
         }),
       });
     }
 
+    const parsed = safeJsonParse(assistantText);
+    if (!parsed) {
+      const invalidJsonMessage = buildInvalidJsonResponseMessage(input.provider, assistantText);
+      throw new CreatorAIError(invalidJsonMessage, {
+        status: 502,
+        code: `invalid_${input.provider}_response`,
+        trace: buildRunRecord({
+          feature: input.feature,
+          provider: input.provider,
+          operation: input.operation,
+          model: input.model,
+          projectId: input.projectId,
+          sourceAssetId: input.sourceAssetId,
+          sourceSignature: input.sourceSignature,
+          startedAt,
+          completedAt: Date.now(),
+          fetchDurationMs,
+          parseDurationMs: Math.max(0, Date.now() - parseStartedAt),
+          temperature: input.temperature,
+          requestFingerprint: input.requestFingerprint,
+          promptVersion: input.promptVersion,
+          inputSummary: input.inputSummary,
+          requestPayloadRaw,
+          responsePayloadRaw,
+          parsedOutputSnapshot: null,
+          usage: normalizeOpenAICompatUsage(responsePayloadRaw),
+          status: "parse_error",
+          apiKeySource: input.apiKeySource,
+          errorCode: `invalid_${input.provider}_response`,
+          errorMessage: invalidJsonMessage,
+        }),
+      });
+    }
+
+    const completedAt = Date.now();
+    const parseDurationMs = Math.max(0, completedAt - parseStartedAt);
+    const usage = normalizeOpenAICompatUsage(responsePayloadRaw);
+    const llmRun = buildRunRecord({
+      feature: input.feature,
+      provider: input.provider,
+      operation: input.operation,
+      model: input.model,
+      projectId: input.projectId,
+      sourceAssetId: input.sourceAssetId,
+      sourceSignature: input.sourceSignature,
+      startedAt,
+      completedAt,
+      fetchDurationMs,
+      parseDurationMs,
+      temperature: input.temperature,
+      requestFingerprint: input.requestFingerprint,
+      promptVersion: input.promptVersion,
+      inputSummary: input.inputSummary,
+      requestPayloadRaw,
+      responsePayloadRaw,
+      parsedOutputSnapshot: parsed,
+      usage,
+      status: "success",
+      apiKeySource: input.apiKeySource,
+    });
+
     return {
       parsed,
+      llmRun,
       rawProviderPayload: responsePayloadRaw,
-      llmRun: buildRunRecord({
-        feature: input.feature,
-        operation: input.operation,
-        model: input.model,
-        projectId: input.projectId,
-        sourceAssetId: input.sourceAssetId,
-        sourceSignature: input.sourceSignature,
-        startedAt,
-        completedAt,
-        fetchDurationMs,
-        parseDurationMs,
-        temperature: input.temperature,
-        requestFingerprint: input.requestFingerprint,
-        promptVersion: input.promptVersion,
-        inputSummary: input.inputSummary,
-        requestPayloadRaw,
-        responsePayloadRaw,
-        parsedOutputSnapshot: parsed,
-        usage: normalizeUsage(responsePayloadRaw),
-        status: "success",
-      }),
     };
   } catch (error) {
     if (error instanceof CreatorAIError) {
@@ -366,12 +322,13 @@ export async function runTrackedOpenAIJson(input: {
     }
 
     const completedAt = Date.now();
-    const message = error instanceof Error ? error.message : "OpenAI request failed.";
+    const message = error instanceof Error ? error.message : "Creator provider request failed.";
     throw new CreatorAIError(message, {
       status: 502,
-      code: "openai_request_failed",
+      code: `${input.provider}_request_failed`,
       trace: buildRunRecord({
         feature: input.feature,
+        provider: input.provider,
         operation: input.operation,
         model: input.model,
         projectId: input.projectId,
@@ -388,7 +345,8 @@ export async function runTrackedOpenAIJson(input: {
         responsePayloadRaw,
         parsedOutputSnapshot: null,
         status: "provider_error",
-        errorCode: "openai_request_failed",
+        apiKeySource: input.apiKeySource,
+        errorCode: `${input.provider}_request_failed`,
         errorMessage: message,
       }),
     });

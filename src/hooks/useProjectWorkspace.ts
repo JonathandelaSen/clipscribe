@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { createEditorAssetRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import { readMediaMetadata } from "@/lib/editor/media";
+import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type {
   ContentProjectRecord,
@@ -67,6 +68,17 @@ export function useProjectWorkspace(projectId: string | undefined) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const handleProjectLibraryUpdated = () => {
+      void refresh();
+    };
+
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    };
+  }, [refresh]);
+
   const sourceAssets = useMemo(
     () => assets.filter((asset) => asset.role === "source" && (asset.kind === "video" || asset.kind === "audio")),
     [assets]
@@ -80,6 +92,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
   const saveProject = useCallback(async (record: ContentProjectRecord) => {
     await projectRepository.putProject(record);
     setProject(record);
+    notifyProjectLibraryUpdated();
   }, []);
 
   const saveVoiceoverDraft = useCallback(

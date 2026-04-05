@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { 
   AudioLines,
   CalendarClock,
@@ -14,6 +15,7 @@ import {
   Clapperboard, 
   Scissors, 
   Download,
+  Pencil,
   Upload,
   WandSparkles
 } from "lucide-react";
@@ -28,7 +30,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { projects } = useProjectLibrary();
+  const { projects, renameProject } = useProjectLibrary();
 
   // Extract projectId if we are inside a project
   const match = pathname.match(/^\/projects\/([^\/]+)/);
@@ -37,6 +39,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
 
   const isProjectView = !!projectId;
   const isAiRunsView = pathname === "/creator/runs";
+  const activeProject = projects.find((project) => project.id === projectId);
 
   const projectLinks = [
     { id: "assets", label: "Assets", icon: Film },
@@ -48,6 +51,22 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     { id: "publish", label: "Publish", icon: Upload },
     { id: "exports", label: "Exports", icon: Download },
   ];
+
+  const handleRenameProject = async () => {
+    if (!projectId) return;
+
+    const currentName = activeProject?.name?.trim() || "Untitled Project";
+    const nextName = window.prompt("Nuevo nombre del proyecto", currentName)?.trim();
+    if (!nextName || nextName === currentName) return;
+
+    try {
+      await renameProject(projectId, nextName);
+      toast.success("Proyecto renombrado");
+    } catch (error) {
+      console.error(error);
+      toast.error(error instanceof Error ? error.message : "No se pudo renombrar el proyecto");
+    }
+  };
 
   return (
     <div className="flex min-h-screen bg-[radial-gradient(circle_at_top_left,rgba(34,211,238,0.18),transparent_28%),radial-gradient(circle_at_top_right,rgba(251,146,60,0.14),transparent_24%),linear-gradient(180deg,#03060c,#090f18_48%,#03060c)] text-white font-sans">
@@ -149,23 +168,35 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
         <header className="h-16 shrink-0 flex items-center justify-between px-6 border-b border-white/5 bg-black/20 backdrop-blur-md z-10">
           <div className="flex items-center gap-4">
             {isProjectView && projectId ? (
-              <Select value={projectId} onValueChange={(val) => router.push(`/projects/${val}?tab=${currentTab}`)}>
-                 <SelectTrigger className="w-[300px] h-8 px-2 bg-transparent border-none text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 data-[state=open]:bg-white/5 focus:ring-0 shadow-none">
-                   <div className="flex items-center gap-2">
-                     <FolderKanban className="w-4 h-4 text-cyan-400" />
-                     <SelectValue placeholder="Project Workspace" />
-                   </div>
-                 </SelectTrigger>
-                 <SelectContent className="bg-zinc-950 border-white/10 text-white">
-                   {projects.length === 0 ? (
-                     <SelectItem value={projectId} disabled>Loading projects...</SelectItem>
-                   ) : (
-                     projects.map((p) => p.id ? (
-                       <SelectItem key={p.id} value={p.id} className="cursor-pointer focus:bg-cyan-500/20">{p.name || "Untitled Project"}</SelectItem>
-                     ) : null)
-                   )}
-                 </SelectContent>
-              </Select>
+              <div className="flex items-center gap-2">
+                <Select value={projectId} onValueChange={(val) => router.push(`/projects/${val}?tab=${currentTab}`)}>
+                   <SelectTrigger className="w-[300px] h-8 px-2 bg-transparent border-none text-sm font-medium text-white/70 hover:text-white hover:bg-white/5 data-[state=open]:bg-white/5 focus:ring-0 shadow-none">
+                     <div className="flex items-center gap-2">
+                       <FolderKanban className="w-4 h-4 text-cyan-400" />
+                       <SelectValue placeholder="Project Workspace" />
+                     </div>
+                   </SelectTrigger>
+                   <SelectContent className="bg-zinc-950 border-white/10 text-white">
+                     {projects.length === 0 ? (
+                       <SelectItem value={projectId} disabled>Loading projects...</SelectItem>
+                     ) : (
+                       projects.map((p) => p.id ? (
+                         <SelectItem key={p.id} value={p.id} className="cursor-pointer focus:bg-cyan-500/20">{p.name || "Untitled Project"}</SelectItem>
+                       ) : null)
+                     )}
+                   </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="text-white/60 hover:bg-white/5 hover:text-white"
+                  onClick={() => void handleRenameProject()}
+                  aria-label={activeProject ? `Renombrar ${activeProject.name}` : "Renombrar proyecto"}
+                  title="Renombrar proyecto"
+                >
+                  <Pencil className="w-4 h-4" />
+                </Button>
+              </div>
             ) : isAiRunsView ? (
               <h2 className="text-sm font-medium text-white/70 px-2 flex items-center gap-2 h-8">
                 <CalendarClock className="w-4 h-4 text-cyan-400" /> AI Runs Workbench

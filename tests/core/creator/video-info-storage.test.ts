@@ -63,6 +63,7 @@ test("buildProjectVideoInfoRecord keeps the request summary needed to restore pu
   assert.equal(record.sourceSignature, "sig_1");
   assert.equal(record.inputSummary.transcriptId, "tx_1");
   assert.deepEqual(record.inputSummary.videoInfoBlocks, ["titleIdeas", "description"]);
+  assert.equal(record.inputSummary.provider, "openai");
   assert.equal(record.inputSummary.promptCustomizationMode, "global_customized");
   assert.equal(record.inputSummary.promptCustomizationHash, request.promptCustomization?.hash);
   assert.deepEqual(record.inputSummary.promptEditedSections, ["field:titleIdeas"]);

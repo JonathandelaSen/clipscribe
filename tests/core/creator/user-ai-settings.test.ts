@@ -2,8 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildCreatorTextProviderHeaders,
   clearCreatorAISettings,
   maskElevenLabsApiKey,
+  maskGeminiApiKey,
   maskOpenAIApiKey,
   readCreatorAISettings,
   writeCreatorAISettings,
@@ -25,16 +27,28 @@ function createStorage() {
   };
 }
 
-test("writeCreatorAISettings persists a trimmed OpenAI key", () => {
+test("writeCreatorAISettings persists trimmed provider keys and feature settings", () => {
   const storage = createStorage();
 
-  const saved = writeCreatorAISettings(storage, { openAIApiKey: "  sk-proj-1234567890  " });
+  const saved = writeCreatorAISettings(storage, {
+    openAIApiKey: "  sk-proj-1234567890  ",
+    geminiApiKey: "  AIza-demo-1234567890  ",
+    featureSettings: {
+      shorts: {
+        provider: "gemini",
+        model: "gemini-2.5-flash",
+      },
+    },
+  });
   const loaded = readCreatorAISettings(storage);
 
-  assert.equal(saved.openAIApiKey, "sk-proj-1234567890");
+  assert.equal(saved.credentials.openAIApiKey, "sk-proj-1234567890");
+  assert.equal(saved.credentials.geminiApiKey, "AIza-demo-1234567890");
+  assert.equal(saved.featureSettings?.shorts?.provider, "gemini");
+  assert.equal(saved.featureSettings?.shorts?.model, "gemini-2.5-flash");
   assert.ok(typeof saved.updatedAt === "number");
-  assert.equal(loaded?.openAIApiKey, "sk-proj-1234567890");
-  assert.equal(loaded?.elevenLabsApiKey, "");
+  assert.equal(loaded?.credentials.openAIApiKey, "sk-proj-1234567890");
+  assert.equal(loaded?.credentials.geminiApiKey, "AIza-demo-1234567890");
 });
 
 test("writeCreatorAISettings persists a trimmed ElevenLabs key", () => {
@@ -43,8 +57,8 @@ test("writeCreatorAISettings persists a trimmed ElevenLabs key", () => {
   const saved = writeCreatorAISettings(storage, { elevenLabsApiKey: "  xi-1234567890  " });
   const loaded = readCreatorAISettings(storage);
 
-  assert.equal(saved.elevenLabsApiKey, "xi-1234567890");
-  assert.equal(loaded?.elevenLabsApiKey, "xi-1234567890");
+  assert.equal(saved.credentials.elevenLabsApiKey, "xi-1234567890");
+  assert.equal(loaded?.credentials.elevenLabsApiKey, "xi-1234567890");
 });
 
 test("readCreatorAISettings keeps prompt profiles even without an API key", () => {
@@ -62,7 +76,7 @@ test("readCreatorAISettings keeps prompt profiles even without an API key", () =
   });
 
   const loaded = readCreatorAISettings(storage);
-  assert.equal(loaded?.openAIApiKey, "");
+  assert.equal(loaded?.credentials.openAIApiKey, "");
   assert.equal(loaded?.promptProfiles?.video_info?.globalInstructions, "Add a short CTA.");
   assert.equal(
     loaded?.promptProfiles?.video_info?.fieldInstructions?.description,
@@ -82,7 +96,7 @@ test("readCreatorAISettings accepts legacy payloads without prompt profiles", ()
   );
 
   const loaded = readCreatorAISettings(storage);
-  assert.equal(loaded?.openAIApiKey, "sk-proj-legacy");
+  assert.equal(loaded?.credentials.openAIApiKey, "sk-proj-legacy");
   assert.equal(loaded?.promptProfiles, undefined);
 });
 
@@ -95,8 +109,23 @@ test("clearCreatorAISettings removes persisted settings", () => {
   assert.equal(readCreatorAISettings(storage), null);
 });
 
+test("buildCreatorTextProviderHeaders includes only provided keys", () => {
+  const headers = buildCreatorTextProviderHeaders({
+    openAIApiKey: "sk-demo",
+    geminiApiKey: "",
+  }) as Record<string, string>;
+
+  assert.deepEqual(headers, {
+    "x-creator-openai-api-key": "sk-demo",
+  });
+});
+
 test("maskOpenAIApiKey keeps only a short prefix and suffix", () => {
   assert.equal(maskOpenAIApiKey("sk-proj-1234567890"), "sk-proj...7890");
+});
+
+test("maskGeminiApiKey keeps only a short prefix and suffix", () => {
+  assert.equal(maskGeminiApiKey("AIza-demo-1234567890"), "AIza-de...7890");
 });
 
 test("maskElevenLabsApiKey keeps only a short prefix and suffix", () => {

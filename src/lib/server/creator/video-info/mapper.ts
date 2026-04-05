@@ -1,6 +1,7 @@
 import type {
   CreatorChapter,
   CreatorInsights,
+  CreatorLLMProvider,
   CreatorLongFormContentPack,
   CreatorVideoInfoGenerateRequest,
   CreatorVideoInfoGenerateResponse,
@@ -26,7 +27,11 @@ function readStringArray(value: unknown, maxItems: number): string[] {
     .slice(0, maxItems);
 }
 
-function createEmptyVideoInfoResponse(request: CreatorVideoInfoGenerateRequest, model: string): CreatorVideoInfoGenerateResponse {
+function createEmptyVideoInfoResponse(
+  request: CreatorVideoInfoGenerateRequest,
+  provider: CreatorLLMProvider,
+  model: string
+): CreatorVideoInfoGenerateResponse {
   const runtimeSeconds = getRuntimeSeconds(request);
   const transcriptWordCount = request.transcriptText.split(/\s+/).filter(Boolean).length;
   const estimatedSpeakingRateWpm =
@@ -34,7 +39,7 @@ function createEmptyVideoInfoResponse(request: CreatorVideoInfoGenerateRequest, 
 
   return {
     ok: true,
-    providerMode: "openai",
+    providerMode: provider,
     model,
     generatedAt: Date.now(),
     runtimeSeconds,
@@ -125,19 +130,20 @@ function parseInsights(candidate: unknown, fallback: CreatorInsights): CreatorIn
   };
 }
 
-export function mapVideoInfoOpenAIResponse(
+export function mapVideoInfoLlmResponse(
   request: CreatorVideoInfoGenerateRequest,
   candidate: unknown,
+  provider: CreatorLLMProvider,
   model: string
 ): CreatorVideoInfoGenerateResponse {
   if (!isRecord(candidate)) {
-    throw new CreatorAIError("OpenAI returned a non-object JSON payload.", {
+    throw new CreatorAIError("The provider returned a non-object JSON payload.", {
       status: 502,
-      code: "invalid_openai_response",
+      code: "invalid_provider_response",
     });
   }
 
-  const response = createEmptyVideoInfoResponse(request, model);
+  const response = createEmptyVideoInfoResponse(request, provider, model);
   response.youtube = {
     ...response.youtube,
     ...parseYouTubePack(candidate.youtube),
@@ -151,3 +157,9 @@ export function mapVideoInfoOpenAIResponse(
 
   return response;
 }
+
+export const mapVideoInfoOpenAIResponse = (
+  request: CreatorVideoInfoGenerateRequest,
+  candidate: unknown,
+  model: string
+) => mapVideoInfoLlmResponse(request, candidate, "openai", model);

@@ -2,9 +2,11 @@ import type {
   CreatorGenerationSourceInput,
   CreatorLLMFeature,
   CreatorLLMOperation,
+  CreatorLLMProvider,
   CreatorLLMRunInputSummary,
   CreatorLLMRunRecord,
-} from "@/lib/creator/types";
+} from "./types";
+import { CREATOR_DEFAULT_PROVIDER_BY_FEATURE, getCreatorPendingModelLabel } from "./ai";
 
 function makeRunId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -36,14 +38,18 @@ export function buildPendingCreatorLlmRun(input: {
   promptVersion: string;
   request: CreatorGenerationSourceInput;
   inputSummary?: Partial<CreatorLLMRunInputSummary>;
+  provider?: CreatorLLMProvider;
+  model?: string;
 }): CreatorLLMRunRecord {
   const now = Date.now();
+  const provider = input.provider ?? input.request.generationConfig?.provider ?? CREATOR_DEFAULT_PROVIDER_BY_FEATURE[input.feature];
+  const model = input.model ?? input.request.generationConfig?.model ?? getCreatorPendingModelLabel(provider);
   return {
     id: makeRunId(),
     feature: input.feature,
-    provider: "openai",
+    provider,
     operation: input.operation,
-    model: "OpenAI pending",
+    model,
     projectId: input.request.projectId,
     sourceAssetId: input.request.sourceAssetId,
     sourceSignature: input.request.sourceSignature,
@@ -59,6 +65,7 @@ export function buildPendingCreatorLlmRun(input: {
       ...input.inputSummary,
     },
     estimatedCostUsd: null,
+    estimatedCostSource: "unavailable",
     requestPayloadRaw: null,
     responsePayloadRaw: null,
     parsedOutputSnapshot: null,

@@ -1,12 +1,14 @@
 import type { SubtitleChunk } from "@/lib/history";
 
-export type CreatorAIProviderMode = "mock" | "openai";
+export type CreatorAIProviderMode = "mock" | "openai" | "gemini";
 export type CreatorLLMFeature = "shorts" | "video_info";
-export type CreatorLLMProvider = "openai";
+export type CreatorLLMProvider = "openai" | "gemini";
 export type CreatorLLMOperation = "generate_shorts" | "generate_video_info";
 export type CreatorPromptProfileFamily = "video_info" | "shorts";
 export type CreatorPromptCustomizationMode = "default" | "global_customized" | "run_override";
 export type CreatorPromptSlotOverrideMode = "inherit" | "replace" | "omit";
+export type CreatorLLMApiKeySource = "header" | "env";
+export type CreatorLLMCostSource = "estimated" | "unavailable";
 export type CreatorLLMRunStatus =
   | "queued"
   | "processing"
@@ -15,6 +17,40 @@ export type CreatorLLMRunStatus =
   | "parse_error"
   | "validation_error";
 export type CreatorLLMRedactionState = "raw" | "purged";
+
+export interface CreatorGenerationConfig {
+  provider?: CreatorLLMProvider;
+  model?: string;
+}
+
+export interface CreatorAIFeatureSettings {
+  provider?: CreatorLLMProvider;
+  model?: string;
+}
+
+export interface CreatorAIFeatureSettingsMap {
+  shorts?: CreatorAIFeatureSettings;
+  video_info?: CreatorAIFeatureSettings;
+}
+
+export interface CreatorFeatureModelOption {
+  value: string;
+  label: string;
+  provider: CreatorLLMProvider;
+  source: "catalog" | "provider";
+}
+
+export interface CreatorTextFeatureConfigResponse {
+  feature: CreatorLLMFeature;
+  provider: CreatorLLMProvider;
+  defaultProvider: CreatorLLMProvider;
+  defaultModel: string;
+  temperature: number;
+  models: CreatorFeatureModelOption[];
+  modelSource: "catalog" | "provider" | "mixed";
+  hasApiKey: boolean;
+  apiKeySource?: CreatorLLMApiKeySource;
+}
 
 
 export type CreatorVideoInfoBlock =
@@ -65,6 +101,7 @@ export interface CreatorGenerationSourceInput {
   subtitleChunks?: SubtitleChunk[];
   transcriptVersionLabel?: string;
   subtitleVersionLabel?: string;
+  generationConfig?: CreatorGenerationConfig;
 }
 
 export interface CreatorLLMUsage {
@@ -114,6 +151,8 @@ export interface CreatorLLMRunRecord {
   inputSummary: CreatorLLMRunInputSummary;
   usage?: CreatorLLMUsage;
   estimatedCostUsd?: number | null;
+  estimatedCostSource?: CreatorLLMCostSource;
+  apiKeySource?: CreatorLLMApiKeySource;
   requestPayloadRaw: unknown | null;
   responsePayloadRaw: unknown | null;
   parsedOutputSnapshot: unknown | null;
@@ -223,6 +262,7 @@ export interface CreatorVideoInfoProjectRecordInputSummary {
   subtitleVersionLabel?: string;
   sourceSignature?: string;
   videoInfoBlocks: CreatorVideoInfoBlock[];
+  provider?: CreatorLLMProvider;
   model?: string;
   promptCustomizationMode?: CreatorPromptCustomizationMode;
   promptCustomizationHash?: string;

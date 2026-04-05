@@ -17,6 +17,7 @@ import { toast } from "sonner";
 
 import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
 import { useCreatorLlmRuns } from "@/hooks/useCreatorLlmRuns";
+import { useCreatorTextFeatureConfig } from "@/hooks/useCreatorTextFeatureConfig";
 import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
@@ -41,6 +42,8 @@ import {
   resolveProjectVideoInfoHistory,
 } from "@/lib/creator/video-info-storage";
 import { buildCollapsedVideoInfoPromptPreview, buildVideoInfoPrompt } from "@/lib/server/creator/video-info/prompt";
+import { getCreatorProviderLabel } from "@/lib/creator/ai";
+import { buildCreatorTextProviderHeaders } from "@/lib/creator/user-ai-settings";
 import type {
   CreatorPromptSlotOverrideMode,
   CreatorVideoInfoBlock,
@@ -387,13 +390,22 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
 
   const {
     openAIApiKey,
+    geminiApiKey,
     hasOpenAIApiKey,
     maskedOpenAIApiKey,
+    videoInfoFeatureSettings,
     videoInfoPromptProfile,
     saveOpenAIApiKey,
     clearOpenAIApiKey,
     saveVideoInfoPromptProfile,
   } = useCreatorAiSettings();
+  const creatorProviderHeaders = useMemo(
+    () => buildCreatorTextProviderHeaders({ openAIApiKey, geminiApiKey }),
+    [geminiApiKey, openAIApiKey]
+  );
+  const { config: videoInfoAiConfig } = useCreatorTextFeatureConfig("video_info", {
+    headers: creatorProviderHeaders,
+  });
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
   const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>([]);
   const [promptEditorMode, setPromptEditorMode] = useState<VideoInfoPromptEditorMode>("global");
@@ -479,6 +491,20 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     setOpenAIApiKeyDraft(openAIApiKey);
   }, [openAIApiKey]);
 
+  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "openai";
+  const resolvedVideoInfoModel = useMemo(() => {
+    const savedModel = videoInfoFeatureSettings?.model;
+    if (savedModel && videoInfoAiConfig?.models.some((option) => option.value === savedModel)) {
+      return savedModel;
+    }
+    return videoInfoAiConfig?.defaultModel ?? savedModel ?? "";
+  }, [videoInfoAiConfig?.defaultModel, videoInfoAiConfig?.models, videoInfoFeatureSettings?.model]);
+  const resolvedVideoInfoApiKeySource =
+    videoInfoAiConfig?.provider === resolvedVideoInfoProvider && videoInfoAiConfig.hasApiKey
+      ? videoInfoAiConfig.apiKeySource
+      : undefined;
+  const hasResolvedVideoInfoApiKey = Boolean(resolvedVideoInfoApiKeySource);
+
   useEffect(() => {
     setGlobalPromptProfileDraft(cloneVideoInfoPromptProfile(videoInfoPromptProfile));
   }, [videoInfoPromptProfile]);
@@ -522,8 +548,19 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
       transcriptChunks: selectedTranscript.chunks,
       transcriptVersionLabel: selectedTranscript.label,
       videoInfoBlocks,
+      generationConfig: {
+        provider: resolvedVideoInfoProvider,
+        model: resolvedVideoInfoModel || undefined,
+      },
     };
-  }, [selectedProject, selectedSourceAssetId, selectedTranscript, videoInfoBlocks]);
+  }, [
+    resolvedVideoInfoModel,
+    resolvedVideoInfoProvider,
+    selectedProject,
+    selectedSourceAssetId,
+    selectedTranscript,
+    videoInfoBlocks,
+  ]);
 
   const hasTranscriptContext =
     Boolean(selectedProject) &&
@@ -591,8 +628,8 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
       toast.error("This project needs a transcript before metadata can be generated.");
       return;
     }
-    if (!hasOpenAIApiKey) {
-      toast.error("Add your OpenAI API key first.");
+    if (!hasResolvedVideoInfoApiKey) {
+      toast.error("Add your OpenAI API key or set OPENAI_API_KEY on the server.");
       return;
     }
     if (videoInfoBlocks.length === 0) {
@@ -601,7 +638,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     }
 
     try {
-      const result = await generateVideoInfo(creatorVideoInfoRequest, { openAIApiKey });
+      const result = await generateVideoInfo(creatorVideoInfoRequest, { headers: creatorProviderHeaders });
       if (selectedProject) {
         const newRecord = buildProjectVideoInfoRecord({
           request: creatorVideoInfoRequest,
@@ -628,9 +665,9 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     }
   }, [
     buildVideoInfoRequestWithPrompt,
+    creatorProviderHeaders,
     generateVideoInfo,
-    hasOpenAIApiKey,
-    openAIApiKey,
+    hasResolvedVideoInfoApiKey,
     refreshLlmRuns,
     saveProject,
     selectedProject,
@@ -659,7 +696,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     promptEditorMode === "run" ? "Generate with saved globals" : "Generate with this run only";
   const secondaryGenerateSnapshot = promptEditorMode === "run" ? globalPromptSnapshot : runPromptSnapshot;
   const isGenerateDisabled =
-    !hasTranscriptContext || !hasOpenAIApiKey || isGeneratingVideoInfo || videoInfoBlocks.length === 0;
+    !hasTranscriptContext || !hasResolvedVideoInfoApiKey || isGeneratingVideoInfo || videoInfoBlocks.length === 0;
 
   return (
     <div className="min-h-0 space-y-6 bg-transparent px-0 py-0">
@@ -671,21 +708,30 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6 p-6">
-          {/* OpenAI key */}
+          {/* Provider key */}
           <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">OpenAI key</div>
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Runtime</div>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
-                  <Badge className="border-cyan-300/20 bg-cyan-400/10 text-cyan-100">OpenAI</Badge>
+                  <Badge className="border-cyan-300/20 bg-cyan-400/10 text-cyan-100">
+                    {getCreatorProviderLabel(resolvedVideoInfoProvider)}
+                  </Badge>
+                  <Badge className="border-white/15 bg-white/5 text-white">
+                    {resolvedVideoInfoModel || "Model pending"}
+                  </Badge>
                   <Badge
                     className={cn(
-                      hasOpenAIApiKey
+                      hasResolvedVideoInfoApiKey
                         ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
                         : "border-amber-400/20 bg-amber-400/10 text-amber-100"
                     )}
                   >
-                    {hasOpenAIApiKey ? `Saved ${maskedOpenAIApiKey}` : "Missing"}
+                    {resolvedVideoInfoApiKeySource === "header"
+                      ? `Saved ${maskedOpenAIApiKey}`
+                      : resolvedVideoInfoApiKeySource === "env"
+                        ? "Server env"
+                        : "Missing"}
                   </Badge>
                 </div>
               </div>
@@ -694,7 +740,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
               <Input
                 value={openAIApiKeyDraft}
                 onChange={(event) => setOpenAIApiKeyDraft(event.target.value)}
-                placeholder="Paste the OpenAI key used for creator metadata"
+                placeholder={`Paste the ${getCreatorProviderLabel(resolvedVideoInfoProvider)} key used for creator metadata`}
                 className="border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
               />
               <Button

@@ -44,6 +44,7 @@ type InspectorTab = "overview" | "parsed" | "request" | "response" | "diff";
 type QueryFilterState = {
   projectId: string;
   feature: "all" | CreatorLLMRunRecord["feature"];
+  provider: "all" | CreatorLLMRunRecord["provider"];
   status: "all" | CreatorLLMRunRecord["status"];
   model: string;
 };
@@ -497,9 +498,11 @@ function OverviewInspector({
         <KeyValue label="Fetch" value={formatDurationMs(run.fetchDurationMs)} />
         <KeyValue label="Parse" value={formatDurationMs(run.parseDurationMs)} />
         <KeyValue label="Started" value={formatStartedAt(run.startedAt)} />
+        <KeyValue label="Provider" value={run.provider} />
         <KeyValue label="Model" value={run.model} mono />
         <KeyValue label="Tokens" value={formatCompactNumber(run.usage?.totalTokens)} />
         <KeyValue label="Estimated Cost" value={formatUsd(run.estimatedCostUsd)} />
+        <KeyValue label="Cost Source" value={run.estimatedCostSource ?? "n/a"} />
         <KeyValue label="Fingerprint" value={run.requestFingerprint} mono />
       </div>
 
@@ -542,6 +545,7 @@ function OverviewInspector({
             <KeyValue label="Exportable" value={run.exportable ? "yes" : "no"} />
             <KeyValue label="Redaction" value={run.redactionState} />
             <KeyValue label="Contains Raw Payload" value={run.containsRawPayload ? "yes" : "no"} />
+            <KeyValue label="API Key Source" value={run.apiKeySource ?? "n/a"} />
             {run.errorCode ? <KeyValue label="Error Code" value={run.errorCode} mono /> : null}
             {run.errorMessage ? <KeyValue label="Error Message" value={run.errorMessage} /> : null}
           </div>
@@ -666,11 +670,13 @@ export function AiRunsWorkbench() {
 
   const queryState = useMemo<QueryFilterState>(() => {
     const feature = searchParams.get("feature");
+    const provider = searchParams.get("provider");
     const status = searchParams.get("status");
 
     return {
       projectId: searchParams.get("projectId") ?? "all",
       feature: feature === "shorts" || feature === "video_info" ? feature : "all",
+      provider: provider === "openai" || provider === "gemini" ? provider : "all",
       status:
         status === "queued" ||
         status === "processing" ||
@@ -742,6 +748,7 @@ export function AiRunsWorkbench() {
     return filterAiRunsWorkbenchRecords(runs, {
       projectId: queryState.projectId !== "all" ? queryState.projectId : null,
       feature: queryState.feature,
+      provider: queryState.provider,
       status: queryState.status,
       model: queryState.model,
       q: queryText,
@@ -806,11 +813,12 @@ export function AiRunsWorkbench() {
     return [
       queryState.projectId !== "all",
       queryState.feature !== "all",
+      queryState.provider !== "all",
       queryState.status !== "all",
       queryState.model !== "all",
       queryText.trim().length > 0,
     ].filter(Boolean).length;
-  }, [queryState.feature, queryState.model, queryState.projectId, queryState.status, queryText]);
+  }, [queryState.feature, queryState.model, queryState.projectId, queryState.provider, queryState.status, queryText]);
 
   const handleDeleteVisible = async () => {
     const targetIds = filteredRuns.map((run) => run.id);
@@ -938,7 +946,7 @@ export function AiRunsWorkbench() {
                     </Select>
                   </WorkbenchControlBlock>
 
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <WorkbenchControlBlock label="Feature">
                       <Select
                         value={queryState.feature}
@@ -951,6 +959,22 @@ export function AiRunsWorkbench() {
                           <SelectItem value="all">All features</SelectItem>
                           <SelectItem value="shorts">Shorts</SelectItem>
                           <SelectItem value="video_info">Video info</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </WorkbenchControlBlock>
+
+                    <WorkbenchControlBlock label="Provider">
+                      <Select
+                        value={queryState.provider}
+                        onValueChange={(value) => updateQuery({ provider: value, run: null, compare: null })}
+                      >
+                        <SelectTrigger className="h-11 rounded-2xl border-white/12 bg-[linear-gradient(180deg,rgba(14,20,30,0.98),rgba(7,11,18,0.98))] text-white">
+                          <SelectValue placeholder="All providers" />
+                        </SelectTrigger>
+                        <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                          <SelectItem value="all">All providers</SelectItem>
+                          <SelectItem value="openai">OpenAI</SelectItem>
+                          <SelectItem value="gemini">Gemini</SelectItem>
                         </SelectContent>
                       </Select>
                     </WorkbenchControlBlock>
@@ -1093,6 +1117,9 @@ export function AiRunsWorkbench() {
                         <Badge variant="outline" className="border-white/12 bg-white/5 text-white/80">
                           {selectedRun.feature === "video_info" ? "Video Info" : "Shorts"}
                         </Badge>
+                        <Badge variant="outline" className="border-white/12 bg-white/5 text-white/70">
+                          {selectedRun.provider}
+                        </Badge>
                         <Badge
                           variant="outline"
                           className={cn(
@@ -1195,6 +1222,8 @@ export function AiRunsWorkbench() {
                     ) : (
                       <div className="space-y-4">
                         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          <KeyValue label="Selected Provider" value={selectedRun.provider} />
+                          <KeyValue label="Compare Provider" value={compareRun.provider} />
                           <KeyValue label="Selected Status" value={selectedRun.status} />
                           <KeyValue label="Compare Status" value={compareRun.status} />
                           <KeyValue label="Selected Duration" value={formatDurationMs(selectedRun.durationMs)} />
@@ -1203,6 +1232,8 @@ export function AiRunsWorkbench() {
                           <KeyValue label="Compare Tokens" value={formatCompactNumber(compareRun.usage?.totalTokens)} />
                           <KeyValue label="Selected Prompt" value={selectedRun.promptVersion} mono />
                           <KeyValue label="Compare Prompt" value={compareRun.promptVersion} mono />
+                          <KeyValue label="Selected Cost" value={formatUsd(selectedRun.estimatedCostUsd)} />
+                          <KeyValue label="Compare Cost" value={formatUsd(compareRun.estimatedCostUsd)} />
                         </div>
 
                         <DiffList title="Parsed output differences" items={parsedDiffItems} emptyLabel="Parsed snapshots match at the inspected depth." />

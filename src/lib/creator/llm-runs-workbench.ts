@@ -5,6 +5,7 @@ export type AiRunsWorkbenchSort = "newest" | "oldest" | "slowest" | "fastest" | 
 export interface AiRunsWorkbenchFilters {
   projectId?: string | null;
   feature?: "all" | CreatorLLMRunRecord["feature"];
+  provider?: "all" | CreatorLLMRunRecord["provider"];
   status?: "all" | CreatorLLMRunRecord["status"];
   model?: string;
   q?: string;
@@ -65,11 +66,14 @@ function buildSearchHaystack(run: CreatorLLMRunRecord): string {
     run.id,
     run.projectId,
     run.feature,
+    run.provider,
     run.status,
     run.operation,
     run.model,
     run.promptVersion,
     run.requestFingerprint,
+    run.apiKeySource,
+    run.estimatedCostSource,
     run.errorCode,
     run.errorMessage,
     summary.projectId,
@@ -119,6 +123,7 @@ export function filterAiRunsWorkbenchRecords(
     runs.filter((run) => {
       if (filters.projectId && run.projectId !== filters.projectId) return false;
       if (filters.feature && filters.feature !== "all" && run.feature !== filters.feature) return false;
+      if (filters.provider && filters.provider !== "all" && run.provider !== filters.provider) return false;
       if (filters.status && filters.status !== "all" && run.status !== filters.status) return false;
       if (filters.model && filters.model !== "all" && run.model !== filters.model) return false;
       if (query && !buildSearchHaystack(run).includes(query)) return false;

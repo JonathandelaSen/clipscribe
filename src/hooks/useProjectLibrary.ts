@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { createEmptyEditorProject, createEditorAssetRecord } from "@/lib/editor/storage";
 import { readMediaMetadata } from "@/lib/editor/media";
+import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type { ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
 
@@ -41,6 +42,17 @@ export function useProjectLibrary() {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    const handleProjectLibraryUpdated = () => {
+      void refresh();
+    };
+
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    };
+  }, [refresh]);
+
   const createProjectFromFile = useCallback(async (file: File) => {
     const metadata = await readMediaMetadata(file);
     const now = Date.now();
@@ -77,17 +89,38 @@ export function useProjectLibrary() {
     await projectRepository.putProject(project);
     await projectRepository.bulkPutAssets([asset]);
     await refresh();
+    notifyProjectLibraryUpdated();
     return project;
   }, [refresh]);
 
   const deleteProject = useCallback(async (projectId: string) => {
     await projectRepository.deleteProject(projectId);
     await refresh();
+    notifyProjectLibraryUpdated();
   }, [refresh]);
 
   const saveProject = useCallback(async (record: ContentProjectRecord) => {
     await projectRepository.putProject(record);
     await refresh();
+    notifyProjectLibraryUpdated();
+  }, [refresh]);
+
+  const renameProject = useCallback(async (projectId: string, name: string) => {
+    const nextName = name.trim();
+    if (!nextName) return;
+
+    const project = await projectRepository.getProject(projectId);
+    if (!project || project.name === nextName) return;
+
+    const now = Date.now();
+    await projectRepository.putProject({
+      ...project,
+      name: nextName,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
+    await refresh();
+    notifyProjectLibraryUpdated();
   }, [refresh]);
 
   return {
@@ -99,6 +132,7 @@ export function useProjectLibrary() {
     refresh,
     createProjectFromFile,
     saveProject,
+    renameProject,
     deleteProject,
   };
 }

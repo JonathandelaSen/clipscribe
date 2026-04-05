@@ -1,6 +1,5 @@
 import type { CreatorVideoInfoGenerateRequest } from "@/lib/creator/types";
 import { CreatorAIError } from "@/lib/server/creator/shared/errors";
-import { getRequiredCreatorOpenAIApiKey } from "@/lib/server/creator/shared/api-key";
 import { generateCreatorVideoInfo } from "@/lib/server/creator/video-info/service";
 
 export const runtime = "nodejs";
@@ -39,9 +38,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const openAIApiKey = getRequiredCreatorOpenAIApiKey(request.headers);
     const payload = body as unknown as CreatorVideoInfoGenerateRequest;
-    const result = await generateCreatorVideoInfo(payload, { openAIApiKey });
+    const result = await generateCreatorVideoInfo(payload, { headers: request.headers, signal: request.signal });
     return Response.json({
       ...result.response,
       _meta: result.llmRun ? { creatorLlmRun: result.llmRun } : undefined,

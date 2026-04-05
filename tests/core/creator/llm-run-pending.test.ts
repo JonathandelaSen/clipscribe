@@ -36,6 +36,7 @@ test("buildPendingCreatorLlmRun creates a queued local run with summarized input
 
   assert.equal(run.status, "queued");
   assert.equal(run.feature, "video_info");
+  assert.equal(run.provider, "openai");
   assert.equal(run.model, "OpenAI pending");
   assert.equal(run.inputSummary.transcriptChunkCount, 1);
   assert.deepEqual(run.inputSummary.videoInfoBlocks, ["titleIdeas", "description"]);
@@ -53,6 +54,8 @@ test("pending creator LLM runs can be marked processing and failed", () => {
   });
 
   const processing = markCreatorLlmRunProcessing(queued);
+  assert.equal(processing.provider, "gemini");
+  assert.equal(processing.model, "Gemini pending");
   assert.equal(processing.status, "processing");
   assert.ok(processing.durationMs >= 0);
 

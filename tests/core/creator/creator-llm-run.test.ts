@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import {
   buildBaseInputSummary,
   createCreatorLLMRequestFingerprint,
-  runTrackedOpenAIJson,
-} from "../../../src/lib/server/creator/shared/openai-run";
+  runTrackedCreatorJson,
+} from "../../../src/lib/server/creator/shared/llm-runtime";
 import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 
 async function withMockFetch(
@@ -51,7 +51,7 @@ test("createCreatorLLMRequestFingerprint is stable for the same normalized input
   assert.equal(left, right);
 });
 
-test("runTrackedOpenAIJson returns parsed JSON and a trace without the api key", async () => {
+test("runTrackedCreatorJson returns parsed JSON and a trace without the api key", async () => {
   await withMockFetch(
     async () =>
       new Response(
@@ -77,9 +77,11 @@ test("runTrackedOpenAIJson returns parsed JSON and a trace without the api key",
         }
       ),
     async () => {
-      const result = await runTrackedOpenAIJson({
-        apiKey: "sk-proj-secret",
-        model: "test-model",
+      const result = await runTrackedCreatorJson({
+        apiKey: "AIza-secret",
+        apiKeySource: "header",
+        provider: "gemini",
+        model: "gemini-2.5-flash",
         temperature: 0.4,
         messages: [
           { role: "system", content: "Return JSON only" },
@@ -97,24 +99,29 @@ test("runTrackedOpenAIJson returns parsed JSON and a trace without the api key",
 
       assert.deepEqual(result.parsed, { ok: true, clips: ["a"] });
       assert.equal(result.llmRun.status, "success");
-      assert.equal(result.llmRun.model, "test-model");
+      assert.equal(result.llmRun.model, "gemini-2.5-flash");
+      assert.equal(result.llmRun.provider, "gemini");
       assert.equal(result.llmRun.requestPayloadRaw && typeof result.llmRun.requestPayloadRaw, "object");
-      assert.doesNotMatch(JSON.stringify(result.llmRun.requestPayloadRaw), /sk-proj-secret/);
+      assert.doesNotMatch(JSON.stringify(result.llmRun.requestPayloadRaw), /AIza-secret/);
       assert.equal(result.llmRun.usage?.totalTokens, 120);
       assert.equal(result.llmRun.inputSummary.transcriptChunkCount, 1);
       assert.equal(result.llmRun.projectId, "proj_1");
+      assert.equal(result.llmRun.apiKeySource, "header");
+      assert.equal(result.llmRun.estimatedCostSource, "estimated");
     }
   );
 });
 
-test("runTrackedOpenAIJson records provider errors", async () => {
+test("runTrackedCreatorJson records provider errors", async () => {
   await withMockFetch(
     async () => new Response("bad api key", { status: 401 }),
     async () => {
       await assert.rejects(
-        runTrackedOpenAIJson({
+        runTrackedCreatorJson({
           apiKey: "sk-proj-invalid",
-          model: "test-model",
+          apiKeySource: "header",
+          provider: "openai",
+          model: "gpt-4.1-mini",
           temperature: 0.4,
           messages: [{ role: "user", content: "Say hello" }],
           feature: "video_info",
@@ -134,7 +141,7 @@ test("runTrackedOpenAIJson records provider errors", async () => {
   );
 });
 
-test("runTrackedOpenAIJson records malformed JSON as parse errors", async () => {
+test("runTrackedCreatorJson records malformed JSON as parse errors", async () => {
   await withMockFetch(
     async () =>
       new Response(
@@ -156,9 +163,11 @@ test("runTrackedOpenAIJson records malformed JSON as parse errors", async () => 
       ),
     async () => {
       await assert.rejects(
-        runTrackedOpenAIJson({
+        runTrackedCreatorJson({
           apiKey: "sk-proj-demo",
-          model: "test-model",
+          apiKeySource: "env",
+          provider: "openai",
+          model: "gpt-4.1-mini",
           temperature: 0.4,
           messages: [{ role: "user", content: "Say hello" }],
           feature: "shorts",
@@ -171,6 +180,54 @@ test("runTrackedOpenAIJson records malformed JSON as parse errors", async () => 
           assert.ok(error instanceof CreatorAIError);
           assert.equal(error.trace?.status, "parse_error");
           assert.equal(error.trace?.errorCode, "invalid_openai_response");
+          assert.match(String(error.trace?.errorMessage ?? ""), /Preview:/);
+          return true;
+        }
+      );
+    }
+  );
+});
+
+test("runTrackedCreatorJson explains when the provider emits mm:ss timestamps inside JSON", async () => {
+  await withMockFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: '{"shorts":[{"id":"short_1","startSeconds":6:04,"endSeconds":6:31}]}',
+              },
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      ),
+    async () => {
+      await assert.rejects(
+        runTrackedCreatorJson({
+          apiKey: "AIza-demo",
+          apiKeySource: "env",
+          provider: "gemini",
+          model: "gemini-2.5-flash",
+          temperature: 0.4,
+          messages: [{ role: "user", content: "Say hello" }],
+          feature: "shorts",
+          operation: "generate_shorts",
+          promptVersion: "creator-shorts-v3",
+          inputSummary: buildBaseInputSummary(baseInput),
+          requestFingerprint: createCreatorLLMRequestFingerprint(baseInput),
+        }),
+        (error) => {
+          assert.ok(error instanceof CreatorAIError);
+          assert.equal(error.trace?.status, "parse_error");
+          assert.match(error.message, /used a timestamp like "6:04"/i);
+          assert.match(String(error.trace?.errorMessage ?? ""), /numeric seconds value/i);
           return true;
         }
       );

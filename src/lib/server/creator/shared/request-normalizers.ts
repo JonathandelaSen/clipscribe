@@ -1,10 +1,12 @@
 import type {
+  CreatorGenerationConfig,
   CreatorGenerationSourceInput,
   CreatorShortsGenerateRequest,
   CreatorVideoInfoPromptCustomizationSnapshot,
   CreatorVideoInfoBlock,
   CreatorVideoInfoGenerateRequest,
 } from "../../../creator/types";
+import { sanitizeCreatorModelSelection, sanitizeCreatorProvider } from "../../../creator/ai";
 import {
   computePromptCustomizationHash,
   sanitizeVideoInfoPromptProfile,
@@ -34,6 +36,25 @@ function normalizeCreatorSourceInput(input: CreatorGenerationSourceInput): Creat
     subtitleChunks: Array.isArray(input.subtitleChunks) ? input.subtitleChunks : undefined,
     transcriptVersionLabel: input.transcriptVersionLabel ? String(input.transcriptVersionLabel) : undefined,
     subtitleVersionLabel: input.subtitleVersionLabel ? String(input.subtitleVersionLabel) : undefined,
+    generationConfig: normalizeGenerationConfig(input.generationConfig),
+  };
+}
+
+function normalizeGenerationConfig(value: unknown): CreatorGenerationConfig | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const provider = sanitizeCreatorProvider(record.provider);
+  const model = sanitizeCreatorModelSelection(record.model);
+  if (!provider && !model) {
+    return undefined;
+  }
+
+  return {
+    provider,
+    model,
   };
 }
 

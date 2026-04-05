@@ -55,6 +55,7 @@ import {
 import {
   secondsToClock,
   type CreatorGenerationSourceInput,
+  type CreatorLLMProvider,
   type CreatorShortEditorState,
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
@@ -66,6 +67,8 @@ import {
   type CreatorViralClip,
   type CreatorVideoInfoBlock,
 } from "@/lib/creator/types";
+import { getCreatorProviderLabel } from "@/lib/creator/ai";
+import { buildCreatorTextProviderHeaders } from "@/lib/creator/user-ai-settings";
 import {
   applyTrimNudgesToClip,
   createManualFallbackClip,
@@ -126,6 +129,7 @@ import { useCreatorShortRenderer } from "@/hooks/useCreatorShortRenderer";
 import { useCreatorShortsGenerator } from "@/hooks/useCreatorShortsGenerator";
 import { useCreatorLlmRuns } from "@/hooks/useCreatorLlmRuns";
 import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
+import { useCreatorTextFeatureConfig } from "@/hooks/useCreatorTextFeatureConfig";
 import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { cn } from "@/lib/utils";
 
@@ -267,15 +271,21 @@ function getAnalyzeErrorDetails(message: string | null): { title: string; body: 
       body: message.replace("OpenAI API Error: ", ""),
     };
   }
+  if (message.startsWith("Gemini API Error: ")) {
+    return {
+      title: "Error en la API de Gemini",
+      body: message.replace("Gemini API Error: ", ""),
+    };
+  }
   if (/authentication failed|api key/i.test(message)) {
     return {
-      title: "OpenAI authentication failed",
-      body: "La key configurada no ha sido aceptada por OpenAI. Revísala o pega una nueva.",
+      title: "Falló la autenticación del provider",
+      body: "La key configurada no ha sido aceptada por el provider activo. Revísala o pega una nueva.",
     };
   }
   if (/quota|rate limit/i.test(message)) {
     return {
-      title: "OpenAI rechazó la petición",
+      title: "El provider rechazó la petición",
       body: "La cuenta asociada a la key ha llegado a cuota o límite de velocidad. Reintenta más tarde o usa otra key.",
     };
   }
@@ -307,6 +317,12 @@ function formatAiSuggestionInputSummary(summary?: {
   ]
     .filter(Boolean)
     .join(" • ");
+}
+
+function getCreatorApiKeySourceLabel(apiKeySource?: "header" | "env"): string {
+  if (apiKeySource === "header") return "Browser key";
+  if (apiKeySource === "env") return "Server env";
+  return "Key missing";
 }
 
 function SubtitlePreviewText({
@@ -1071,12 +1087,30 @@ export function CreatorHub({
   } = useCreatorShortRenderer();
   const {
     openAIApiKey,
+    geminiApiKey,
     hasOpenAIApiKey,
+    hasGeminiApiKey,
     maskedOpenAIApiKey,
+    maskedGeminiApiKey,
     saveOpenAIApiKey,
+    saveGeminiApiKey,
     clearOpenAIApiKey,
+    clearGeminiApiKey,
+    shortsFeatureSettings,
+    videoInfoFeatureSettings,
+    saveFeatureModel,
   } = useCreatorAiSettings();
   const { activeTasks, startShortExport, cancelTask } = useBackgroundTasks();
+  const creatorProviderHeaders = useMemo(
+    () => buildCreatorTextProviderHeaders({ openAIApiKey, geminiApiKey }),
+    [geminiApiKey, openAIApiKey]
+  );
+  const { config: shortsAiConfig } = useCreatorTextFeatureConfig("shorts", {
+    headers: creatorProviderHeaders,
+  });
+  const { config: videoInfoAiConfig } = useCreatorTextFeatureConfig("video_info", {
+    headers: creatorProviderHeaders,
+  });
 
   const [hubView, setHubView] = useState<HubView>(initialView);
   const [selectedProjectId, setSelectedProjectId] = useState<string>(initialSourceAssetId ?? "");
@@ -1084,6 +1118,7 @@ export function CreatorHub({
   const [selectedSubtitleId, setSelectedSubtitleId] = useState<string>("");
   const [isAiSettingsOpen, setIsAiSettingsOpen] = useState(false);
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState("");
   const [isRegenerateAiSuggestionsDialogOpen, setIsRegenerateAiSuggestionsDialogOpen] = useState(false);
 
   const [niche, setNiche] = useState("");
@@ -1688,8 +1723,40 @@ export function CreatorHub({
   shortExportHeartbeatStatusRef.current = activeShortExportTask?.status ?? "idle";
   shortExportHeartbeatProgressRef.current = Math.round(activeShortExportTask?.progress ?? exportProgressPct);
 
+  const resolvedShortsProvider = shortsFeatureSettings?.provider ?? shortsAiConfig?.provider ?? "gemini";
+  const resolvedShortsModel = useMemo(() => {
+    const savedModel = shortsFeatureSettings?.model;
+    if (savedModel && shortsAiConfig?.models.some((option) => option.value === savedModel)) {
+      return savedModel;
+    }
+    return shortsAiConfig?.defaultModel ?? savedModel ?? "";
+  }, [shortsAiConfig?.defaultModel, shortsAiConfig?.models, shortsFeatureSettings?.model]);
+  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "openai";
+  const resolvedVideoInfoModel = useMemo(() => {
+    const savedModel = videoInfoFeatureSettings?.model;
+    if (savedModel && videoInfoAiConfig?.models.some((option) => option.value === savedModel)) {
+      return savedModel;
+    }
+    return videoInfoAiConfig?.defaultModel ?? savedModel ?? "";
+  }, [videoInfoAiConfig?.defaultModel, videoInfoAiConfig?.models, videoInfoFeatureSettings?.model]);
+  const activeToolProvider: CreatorLLMProvider =
+    activeTool === "video_info" ? resolvedVideoInfoProvider : resolvedShortsProvider;
+  const activeToolModel = activeTool === "video_info" ? resolvedVideoInfoModel : resolvedShortsModel;
+  const openAIApiKeySource =
+    videoInfoAiConfig?.provider === "openai" && videoInfoAiConfig.hasApiKey ? videoInfoAiConfig.apiKeySource : undefined;
+  const geminiApiKeySource =
+    shortsAiConfig?.provider === "gemini" && shortsAiConfig.hasApiKey ? shortsAiConfig.apiKeySource : undefined;
+  const activeToolApiKeySource = activeTool === "video_info" ? openAIApiKeySource : geminiApiKeySource;
+  const hasActiveProviderApiKey = Boolean(activeToolApiKeySource);
+  const maskedActiveProviderApiKey =
+    activeToolProvider === "openai" && activeToolApiKeySource === "header"
+      ? maskedOpenAIApiKey
+      : activeToolProvider === "gemini" && activeToolApiKeySource === "header"
+        ? maskedGeminiApiKey
+        : null;
+
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
-  const canAnalyzeWithAI = canAnalyze && hasOpenAIApiKey;
+  const canAnalyzeWithAI = canAnalyze && hasActiveProviderApiKey;
   const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
   const canExportVideo = canRender && !!mediaFile && isVideoMedia && !isActiveShortExportTask;
   const canCancelShortExport =
@@ -1754,16 +1821,24 @@ export function CreatorHub({
       niche,
       audience,
       tone,
+      generationConfig: {
+        provider: resolvedShortsProvider,
+        model: resolvedShortsModel || undefined,
+      },
     };
-  }, [aiSuggestionSourceSignature, audience, creatorSourcePayload, niche, tone]);
+  }, [aiSuggestionSourceSignature, audience, creatorSourcePayload, niche, resolvedShortsModel, resolvedShortsProvider, tone]);
 
   const videoInfoRequestPayload = useMemo<CreatorVideoInfoGenerateRequest | null>(() => {
     if (!creatorSourcePayload) return null;
     return {
       ...creatorSourcePayload,
       videoInfoBlocks,
+      generationConfig: {
+        provider: resolvedVideoInfoProvider,
+        model: resolvedVideoInfoModel || undefined,
+      },
     };
-  }, [creatorSourcePayload, videoInfoBlocks]);
+  }, [creatorSourcePayload, resolvedVideoInfoModel, resolvedVideoInfoProvider, videoInfoBlocks]);
 
   const matchingAiSuggestionGenerations = useMemo(() => {
     if (!aiSuggestionSourceSignature) return [];
@@ -1788,8 +1863,9 @@ export function CreatorHub({
 
   const openAiSettingsDialog = useCallback(() => {
     setOpenAIApiKeyDraft(openAIApiKey);
+    setGeminiApiKeyDraft(geminiApiKey);
     setIsAiSettingsOpen(true);
-  }, [openAIApiKey]);
+  }, [geminiApiKey, openAIApiKey]);
 
   const handleSaveOpenAIApiKey = useCallback(() => {
     const trimmed = openAIApiKeyDraft.trim();
@@ -1807,6 +1883,22 @@ export function CreatorHub({
     });
   }, [openAIApiKeyDraft, saveOpenAIApiKey]);
 
+  const handleSaveGeminiApiKey = useCallback(() => {
+    const trimmed = geminiApiKeyDraft.trim();
+    if (!trimmed) {
+      toast.error("Paste a Gemini API key first.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
+
+    saveGeminiApiKey(trimmed);
+    setIsAiSettingsOpen(false);
+    toast.success("Gemini key saved in this browser.", {
+      className: "bg-green-500/20 border-green-500/50 text-green-100",
+    });
+  }, [geminiApiKeyDraft, saveGeminiApiKey]);
+
   const handleClearOpenAIApiKey = useCallback(() => {
     clearOpenAIApiKey();
     setOpenAIApiKeyDraft("");
@@ -1815,11 +1907,19 @@ export function CreatorHub({
     });
   }, [clearOpenAIApiKey]);
 
+  const handleClearGeminiApiKey = useCallback(() => {
+    clearGeminiApiKey();
+    setGeminiApiKeyDraft("");
+    toast.success("Gemini key removed from this browser.", {
+      className: "bg-green-500/20 border-green-500/50 text-green-100",
+    });
+  }, [clearGeminiApiKey]);
+
   const handleGenerateVideoInfo = async () => {
     if (!videoInfoRequestPayload) return;
-    if (!hasOpenAIApiKey) {
+    if (!hasActiveProviderApiKey && activeTool === "video_info") {
       openAiSettingsDialog();
-      toast.error("Add your OpenAI API key to generate video info.", {
+      toast.error(`Add your ${getCreatorProviderLabel(resolvedVideoInfoProvider)} API key to generate video info.`, {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
       });
       return;
@@ -1831,7 +1931,7 @@ export function CreatorHub({
       return;
     }
     try {
-      const result = await generateVideoInfo(videoInfoRequestPayload, { openAIApiKey });
+      const result = await generateVideoInfo(videoInfoRequestPayload, { headers: creatorProviderHeaders });
       toast.success(`Video info generated (${result.providerMode})`, {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
       });
@@ -1890,15 +1990,22 @@ export function CreatorHub({
 
   const runClipLabGeneration = useCallback(async () => {
     if (!shortsRequestPayload) return;
-    if (!hasOpenAIApiKey) {
+    if (!shortsAiConfig?.hasApiKey && resolvedShortsProvider === "gemini") {
       openAiSettingsDialog();
-      toast.error("Add your OpenAI API key to generate shorts.", {
+      toast.error("Add your Gemini API key or set GEMINI_API_KEY on the server.", {
+        className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+      });
+      return;
+    }
+    if (!shortsAiConfig?.hasApiKey && resolvedShortsProvider === "openai") {
+      openAiSettingsDialog();
+      toast.error("Add your OpenAI API key or set OPENAI_API_KEY on the server.", {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
       });
       return;
     }
     try {
-      const result = await generateShorts(shortsRequestPayload, { openAIApiKey });
+      const result = await generateShorts(shortsRequestPayload, { headers: creatorProviderHeaders });
       const savedCount = await persistAiSuggestionGeneration(result);
       toast.success(`Clip lab generated (${result.providerMode})`, {
         className: "bg-green-500/20 border-green-500/50 text-green-100",
@@ -1909,7 +2016,16 @@ export function CreatorHub({
     } finally {
       void refreshLlmRuns();
     }
-  }, [generateShorts, hasOpenAIApiKey, openAIApiKey, openAiSettingsDialog, persistAiSuggestionGeneration, refreshLlmRuns, shortsRequestPayload]);
+  }, [
+    creatorProviderHeaders,
+    generateShorts,
+    openAiSettingsDialog,
+    persistAiSuggestionGeneration,
+    refreshLlmRuns,
+    resolvedShortsProvider,
+    shortsAiConfig?.hasApiKey,
+    shortsRequestPayload,
+  ]);
 
   const handleGenerateClipLab = async () => {
     if (matchingAiSuggestionGenerations.length > 0 || hasAiSuggestionsForSignature(aiSuggestionSourceSignature)) {
@@ -2746,26 +2862,36 @@ export function CreatorHub({
                 <div className="rounded-xl border border-white/10 bg-black/20 p-4">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div className="space-y-1">
-                      <div className="text-xs uppercase tracking-wider text-white/50">AI Provider</div>
+                      <div className="text-xs uppercase tracking-wider text-white/50">AI Runtime</div>
                       <div className="flex flex-wrap items-center gap-2 text-sm">
                         <span className="inline-flex items-center rounded-full border border-cyan-400/20 bg-cyan-400/10 px-2.5 py-1 text-cyan-100">
-                          OpenAI
+                          {getCreatorProviderLabel(activeToolProvider)}
                         </span>
                         <span
                           className={cn(
                             "inline-flex items-center rounded-full border px-2.5 py-1",
-                            hasOpenAIApiKey
+                            hasActiveProviderApiKey
                               ? "border-emerald-400/20 bg-emerald-400/10 text-emerald-100"
                               : "border-amber-400/20 bg-amber-400/10 text-amber-100"
                           )}
                         >
-                          {hasOpenAIApiKey ? `Key ${maskedOpenAIApiKey}` : "Key missing"}
+                          {hasActiveProviderApiKey
+                            ? maskedActiveProviderApiKey
+                              ? `Key ${maskedActiveProviderApiKey}`
+                              : getCreatorApiKeySourceLabel(activeToolApiKeySource)
+                            : "Key missing"}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-white/70">
+                          {activeToolModel || "Model pending"}
+                        </span>
+                        <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-white/70">
+                          {activeTool === "video_info" ? "Video info" : "Shorts"}
                         </span>
                         <span className="inline-flex items-center rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-white/70">
                           {llmRuns.length} run{llmRuns.length === 1 ? "" : "s"}
                         </span>
                       </div>
-                      <div className="text-xs text-white/45">Se guarda solo en este navegador y se envía por request al backend.</div>
+                      <div className="text-xs text-white/45">Puedes usar una key guardada en este navegador o una variable de entorno del servidor.</div>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -2786,7 +2912,7 @@ export function CreatorHub({
                         onClick={openAiSettingsDialog}
                       >
                         <KeyRound className="mr-2 h-4 w-4" />
-                        {hasOpenAIApiKey ? "Update API Key" : "Add API Key"}
+                        Edit API Keys
                       </Button>
                     </div>
                   </div>
@@ -2886,6 +3012,36 @@ export function CreatorHub({
                     />
                   </div>
                 </div>
+
+                {activeTool === "clip_lab" && (
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Provider</label>
+                      <div className="flex h-10 items-center rounded-lg border border-white/10 bg-white/5 px-3 text-sm text-white/85">
+                        {getCreatorProviderLabel(resolvedShortsProvider)}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Model</label>
+                      <Select
+                        value={resolvedShortsModel}
+                        onValueChange={(value) => saveFeatureModel("shorts", value, resolvedShortsProvider)}
+                        disabled={!shortsAiConfig || shortsAiConfig.models.length === 0}
+                      >
+                        <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                          <SelectValue placeholder="Select model" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                          {(shortsAiConfig?.models ?? []).map((option) => (
+                            <SelectItem key={`${option.provider}:${option.value}`} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
 
                 <div className="rounded-xl border border-white/10 bg-black/20 p-4 space-y-4">
                   {!isToolLocked && (
@@ -2987,7 +3143,11 @@ export function CreatorHub({
                           </TooltipTrigger>
                           {(!canAnalyzeWithAI || isAnalyzing || videoInfoBlocks.length === 0) && (
                             <TooltipContent>
-                              {!canAnalyzeWithAI ? "Please configure your OpenAI API key in settings" : videoInfoBlocks.length === 0 ? "Select at least one info block" : "Generating..."}
+                              {!canAnalyzeWithAI
+                                ? `Please configure your ${getCreatorProviderLabel(resolvedVideoInfoProvider)} API key in settings`
+                                : videoInfoBlocks.length === 0
+                                  ? "Select at least one info block"
+                                  : "Generating..."}
                             </TooltipContent>
                           )}
                         </Tooltip>
@@ -3443,7 +3603,7 @@ export function CreatorHub({
                       </TooltipTrigger>
                       {!canAnalyzeWithAI && (
                         <TooltipContent>
-                          <p>Please configure your OpenAI API key in settings</p>
+                          <p>Please configure your {getCreatorProviderLabel(resolvedShortsProvider)} API key in settings</p>
                         </TooltipContent>
                       )}
                     </Tooltip>
@@ -4613,16 +4773,16 @@ export function CreatorHub({
       <Dialog open={isAiSettingsOpen} onOpenChange={setIsAiSettingsOpen}>
         <DialogContent className="border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>OpenAI API Key</DialogTitle>
+            <DialogTitle>Creator AI Keys</DialogTitle>
             <DialogDescription className="text-white/55">
-              Stored only in this browser. The backend uses it per request and does not persist it.
+              Optional browser overrides. If left blank, Creator will use the server env when available.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="creator-openai-key" className="text-white/80">
-                API key
+                OpenAI API key
               </Label>
               <Input
                 id="creator-openai-key"
@@ -4634,11 +4794,39 @@ export function CreatorHub({
               />
             </div>
 
-            {hasOpenAIApiKey && (
+            {hasOpenAIApiKey ? (
               <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
-                Current key: {maskedOpenAIApiKey}
+                OpenAI: {maskedOpenAIApiKey}
               </div>
-            )}
+            ) : openAIApiKeySource === "env" ? (
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
+                OpenAI: available from server env
+              </div>
+            ) : null}
+
+            <div className="space-y-2">
+              <Label htmlFor="creator-gemini-key" className="text-white/80">
+                Gemini API key
+              </Label>
+              <Input
+                id="creator-gemini-key"
+                type="password"
+                value={geminiApiKeyDraft}
+                onChange={(event) => setGeminiApiKeyDraft(event.target.value)}
+                placeholder="AIza..."
+                autoComplete="off"
+              />
+            </div>
+
+            {hasGeminiApiKey ? (
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
+                Gemini: {maskedGeminiApiKey}
+              </div>
+            ) : geminiApiKeySource === "env" ? (
+              <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-white/65">
+                Gemini: available from server env
+              </div>
+            ) : null}
           </div>
 
           <DialogFooter className="sm:justify-between">
@@ -4650,7 +4838,17 @@ export function CreatorHub({
                   className="bg-white/5 text-white/80 hover:bg-white/10"
                   onClick={handleClearOpenAIApiKey}
                 >
-                  Remove key
+                  Remove OpenAI
+                </Button>
+              )}
+              {hasGeminiApiKey && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="bg-white/5 text-white/80 hover:bg-white/10"
+                  onClick={handleClearGeminiApiKey}
+                >
+                  Remove Gemini
                 </Button>
               )}
             </div>
@@ -4666,9 +4864,18 @@ export function CreatorHub({
               <Button
                 type="button"
                 className="bg-gradient-to-r from-cyan-500 to-emerald-400 font-semibold text-black hover:from-cyan-400 hover:to-emerald-300"
-                onClick={handleSaveOpenAIApiKey}
+                onClick={() => {
+                  const hasOpenAIInput = openAIApiKeyDraft.trim().length > 0;
+                  const hasGeminiInput = geminiApiKeyDraft.trim().length > 0;
+                  if (hasOpenAIInput) {
+                    handleSaveOpenAIApiKey();
+                  }
+                  if (hasGeminiInput) {
+                    handleSaveGeminiApiKey();
+                  }
+                }}
               >
-                Save key
+                Save keys
               </Button>
             </div>
           </DialogFooter>

@@ -3,7 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Film, Sparkles, Trash2 } from "lucide-react";
+import { Film, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DragDropZone } from "@/components/DragDropZone";
@@ -23,7 +23,7 @@ function formatRelativeDate(timestamp: number) {
 
 export function ProjectLibraryHome() {
   const router = useRouter();
-  const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createProjectFromFile, deleteProject } = useProjectLibrary();
+  const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createProjectFromFile, renameProject, deleteProject } = useProjectLibrary();
 
   useEffect(() => {
     if (!isLoading) {
@@ -53,6 +53,19 @@ export function ProjectLibraryHome() {
     if (!confirmed) return;
     await deleteProject(projectId);
     toast.success("Proyecto eliminado");
+  };
+
+  const handleRenameProject = async (projectId: string, currentName: string) => {
+    const nextName = window.prompt("Nuevo nombre del proyecto", currentName)?.trim();
+    if (!nextName || nextName === currentName) return;
+
+    try {
+      await renameProject(projectId, nextName);
+      toast.success("Proyecto renombrado");
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "No se pudo renombrar el proyecto");
+    }
   };
 
   return (
@@ -134,6 +147,14 @@ export function ProjectLibraryHome() {
                                 <Film className="mr-2 h-4 w-4" />
                                 Open Workspace
                               </Link>
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              className="rounded-xl text-white/60 hover:bg-white/10 hover:text-white"
+                              onClick={() => void handleRenameProject(project.id, project.name)}
+                              aria-label={`Renombrar ${project.name}`}
+                            >
+                              <Pencil className="h-4 w-4" />
                             </Button>
                             <Button
                               variant="ghost"

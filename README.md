@@ -55,6 +55,23 @@ To enable the raw debug logs interface on the main screen (useful for observing 
 NEXT_PUBLIC_ENABLE_LOGS=true
 ```
 
+Creator AI text generation also supports feature-level provider/model defaults:
+
+```env
+CREATOR_SHORTS_PROVIDER=gemini
+CREATOR_SHORTS_MODEL=gemini-2.5-flash
+CREATOR_SHORTS_TEMPERATURE=0.4
+
+CREATOR_VIDEO_INFO_PROVIDER=openai
+CREATOR_VIDEO_INFO_MODEL=gpt-4.1-mini
+CREATOR_VIDEO_INFO_TEMPERATURE=0.4
+
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+```
+
+Legacy OpenAI-only model vars for Creator (`OPENAI_CREATOR_SHORTS_MODEL`, `OPENAI_CREATOR_VIDEO_INFO_MODEL`) are still read as compatibility fallbacks during this migration.
+
 ## Tech Stack
 
 - **Framework**: Next.js 14 (App Router)

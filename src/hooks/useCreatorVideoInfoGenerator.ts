@@ -1,7 +1,6 @@
 import { useState } from "react";
 import type { CreatorVideoInfoGenerateRequest, CreatorVideoInfoGenerateResponse } from "@/lib/creator/types";
 import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
-import { CREATOR_OPENAI_API_KEY_HEADER } from "@/lib/creator/user-ai-settings";
 import { postJson } from "@/hooks/creator-api";
 
 const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v4";
@@ -11,7 +10,7 @@ export function useCreatorVideoInfoGenerator() {
   const [isGeneratingVideoInfo, setIsGeneratingVideoInfo] = useState(false);
   const [videoInfoError, setVideoInfoError] = useState<string | null>(null);
 
-  const generateVideoInfo = async (payload: CreatorVideoInfoGenerateRequest, options?: { openAIApiKey?: string }) => {
+  const generateVideoInfo = async (payload: CreatorVideoInfoGenerateRequest, options?: { headers?: HeadersInit }) => {
     setIsGeneratingVideoInfo(true);
     setVideoInfoError(null);
     try {
@@ -19,16 +18,14 @@ export function useCreatorVideoInfoGenerator() {
         "/api/creator/video-info/generate",
         payload,
         {
-          headers: options?.openAIApiKey
-            ? {
-                [CREATOR_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
-              }
-            : undefined,
+          headers: options?.headers,
           pendingLlmRun: buildPendingCreatorLlmRun({
             feature: "video_info",
             operation: "generate_video_info",
             promptVersion: VIDEO_INFO_PENDING_PROMPT_VERSION,
             request: payload,
+            provider: payload.generationConfig?.provider,
+            model: payload.generationConfig?.model,
             inputSummary: {
               videoInfoBlocks: payload.videoInfoBlocks?.slice(),
               promptCustomizationMode: payload.promptCustomization?.mode ?? "default",

@@ -1,6 +1,5 @@
 import type { CreatorShortsGenerateRequest } from "@/lib/creator/types";
 import { CreatorAIError } from "@/lib/server/creator/shared/errors";
-import { getRequiredCreatorOpenAIApiKey } from "@/lib/server/creator/shared/api-key";
 import { generateCreatorShorts } from "@/lib/server/creator/shorts/service";
 
 export const runtime = "nodejs";
@@ -39,9 +38,8 @@ export async function POST(request: Request) {
   }
 
   try {
-    const openAIApiKey = getRequiredCreatorOpenAIApiKey(request.headers);
     const payload = body as unknown as CreatorShortsGenerateRequest;
-    const result = await generateCreatorShorts(payload, { openAIApiKey });
+    const result = await generateCreatorShorts(payload, { headers: request.headers, signal: request.signal });
     return Response.json({
       ...result.response,
       _meta: result.llmRun ? { creatorLlmRun: result.llmRun } : undefined,

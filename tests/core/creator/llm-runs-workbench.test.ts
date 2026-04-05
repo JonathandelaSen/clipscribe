@@ -59,20 +59,22 @@ function makeRun(overrides: Partial<CreatorLLMRunRecord> = {}): CreatorLLMRunRec
 
 test("filterAiRunsWorkbenchRecords applies project, status, model, search, and sort", () => {
   const runs = [
-    makeRun({ id: "run_old", startedAt: 100, model: "gpt-a", projectId: "project_a" }),
+    makeRun({ id: "run_old", startedAt: 100, model: "gpt-a", projectId: "project_a", provider: "openai" }),
     makeRun({
       id: "run_new",
       startedAt: 300,
       model: "gpt-b",
       projectId: "project_b",
+      provider: "gemini",
       status: "provider_error",
       errorMessage: "quota exceeded",
     }),
-    makeRun({ id: "run_mid", startedAt: 200, model: "gpt-a", projectId: "project_b" }),
+    makeRun({ id: "run_mid", startedAt: 200, model: "gpt-a", projectId: "project_b", provider: "openai" }),
   ];
 
   const filtered = filterAiRunsWorkbenchRecords(runs, {
     projectId: "project_b",
+    provider: "gemini",
     status: "provider_error",
     model: "gpt-b",
     q: "quota",

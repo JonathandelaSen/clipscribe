@@ -1,1 +1,1 @@
-export { getRequiredCreatorOpenAIApiKey } from "./creator/shared/api-key";
+export { resolveCreatorProviderApiKey } from "./creator/shared/api-key";

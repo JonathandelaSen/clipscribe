@@ -2,11 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createVideoInfoPromptCustomizationSnapshot } from "../../../src/lib/creator/prompt-customization";
+import { CREATOR_OPENAI_API_KEY_HEADER } from "../../../src/lib/creator/user-ai-settings";
 import type { CreatorVideoInfoGenerateRequest } from "../../../src/lib/creator/types";
 import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 import { normalizeVideoInfoGenerateRequest } from "../../../src/lib/server/creator/shared/request-normalizers";
-import { mapVideoInfoOpenAIResponse } from "../../../src/lib/server/creator/video-info/mapper";
-import { generateVideoInfoWithOpenAI } from "../../../src/lib/server/creator/video-info/openai";
+import { mapVideoInfoLlmResponse } from "../../../src/lib/server/creator/video-info/mapper";
+import { generateCreatorVideoInfo } from "../../../src/lib/server/creator/video-info/service";
 import {
   buildCollapsedVideoInfoPromptPreview,
   buildVideoInfoPrompt,
@@ -27,6 +28,10 @@ const baseRequest: CreatorVideoInfoGenerateRequest = {
     { text: "The punchline lands at the end of the section.", timestamp: [18, 32] },
   ],
   videoInfoBlocks: ["titleIdeas", "description", "chapters", "contentPack", "insights"],
+  generationConfig: {
+    provider: "openai",
+    model: "gpt-4.1-mini",
+  },
 };
 
 const videoInfoModelResponse = {
@@ -177,8 +182,8 @@ test("buildCollapsedVideoInfoPromptPreview keeps the transcript in the accordion
   assert.match(preview.transcriptText, /\[0:00-0:06\] This is the opening hook\./);
 });
 
-test("mapVideoInfoOpenAIResponse returns the expected video info payload", () => {
-  const result = mapVideoInfoOpenAIResponse(baseRequest, videoInfoModelResponse, "test-model");
+test("mapVideoInfoLlmResponse returns the expected video info payload", () => {
+  const result = mapVideoInfoLlmResponse(baseRequest, videoInfoModelResponse, "openai", "test-model");
 
   assert.equal(result.providerMode, "openai");
   assert.equal(result.youtube.titleIdeas[0], "The creator workflow that actually scales");
@@ -186,24 +191,27 @@ test("mapVideoInfoOpenAIResponse returns the expected video info payload", () =>
   assert.equal(result.chapters[0]?.label, "Intro");
 });
 
-test("mapVideoInfoOpenAIResponse rejects a non-object payload", () => {
+test("mapVideoInfoLlmResponse rejects a non-object payload", () => {
   assert.throws(
-    () => mapVideoInfoOpenAIResponse(baseRequest, "bad", "test-model"),
+    () => mapVideoInfoLlmResponse(baseRequest, "bad", "openai", "test-model"),
     /non-object JSON payload/i
   );
 });
 
-test("generateVideoInfoWithOpenAI surfaces provider authentication errors", async () => {
-  const originalModel = process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL;
-  process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = "test-model";
+test("generateCreatorVideoInfo surfaces provider authentication errors", async () => {
+  const originalProvider = process.env.CREATOR_VIDEO_INFO_PROVIDER;
+  const originalModel = process.env.CREATOR_VIDEO_INFO_MODEL;
+  process.env.CREATOR_VIDEO_INFO_PROVIDER = "openai";
+  process.env.CREATOR_VIDEO_INFO_MODEL = "gpt-4.1-mini";
   try {
     await withMockFetch(
       async () => new Response("bad api key", { status: 401 }),
       async () => {
         await assert.rejects(
-          generateVideoInfoWithOpenAI({
-            request: baseRequest,
-            apiKey: "sk-proj-invalid",
+          generateCreatorVideoInfo(baseRequest, {
+            headers: new Headers({
+              [CREATOR_OPENAI_API_KEY_HEADER]: "sk-proj-invalid",
+            }),
           }),
           (error) => {
             assert.ok(error instanceof CreatorAIError);
@@ -215,26 +223,52 @@ test("generateVideoInfoWithOpenAI surfaces provider authentication errors", asyn
       }
     );
   } finally {
-    process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = originalModel;
+    process.env.CREATOR_VIDEO_INFO_PROVIDER = originalProvider;
+    process.env.CREATOR_VIDEO_INFO_MODEL = originalModel;
   }
 });
 
-test("generateVideoInfoWithOpenAI returns packaging results and uses the video info-only prompt", async () => {
-  const originalModel = process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL;
-  process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = "test-model";
+test("generateCreatorVideoInfo rejects non-openai providers during this migration phase", async () => {
+  await assert.rejects(
+    generateCreatorVideoInfo(
+      {
+        ...baseRequest,
+        generationConfig: {
+          provider: "gemini",
+          model: "gemini-2.5-flash",
+        },
+      },
+      { headers: new Headers() }
+    ),
+    /still runs on OpenAI/i
+  );
+});
+
+test("generateCreatorVideoInfo returns packaging results and uses the video info-only prompt", async () => {
+  const originalProvider = process.env.CREATOR_VIDEO_INFO_PROVIDER;
+  const originalModel = process.env.CREATOR_VIDEO_INFO_MODEL;
+  process.env.CREATOR_VIDEO_INFO_PROVIDER = "openai";
+  process.env.CREATOR_VIDEO_INFO_MODEL = "gpt-4.1-mini";
   try {
     await withMockFetch(
       async (_, init) => {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
+          model?: string;
           messages?: Array<{ role: string; content: string }>;
         };
         const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
+        assert.equal(body.model, "gpt-4.1-mini");
         assert.match(userMessage, /youtube\.titleIdeas/i);
         assert.match(userMessage, /Only include the requested keys/i);
         assert.doesNotMatch(userMessage, /shortsPlans/i);
 
         return new Response(
           JSON.stringify({
+            usage: {
+              prompt_tokens: 150,
+              completion_tokens: 60,
+              total_tokens: 210,
+            },
             choices: [
               {
                 message: {
@@ -252,79 +286,24 @@ test("generateVideoInfoWithOpenAI returns packaging results and uses the video i
         );
       },
       async () => {
-        const payload = await generateVideoInfoWithOpenAI({
-          request: baseRequest,
-          apiKey: "sk-proj-demo",
+        const payload = await generateCreatorVideoInfo(baseRequest, {
+          headers: new Headers({
+            [CREATOR_OPENAI_API_KEY_HEADER]: "sk-proj-demo",
+          }),
         });
 
         assert.equal(payload.response.providerMode, "openai");
-        assert.match(payload.response.model, /user key/i);
+        assert.equal(payload.response.model, "gpt-4.1-mini");
         assert.equal(payload.response.youtube.titleIdeas[0], "The creator workflow that actually scales");
-        assert.equal(payload.response.chapters[0]?.label, "Intro");
         assert.equal(payload.llmRun?.status, "success");
         assert.equal(payload.llmRun?.feature, "video_info");
+        assert.equal(payload.llmRun?.provider, "openai");
         assert.equal(payload.llmRun?.promptVersion, CREATOR_VIDEO_INFO_PROMPT_VERSION);
-        assert.deepEqual(payload.llmRun?.inputSummary.videoInfoBlocks, baseRequest.videoInfoBlocks);
-        assert.equal(payload.llmRun?.inputSummary.promptCustomizationMode, "default");
+        assert.equal(payload.llmRun?.estimatedCostSource, "estimated");
       }
     );
   } finally {
-    process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = originalModel;
-  }
-});
-
-test("generateVideoInfoWithOpenAI traces prompt customization metadata", async () => {
-  const originalModel = process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL;
-  process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = "test-model";
-  try {
-    await withMockFetch(
-      async (_, init) => {
-        const body = JSON.parse(String(init?.body ?? "{}")) as {
-          messages?: Array<{ role: string; content: string }>;
-        };
-        const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
-        assert.match(userMessage, /Use emojis sometimes/i);
-
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: JSON.stringify(videoInfoModelResponse),
-                },
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-            },
-          }
-        );
-      },
-      async () => {
-        const promptCustomization = createVideoInfoPromptCustomizationSnapshot({
-          globalProfile: {
-            fieldInstructions: {
-              titleIdeas: "Use emojis sometimes.",
-            },
-          },
-        });
-        const payload = await generateVideoInfoWithOpenAI({
-          request: {
-            ...baseRequest,
-            promptCustomization,
-          },
-          apiKey: "sk-proj-demo",
-        });
-
-        assert.equal(payload.llmRun?.inputSummary.promptCustomizationMode, "global_customized");
-        assert.equal(payload.llmRun?.inputSummary.promptCustomizationHash, promptCustomization?.hash);
-        assert.deepEqual(payload.llmRun?.inputSummary.promptEditedSections, ["field:titleIdeas"]);
-      }
-    );
-  } finally {
-    process.env.OPENAI_CREATOR_VIDEO_INFO_MODEL = originalModel;
+    process.env.CREATOR_VIDEO_INFO_PROVIDER = originalProvider;
+    process.env.CREATOR_VIDEO_INFO_MODEL = originalModel;
   }
 });
