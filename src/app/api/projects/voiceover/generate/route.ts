@@ -3,8 +3,10 @@ import type { VoiceoverApiKeySource, VoiceoverGenerateRequest } from "@/lib/voic
 import { generateProjectVoiceover } from "@/lib/server/voiceover/service";
 import {
   readElevenLabsApiKeyFromEnv,
+  readProjectVoiceoverConfigFromEnv,
   readElevenLabsDefaultModelFromEnv,
 } from "@/lib/server/voiceover/config";
+import { maskVoiceoverSecret } from "@/lib/voiceover/utils";
 import { VoiceoverError } from "@/lib/server/voiceover/errors";
 
 export const runtime = "nodejs";
@@ -23,12 +25,14 @@ function errorJson(message: string, status: number, code?: string) {
 function getRequiredElevenLabsApiKey(headers: Pick<Headers, "get">): {
   apiKey: string;
   apiKeySource: VoiceoverApiKeySource;
+  maskedApiKey: string;
 } {
   const headerApiKey = headers.get(VOICEOVER_ELEVENLABS_API_KEY_HEADER)?.trim() ?? "";
   if (headerApiKey) {
     return {
       apiKey: headerApiKey,
       apiKeySource: "voiceover_settings",
+      maskedApiKey: maskVoiceoverSecret(headerApiKey),
     };
   }
 
@@ -43,13 +47,14 @@ function getRequiredElevenLabsApiKey(headers: Pick<Headers, "get">): {
   return {
     apiKey: envApiKey,
     apiKeySource: "env",
+    maskedApiKey: readProjectVoiceoverConfigFromEnv().maskedApiKey || maskVoiceoverSecret(envApiKey),
   };
 }
 
 function getProviderApiKey(
   headers: Pick<Headers, "get">,
   provider: VoiceoverGenerateRequest["provider"]
-): { apiKey: string; apiKeySource: VoiceoverApiKeySource } {
+): { apiKey: string; apiKeySource: VoiceoverApiKeySource; maskedApiKey: string } {
   if (provider === "elevenlabs") {
     return getRequiredElevenLabsApiKey(headers);
   }
@@ -134,7 +139,7 @@ export async function POST(request: Request) {
 
   try {
     const payload = parseRequest(body);
-    const { apiKey, apiKeySource } = getProviderApiKey(request.headers, payload.provider);
+    const { apiKey, apiKeySource, maskedApiKey } = getProviderApiKey(request.headers, payload.provider);
     const result = await generateProjectVoiceover(payload, {
       apiKey,
       apiKeySource,
@@ -149,7 +154,11 @@ export async function POST(request: Request) {
       status: 200,
       headers: {
         "content-type": result.mimeType,
-        ...buildVoiceoverResponseHeaders(result),
+        ...buildVoiceoverResponseHeaders({
+          ...result,
+          apiKeySource,
+          maskedApiKey,
+        }),
       },
     });
   } catch (error) {

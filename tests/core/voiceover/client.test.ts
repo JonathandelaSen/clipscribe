@@ -24,6 +24,13 @@ test("requestProjectVoiceoverAudio returns a File and parsed metadata", async ()
         [VOICEOVER_RESPONSE_HEADERS.model]: "eleven_multilingual_v2",
         [VOICEOVER_RESPONSE_HEADERS.voice]: "voice_abc",
         [VOICEOVER_RESPONSE_HEADERS.format]: "wav",
+        [VOICEOVER_RESPONSE_HEADERS.apiKeySource]: "voiceover_settings",
+        [VOICEOVER_RESPONSE_HEADERS.maskedApiKey]: "xi-t...test",
+        [VOICEOVER_RESPONSE_HEADERS.usageSource]: "provider",
+        [VOICEOVER_RESPONSE_HEADERS.billedCharacters]: "321",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin]: "321",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax]: "321",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd]: "0.03852",
       },
     });
   }) as typeof fetch;
@@ -45,6 +52,15 @@ test("requestProjectVoiceoverAudio returns a File and parsed metadata", async ()
   assert.equal(result.file.type, "audio/wav");
   assert.equal(result.meta.voiceId, "voice_abc");
   assert.equal(result.meta.outputFormat, "wav");
+  assert.equal(result.meta.apiKeySource, "voiceover_settings");
+  assert.equal(result.meta.maskedApiKey, "xi-t...test");
+  assert.deepEqual(result.meta.usage, {
+    source: "provider",
+    billedCharacters: 321,
+    estimatedCreditsMin: 321,
+    estimatedCreditsMax: 321,
+    estimatedCostUsd: 0.03852,
+  });
   assert.deepEqual([...new Uint8Array(await result.file.arrayBuffer())], [9, 8, 7]);
 });
 

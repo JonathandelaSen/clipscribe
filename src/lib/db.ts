@@ -86,6 +86,19 @@ export class AudioTranscriberDB extends Dexie {
         'id, projectId, uploadedAt, videoId, sourceMode, sourceAssetId, sourceExportId, outputAssetId',
       creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
     });
+
+    this.version(6).stores({
+      projects: 'id, updatedAt, createdAt, lastOpenedAt, status, aspectRatio, activeSourceAssetId',
+      projectAssets: 'id, projectId, createdAt, updatedAt, kind, role, origin',
+      assetTranscripts: 'assetId, projectId, updatedAt, timestamp',
+      projectShorts:
+        'id, projectId, sourceAssetId, updatedAt, createdAt, status, platform, origin, suggestionGenerationId, suggestionSourceSignature',
+      projectExports: 'id, projectId, shortProjectId, sourceAssetId, outputAssetId, createdAt, status, kind',
+      projectVoiceovers: 'id, projectId, assetId, createdAt, provider, model',
+      projectYouTubeUploads:
+        'id, projectId, uploadedAt, videoId, sourceMode, sourceAssetId, sourceExportId, outputAssetId',
+      creatorLlmRuns: 'id, feature, status, model, startedAt, projectId, requestFingerprint'
+    });
   }
 }
 

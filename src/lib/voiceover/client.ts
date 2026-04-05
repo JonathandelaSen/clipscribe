@@ -3,7 +3,7 @@ import {
   VOICEOVER_ELEVENLABS_API_KEY_HEADER,
   VOICEOVER_RESPONSE_HEADERS,
 } from "@/lib/voiceover/contracts";
-import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta } from "@/lib/voiceover/types";
+import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverUsageSummary } from "@/lib/voiceover/types";
 import { buildProjectVoiceoverFilename } from "@/lib/voiceover/utils";
 
 interface ErrorResponseBody {
@@ -13,6 +13,13 @@ interface ErrorResponseBody {
 export interface VoiceoverClientResult {
   file: File;
   meta: VoiceoverGenerateResponseMeta;
+}
+
+function parseNumberHeader(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value.trim());
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
 }
 
 async function readVoiceoverError(response: Response): Promise<string> {
@@ -54,12 +61,34 @@ export async function requestProjectVoiceoverAudio(
   const modelHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.model);
   const voiceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice);
   const formatHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.format);
+  const apiKeySourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.apiKeySource);
+  const maskedApiKeyHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.maskedApiKey);
+  const usageSourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.usageSource);
+  const billedCharactersHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.billedCharacters));
+  const estimatedCreditsMinHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin));
+  const estimatedCreditsMaxHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax));
+  const estimatedCostUsdHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd));
+  const usage: VoiceoverUsageSummary | undefined =
+    usageSourceHeader &&
+    billedCharactersHeader != null &&
+    estimatedCreditsMinHeader != null &&
+    estimatedCreditsMaxHeader != null
+      ? {
+          source: usageSourceHeader === "provider" ? "provider" : "estimated",
+          billedCharacters: Math.max(0, Math.round(billedCharactersHeader)),
+          estimatedCreditsMin: Math.max(0, Math.round(estimatedCreditsMinHeader)),
+          estimatedCreditsMax: Math.max(0, Math.round(estimatedCreditsMaxHeader)),
+          estimatedCostUsd: estimatedCostUsdHeader,
+        }
+      : undefined;
 
   const meta: VoiceoverGenerateResponseMeta = {
     provider: providerHeader === "openai" || providerHeader === "gemini" ? providerHeader : "elevenlabs",
     model: modelHeader?.trim() || payload.model,
     voiceId: voiceHeader?.trim() || payload.voiceId,
     outputFormat: formatHeader === "wav" ? "wav" : payload.outputFormat,
+    apiKeySource: apiKeySourceHeader === "voiceover_settings" || apiKeySourceHeader === "env" ? apiKeySourceHeader : undefined,
+    maskedApiKey: maskedApiKeyHeader?.trim() || undefined,
     mimeType: contentType,
     extension: formatHeader === "wav" ? "wav" : "mp3",
     filename:
@@ -69,6 +98,7 @@ export async function requestProjectVoiceoverAudio(
         provider: payload.provider,
         outputFormat: payload.outputFormat,
       }),
+    usage,
   };
 
   const file = new File([await response.arrayBuffer()], meta.filename, {

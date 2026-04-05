@@ -14,6 +14,21 @@ const originalElevenLabsModel = process.env.ELEVENLABS_MODEL;
 const originalElevenLabsModelAlias = process.env.ELEVEN_LABS_MODEL;
 const originalElevenLabsModelTypo = process.env.EVELEN_LABS_MODEL;
 
+function readHeaderValue(headers: HeadersInit | undefined, name: string): string {
+  if (!headers) return "";
+  if (headers instanceof Headers) {
+    return headers.get(name) ?? "";
+  }
+  if (Array.isArray(headers)) {
+    const match = headers.find(([key]) => key.toLowerCase() === name.toLowerCase());
+    return match?.[1] ?? "";
+  }
+  const normalizedName = name.toLowerCase();
+  const entries = Object.entries(headers);
+  const match = entries.find(([key]) => key.toLowerCase() === normalizedName);
+  return typeof match?.[1] === "string" ? match[1] : "";
+}
+
 test.afterEach(() => {
   global.fetch = originalFetch;
   if (originalElevenLabsApiKey == null) {
@@ -90,7 +105,7 @@ test("voiceover route uses ELEVENLABS_API_KEY from env when no header override i
   process.env.ELEVENLABS_API_KEY = "xi-env-key";
 
   global.fetch = (async (_input, init) => {
-    seenApiKey = String((init?.headers as Record<string, string>)["xi-api-key"] ?? "");
+    seenApiKey = readHeaderValue(init?.headers, "xi-api-key");
     return new Response(new Uint8Array([5, 6]), {
       status: 200,
       headers: {
@@ -125,7 +140,7 @@ test("voiceover route lets the request header override ELEVENLABS_API_KEY from e
   process.env.ELEVENLABS_API_KEY = "xi-env-key";
 
   global.fetch = (async (_input, init) => {
-    seenApiKey = String((init?.headers as Record<string, string>)["xi-api-key"] ?? "");
+    seenApiKey = readHeaderValue(init?.headers, "xi-api-key");
     return new Response(new Uint8Array([1, 2, 3, 4]), {
       status: 200,
       headers: {
@@ -370,7 +385,7 @@ test("voiceover route accepts legacy env aliases for api key and model", async (
   process.env.EVELEN_LABS_MODEL = "eleven_v3";
 
   global.fetch = (async (_input, init) => {
-    seenApiKey = String((init?.headers as Record<string, string>)["xi-api-key"] ?? "");
+    seenApiKey = readHeaderValue(init?.headers, "xi-api-key");
     capturedBody = String(init?.body ?? "");
     return new Response(new Uint8Array([8, 6, 7, 5]), {
       status: 200,
@@ -446,6 +461,7 @@ test("voiceover route returns binary audio with metadata headers", async () => {
       status: 200,
       headers: {
         "content-type": "audio/mpeg",
+        "character-cost": "222",
       },
     })) as typeof fetch;
 
@@ -473,6 +489,13 @@ test("voiceover route returns binary audio with metadata headers", async () => {
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.model), "eleven_multilingual_v2");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice), "voice_123");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.format), "mp3");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.apiKeySource), "voiceover_settings");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.maskedApiKey), "xi...st");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.usageSource), "provider");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.billedCharacters), "222");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin), "222");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax), "222");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd), "0.02664");
   assert.match(response.headers.get("content-disposition") ?? "", /filename="/);
   assert.deepEqual([...new Uint8Array(await response.arrayBuffer())], [1, 2, 3, 4]);
 });

@@ -151,6 +151,8 @@ function createVoiceover(overrides: Partial<ProjectVoiceoverRecord> = {}): Proje
     voiceId: overrides.voiceId ?? "voice_1",
     outputFormat: overrides.outputFormat ?? "mp3",
     sourceFilename: overrides.sourceFilename,
+    apiKeySource: overrides.apiKeySource,
+    maskedApiKey: overrides.maskedApiKey,
   };
 }
 
@@ -197,4 +199,21 @@ test("deleteProject removes linked voiceovers", async () => {
     (await repository.listProjectVoiceovers()).map((record) => record.id),
     ["voiceover_2"]
   );
+});
+
+test("project repository preserves optional voiceover replay metadata", async () => {
+  const database = new InMemoryProjectDb();
+  const repository = createDexieProjectRepository(database as never);
+
+  await repository.putProjectVoiceover(
+    createVoiceover({
+      id: "voiceover_meta",
+      apiKeySource: "voiceover_settings",
+      maskedApiKey: "xi-se...cdef",
+    })
+  );
+
+  const [record] = await repository.listProjectVoiceovers("project_1");
+  assert.equal(record?.apiKeySource, "voiceover_settings");
+  assert.equal(record?.maskedApiKey, "xi-se...cdef");
 });

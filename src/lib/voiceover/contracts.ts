@@ -7,6 +7,13 @@ export const VOICEOVER_RESPONSE_HEADERS = {
   model: "x-clipscribe-model",
   voice: "x-clipscribe-voice",
   format: "x-clipscribe-format",
+  apiKeySource: "x-clipscribe-api-key-source",
+  maskedApiKey: "x-clipscribe-masked-api-key",
+  usageSource: "x-clipscribe-usage-source",
+  billedCharacters: "x-clipscribe-billed-characters",
+  estimatedCreditsMin: "x-clipscribe-estimated-credits-min",
+  estimatedCreditsMax: "x-clipscribe-estimated-credits-max",
+  estimatedCostUsd: "x-clipscribe-estimated-cost-usd",
 } as const;
 
 function sanitizeHeaderValue(value: string): string {
@@ -20,6 +27,29 @@ export function buildVoiceoverResponseHeaders(meta: VoiceoverGenerateResponseMet
     [VOICEOVER_RESPONSE_HEADERS.model]: sanitizeHeaderValue(meta.model),
     [VOICEOVER_RESPONSE_HEADERS.voice]: sanitizeHeaderValue(meta.voiceId),
     [VOICEOVER_RESPONSE_HEADERS.format]: meta.outputFormat,
+    ...(meta.apiKeySource
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.apiKeySource]: meta.apiKeySource,
+        }
+      : undefined),
+    ...(meta.maskedApiKey
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.maskedApiKey]: sanitizeHeaderValue(meta.maskedApiKey),
+        }
+      : undefined),
+    ...(meta.usage
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.usageSource]: meta.usage.source,
+          [VOICEOVER_RESPONSE_HEADERS.billedCharacters]: String(meta.usage.billedCharacters),
+          [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin]: String(meta.usage.estimatedCreditsMin),
+          [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax]: String(meta.usage.estimatedCreditsMax),
+          ...(meta.usage.estimatedCostUsd != null
+            ? {
+                [VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd]: String(meta.usage.estimatedCostUsd),
+              }
+            : undefined),
+        }
+      : undefined),
   };
 }
 

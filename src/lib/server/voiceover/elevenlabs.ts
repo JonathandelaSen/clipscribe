@@ -2,6 +2,7 @@ import { ElevenLabsClient, ElevenLabsError } from "@elevenlabs/elevenlabs-js";
 
 import {
   buildProjectVoiceoverFilename,
+  estimateVoiceoverUsage,
   resolveVoiceoverOutputFileInfo,
 } from "@/lib/voiceover/utils";
 import type { VoiceoverApiKeySource, VoiceoverProviderAdapter } from "@/lib/voiceover/types";
@@ -115,6 +116,21 @@ function toElevenLabsError(
   });
 }
 
+function parsePositiveIntegerHeader(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value.trim(), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function readElevenLabsBilledCharacters(headers: Headers): number | null {
+  return (
+    parsePositiveIntegerHeader(headers.get("character-cost")) ??
+    parsePositiveIntegerHeader(headers.get("x-character-cost")) ??
+    parsePositiveIntegerHeader(headers.get("x-character-count"))
+  );
+}
+
 export const elevenLabsVoiceoverAdapter: VoiceoverProviderAdapter = {
   id: "elevenlabs",
 
@@ -148,6 +164,7 @@ export const elevenLabsVoiceoverAdapter: VoiceoverProviderAdapter = {
       const bytes = new Uint8Array(await new Response(data).arrayBuffer());
       const { extension, mimeType: fallbackMimeType } = resolveVoiceoverOutputFileInfo(input.outputFormat);
       const mimeType = rawResponse.headers.get("content-type")?.trim() || fallbackMimeType;
+      const billedCharacters = readElevenLabsBilledCharacters(rawResponse.headers);
 
       return {
         bytes,
@@ -157,6 +174,12 @@ export const elevenLabsVoiceoverAdapter: VoiceoverProviderAdapter = {
         outputFormat: input.outputFormat,
         mimeType,
         extension,
+        usage: estimateVoiceoverUsage({
+          model: input.model,
+          scriptText: input.scriptText,
+          source: billedCharacters == null ? "estimated" : "provider",
+          billedCharacters: billedCharacters ?? undefined,
+        }),
         filename: buildProjectVoiceoverFilename({
           projectName: input.projectId,
           provider: "elevenlabs",

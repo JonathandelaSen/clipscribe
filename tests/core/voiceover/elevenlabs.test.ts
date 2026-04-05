@@ -21,6 +21,7 @@ test("elevenLabsVoiceoverAdapter sends the expected request and normalizes audio
       status: 200,
       headers: {
         "content-type": "audio/mpeg",
+        "character-cost": "456",
       },
     });
   }) as typeof fetch;
@@ -46,7 +47,43 @@ test("elevenLabsVoiceoverAdapter sends the expected request and normalizes audio
   assert.equal(result.outputFormat, "mp3");
   assert.equal(result.mimeType, "audio/mpeg");
   assert.equal(result.extension, "mp3");
+  assert.deepEqual(result.usage, {
+    billedCharacters: 456,
+    source: "provider",
+    estimatedCostUsd: 0.05472,
+    estimatedCreditsMin: 456,
+    estimatedCreditsMax: 456,
+  });
   assert.deepEqual([...result.bytes], [1, 2, 3]);
+});
+
+test("elevenLabsVoiceoverAdapter falls back to an estimated usage summary when headers are missing", async () => {
+  global.fetch = (async () =>
+    new Response(new Uint8Array([7, 8, 9]), {
+      status: 200,
+      headers: {
+        "content-type": "audio/mpeg",
+      },
+    })) as typeof fetch;
+
+  const result = await elevenLabsVoiceoverAdapter.generate({
+    projectId: "project_1",
+    scriptText: "Hola mundo",
+    provider: "elevenlabs",
+    model: "eleven_flash_v2_5",
+    voiceId: "voice_123",
+    outputFormat: "mp3",
+    apiKey: "xi-test",
+    apiKeySource: "env",
+  });
+
+  assert.deepEqual(result.usage, {
+    billedCharacters: 10,
+    source: "estimated",
+    estimatedCostUsd: 0.0006,
+    estimatedCreditsMin: 5,
+    estimatedCreditsMax: 10,
+  });
 });
 
 test("elevenLabsVoiceoverAdapter surfaces provider auth failures", async () => {

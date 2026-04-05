@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Clapperboard, Download, Film, Languages, Loader2, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { Clapperboard, Download, Film, Languages, Loader2, MoreHorizontal, Pencil, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { AiMetadataHub } from "@/components/creator/AiMetadataHub";
@@ -12,11 +12,13 @@ import { ProjectYouTubeUploadList } from "@/components/creator/ProjectYouTubeUpl
 import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
+import { ProjectAudioPlayer } from "@/components/projects/ProjectAudioPlayer";
 import { ProjectVoiceoverWorkspace } from "@/components/projects/ProjectVoiceoverWorkspace";
 import { YouTubeUploadHub } from "@/components/creator/YouTubeUploadHub";
 import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorkspace";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Toaster } from "@/components/ui/sonner";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
 import type { BackgroundTaskRecord } from "@/lib/background-tasks/types";
@@ -98,7 +100,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     isLoading,
     error,
     refresh,
-    saveProject,
     saveVoiceoverDraft,
     saveGeneratedVoiceover,
     addAssets,
@@ -304,14 +305,39 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   </div>
                 ) : (
                   assets.map((asset) => {
-                    const deleteBlockers = assetDeleteBlockersById.get(asset.id) ?? [];
-                    const canDeleteAsset = deleteBlockers.length === 0;
-                    const deleteLabel = canDeleteAsset
-                      ? `Delete ${asset.filename}`
-                      : `Cannot delete yet: ${formatDeleteBlockers(deleteBlockers)}`;
                     return (
-                      <div key={asset.id} className="flex flex-col gap-4 rounded-[1.4rem] border border-white/10 bg-black/20 p-5 lg:flex-row lg:items-center lg:justify-between">
-                        <div className="space-y-2">
+                      <div key={asset.id} className="relative rounded-[1.4rem] border border-white/10 bg-black/20 p-5">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              type="button"
+                              size="icon-xs"
+                              variant="ghost"
+                              className="absolute right-4 top-4 rounded-md text-white/46 hover:bg-white/[0.06] hover:text-white"
+                              aria-label={`Actions for ${asset.filename}`}
+                            >
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent>
+                            {(asset.kind === "video" || asset.kind === "audio") && (
+                              <DropdownMenuItem onSelect={() => void setActiveSourceAsset(asset.id)}>
+                                <Languages className="h-4 w-4" />
+                                Use as Source
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuItem onSelect={() => void handleRenameAsset(asset.id, asset.filename)}>
+                              <Pencil className="h-4 w-4" />
+                              Rename
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => void handleDeleteAsset(asset.id)}>
+                              <Trash2 className="h-4 w-4" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+
+                        <div className="space-y-3 pr-10">
                           <div className="flex flex-wrap items-center gap-2">
                             <div className="text-lg font-semibold text-white">{asset.filename}</div>
                             <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.kind}</span>
@@ -327,36 +353,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                             Updated {formatRelativeDate(asset.updatedAt)}
                             {asset.durationSeconds > 0 ? ` · ${asset.durationSeconds.toFixed(1)}s` : ""}
                           </div>
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          {(asset.kind === "video" || asset.kind === "audio") && (
-                            <Button
-                              variant="outline"
-                              className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
-                              onClick={() => void setActiveSourceAsset(asset.id)}
-                            >
-                              <Languages className="mr-2 h-4 w-4" />
-                              Use as Source
-                            </Button>
-                          )}
-                          <Button
-                            variant="outline"
-                            className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
-                            onClick={() => void handleRenameAsset(asset.id, asset.filename)}
-                          >
-                            Rename
-                          </Button>
-                          <div title={deleteLabel}>
-                            <Button
-                              variant="ghost"
-                              className="rounded-xl text-white/60 hover:bg-red-500/10 hover:text-red-100 disabled:border disabled:border-white/10 disabled:bg-white/[0.03] disabled:text-white/28"
-                              onClick={() => void handleDeleteAsset(asset.id)}
-                              disabled={!canDeleteAsset}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
+                          {asset.kind === "audio" ? <ProjectAudioPlayer file={asset.fileBlob} className="max-w-xl" /> : null}
                         </div>
                       </div>
                     );
@@ -450,7 +447,6 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               project={project}
               assets={assets}
               voiceovers={voiceovers}
-              saveProject={saveProject}
               saveVoiceoverDraft={saveVoiceoverDraft}
               saveGeneratedVoiceover={saveGeneratedVoiceover}
               renameAsset={renameAsset}

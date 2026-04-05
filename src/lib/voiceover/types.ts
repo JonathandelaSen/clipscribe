@@ -1,6 +1,7 @@
 export type VoiceoverProviderId = "elevenlabs" | "openai" | "gemini";
 export type VoiceoverOutputFormat = "mp3" | "wav";
 export type VoiceoverApiKeySource = "voiceover_settings" | "env";
+export type VoiceoverUsageSource = "provider" | "estimated";
 
 export interface VoiceoverModelOption {
   value: string;
@@ -29,6 +30,9 @@ export interface ProjectVoiceoverRecord {
   voiceId: string;
   outputFormat: VoiceoverOutputFormat;
   sourceFilename?: string;
+  apiKeySource?: VoiceoverApiKeySource;
+  maskedApiKey?: string;
+  usage?: VoiceoverUsageSummary;
 }
 
 export interface VoiceoverGenerateRequest {
@@ -46,13 +50,24 @@ export interface VoiceoverGenerateResponseMeta {
   model: string;
   voiceId: string;
   outputFormat: VoiceoverOutputFormat;
+  apiKeySource?: VoiceoverApiKeySource;
+  maskedApiKey?: string;
   filename: string;
   mimeType: string;
   extension: string;
+  usage?: VoiceoverUsageSummary;
 }
 
 export interface VoiceoverGenerateResult extends VoiceoverGenerateResponseMeta {
   bytes: Uint8Array;
+}
+
+export interface VoiceoverUsageSummary {
+  billedCharacters: number;
+  source: VoiceoverUsageSource;
+  estimatedCostUsd: number | null;
+  estimatedCreditsMin: number;
+  estimatedCreditsMax: number;
 }
 
 export interface VoiceoverProviderGenerateInput extends VoiceoverGenerateRequest {
