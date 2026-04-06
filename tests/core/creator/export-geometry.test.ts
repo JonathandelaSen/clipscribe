@@ -7,6 +7,7 @@ import {
 } from "../../../src/lib/creator/core/export-geometry";
 import {
   buildShortPreviewStyle,
+  resolveShortFramePanLimits,
   resolveShortFrameLayout,
 } from "../../../src/lib/creator/core/short-frame-layout";
 
@@ -55,6 +56,41 @@ test("resolveShortFrameLayout keeps pan clamped while zooming in", () => {
   assert.equal(panned.mode, "cover_crop");
   assert.ok(panned.cropX < centered.cropX);
   assert.ok(panned.objectPositionXPercent < centered.objectPositionXPercent);
+});
+
+test("resolveShortFramePanLimits reaches the full lateral bounds for a landscape short", () => {
+  const limits = resolveShortFramePanLimits({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+  });
+
+  const leftEdge = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1,
+    panX: limits.minPanX,
+    panY: 0,
+  });
+  const rightEdge = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1,
+    panX: limits.maxPanX,
+    panY: 0,
+  });
+
+  assert.equal(limits.minPanX, -1167);
+  assert.equal(limits.maxPanX, 1167);
+  assert.equal(leftEdge.cropX, 2333);
+  assert.equal(rightEdge.cropX, 0);
+  assert.equal(leftEdge.objectPositionXPercent, 100);
+  assert.equal(rightEdge.objectPositionXPercent, 0);
 });
 
 test("resolveShortFrameLayout enters pad mode when zooming out", () => {

@@ -67,6 +67,26 @@ test("manual editor hydration keeps overlays disabled when missing", () => {
   assert.equal(hydrated.outroOverlay?.text, "");
 });
 
+test("manual editor hydration clamps zoom into the UI-supported range", () => {
+  const hydrated = hydrateCreatorShortEditorState(
+    {
+      zoom: 0.5,
+      panX: 10,
+      panY: -5,
+      subtitleScale: 1,
+      subtitleXPositionPct: 50,
+      subtitleYOffsetPct: 78,
+    },
+    {
+      origin: "manual",
+      plan: samplePlan,
+      clipDurationSeconds: 22,
+    }
+  );
+
+  assert.equal(hydrated.zoom, 1);
+});
+
 test("overlay windows clamp to clip duration instead of failing", () => {
   const window = resolveCreatorTextOverlayWindow(
     {

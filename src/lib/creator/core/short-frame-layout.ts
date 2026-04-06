@@ -46,6 +46,13 @@ export interface ShortPreviewStyle {
   objectPosition: string;
 }
 
+export interface ShortFramePanLimits {
+  minPanX: number;
+  maxPanX: number;
+  minPanY: number;
+  maxPanY: number;
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -108,6 +115,28 @@ export function scaleShortFramePanToViewport(
   return {
     panX: (input.panX * viewportWidth) / referenceWidth,
     panY: (input.panY * viewportHeight) / referenceHeight,
+  };
+}
+
+export function resolveShortFramePanLimits(input: ShortFrameLayoutInput): ShortFramePanLimits {
+  const sourceWidth = Math.max(1, round(input.sourceWidth));
+  const sourceHeight = Math.max(1, round(input.sourceHeight));
+  const frameWidth = Math.max(1, round(input.frameWidth));
+  const frameHeight = Math.max(1, round(input.frameHeight));
+  const zoom = Math.max(0.2, Number.isFinite(input.zoom) ? input.zoom : 1);
+
+  const coverScale = Math.max(frameWidth / sourceWidth, frameHeight / sourceHeight);
+  const mediaWidth = Math.max(1, round(sourceWidth * coverScale * zoom));
+  const mediaHeight = Math.max(1, round(sourceHeight * coverScale * zoom));
+
+  const maxAbsPanX = Math.ceil(Math.abs(mediaWidth - frameWidth) / 2);
+  const maxAbsPanY = Math.ceil(Math.abs(mediaHeight - frameHeight) / 2);
+
+  return {
+    minPanX: -maxAbsPanX,
+    maxPanX: maxAbsPanX,
+    minPanY: -maxAbsPanY,
+    maxPanY: maxAbsPanY,
   };
 }
 

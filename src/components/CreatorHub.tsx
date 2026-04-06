@@ -82,6 +82,7 @@ import { prepareShortExport } from "@/lib/creator/core/export-prep";
 import {
   buildShortPreviewStyle,
   resolveShortFrameLayout,
+  resolveShortFramePanLimits,
   scaleShortFramePanToViewport,
 } from "@/lib/creator/core/short-frame-layout";
 import {
@@ -203,6 +204,15 @@ function legacyCopyText(text: string): boolean {
   return copied;
 }
 
+function clampShortZoomForUi(value: number): number {
+  if (!Number.isFinite(value)) return 1.15;
+  return Math.min(4, Math.max(1, value));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 async function copyText(text: string, label: string) {
   const content = String(text ?? "");
   let copied = false;
@@ -269,10 +279,6 @@ function formatBytes(bytes: number): string {
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** power;
   return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function getAnalyzeErrorDetails(message: string | null): { title: string; body: string } | null {
@@ -1488,7 +1494,6 @@ export function CreatorHub({
   const [trimEndNudge, setTrimEndNudge] = useState(0);
   const [zoom, setZoom] = useState(1.15);
   const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
@@ -1986,7 +1991,7 @@ export function CreatorHub({
     () => ({
       zoom,
       panX,
-      panY,
+      panY: 0,
       subtitleScale,
       subtitleXPositionPct,
       subtitleYOffsetPct,
@@ -2001,7 +2006,6 @@ export function CreatorHub({
       introOverlay,
       outroOverlay,
       panX,
-      panY,
       showSafeZones,
       showSubtitles,
       subtitleScale,
@@ -2012,6 +2016,26 @@ export function CreatorHub({
       zoom,
     ]
   );
+  const shortPanLimits = useMemo(() => {
+    if (previewSourceSize.width <= 0 || previewSourceSize.height <= 0) {
+      return { minPanX: -600, maxPanX: 600, minPanY: 0, maxPanY: 0 };
+    }
+
+    return resolveShortFramePanLimits({
+      sourceWidth: previewSourceSize.width,
+      sourceHeight: previewSourceSize.height,
+      frameWidth: 1080,
+      frameHeight: 1920,
+      zoom,
+      panX: 0,
+      panY: 0,
+    });
+  }, [previewSourceSize.height, previewSourceSize.width, zoom]);
+
+  useEffect(() => {
+    setPanX((current) => clampNumber(current, shortPanLimits.minPanX, shortPanLimits.maxPanX));
+  }, [shortPanLimits.maxPanX, shortPanLimits.minPanX]);
+
   const previewFrameScale = previewFrameSize.width > 0 ? previewFrameSize.width / 1080 : 1;
   const previewVideoLayout = useMemo(() => {
     if (
@@ -2026,7 +2050,7 @@ export function CreatorHub({
 
     const scaledPan = scaleShortFramePanToViewport({
       panX,
-      panY,
+      panY: 0,
       viewportWidth: previewFrameSize.width,
       viewportHeight: previewFrameSize.height,
     });
@@ -2038,12 +2062,11 @@ export function CreatorHub({
       frameHeight: previewFrameSize.height,
       zoom,
       panX: scaledPan.panX,
-      panY: scaledPan.panY,
+      panY: 0,
     });
   }, [
     isVideoMedia,
     panX,
-    panY,
     previewFrameSize.height,
     previewFrameSize.width,
     previewSourceSize.height,
@@ -2589,9 +2612,8 @@ export function CreatorHub({
 
     setTrimStartNudge(0);
     setTrimEndNudge(0);
-    setZoom(hydratedEditor.zoom);
+    setZoom(clampShortZoomForUi(hydratedEditor.zoom));
     setPanX(hydratedEditor.panX);
-    setPanY(hydratedEditor.panY);
     setSubtitleScale(hydratedEditor.subtitleScale);
     setSubtitleXPositionPct(hydratedEditor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(hydratedEditor.subtitleYOffsetPct);
@@ -3849,7 +3871,6 @@ export function CreatorHub({
                       setTrimEndNudge(0);
                       setZoom(1.15);
                       setPanX(0);
-                      setPanY(0);
                       setSubtitleScale(1);
                       setSubtitleXPositionPct(50);
                       setSubtitleYOffsetPct(78);
@@ -4482,11 +4503,19 @@ export function CreatorHub({
                                   className="w-full"
                                 />
                             <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
-                            <input type="range" min={0.5} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Pan X: {panX}px</label>
-                            <input type="range" min={-600} max={600} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Pan Y: {panY}px</label>
-                            <input type="range" min={-600} max={600} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={1.0} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(clampShortZoomForUi(Number(e.target.value)))} className="w-full" />
+                            <label className="text-xs text-white/70 block">Pan X: {Math.round(panX)}px</label>
+                            <input
+                              type="range"
+                              min={shortPanLimits.minPanX}
+                              max={shortPanLimits.maxPanX}
+                              step={1}
+                              value={clampNumber(panX, shortPanLimits.minPanX, shortPanLimits.maxPanX)}
+                              onChange={(e) => {
+                                setPanX(clampNumber(Number(e.target.value), shortPanLimits.minPanX, shortPanLimits.maxPanX));
+                              }}
+                              className="w-full"
+                            />
                             </div>
                           </TabsContent>
 
@@ -4990,7 +5019,6 @@ export function CreatorHub({
                                   setTrimEndNudge(0);
                                   setZoom(1.15);
                                   setPanX(0);
-                                  setPanY(0);
                                   setSubtitleScale(1);
                                   setSubtitleXPositionPct(50);
                                   setSubtitleYOffsetPct(78);

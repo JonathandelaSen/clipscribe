@@ -147,11 +147,12 @@ export function hydrateCreatorShortEditorState(
   input: Partial<CreatorShortEditorState> | undefined,
   options: HydrateTextOverlayOptions = {}
 ): CreatorShortEditorState {
+  const zoom =
+    typeof input?.zoom === "number" && Number.isFinite(input.zoom)
+      ? Math.min(4, Math.max(1, input.zoom))
+      : 1.15;
   return {
-    zoom:
-      typeof input?.zoom === "number" && Number.isFinite(input.zoom)
-        ? input.zoom
-        : 1.15,
+    zoom,
     panX:
       typeof input?.panX === "number" && Number.isFinite(input.panX)
         ? input.panX

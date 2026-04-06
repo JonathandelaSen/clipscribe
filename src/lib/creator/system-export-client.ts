@@ -477,6 +477,13 @@ export async function requestSystemCreatorShortExport(
     short: adjustedShort,
     editor: input.editor,
     sourceVideoSize: input.sourceVideoSize,
+    sourceTrim:
+      trimResult.trimmedOffsetSeconds > 0 && trimResult.trimmedDurationSeconds > 0
+        ? {
+            requestedOffsetSeconds: trimResult.trimmedOffsetSeconds,
+            requestedDurationSeconds: trimResult.trimmedDurationSeconds,
+          }
+        : null,
     geometry,
     subtitleRenderMode,
     semanticSubtitles: subtitleRenderMode === "fast_ass" ? semanticSubtitles : null,
