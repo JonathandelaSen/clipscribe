@@ -85,6 +85,7 @@ function TaskRow({
               size="icon-sm"
               className="rounded-xl text-white/55 hover:bg-white/10 hover:text-white"
               onClick={onDismiss}
+              aria-label="Dismiss task"
             >
               <X className="h-4 w-4" />
             </Button>
