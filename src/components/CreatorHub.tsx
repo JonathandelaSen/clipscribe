@@ -79,6 +79,7 @@ import { buildPopCaptionChunks } from "@/lib/creator/core/pop-captions";
 import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/clip-windowing";
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
+import { resolveContainedPreviewVideoRect } from "@/lib/creator/core/preview-video-rect";
 import {
   getCreatorTextOverlayFallbackPreset,
   getCreatorTextOverlayFontSize,
@@ -2802,8 +2803,17 @@ export function CreatorHub({
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           const frameRect = previewFrameElRef.current?.getBoundingClientRect();
           const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
+          const previewVideoRect =
+            frameRect && sourceVideoSize
+              ? resolveContainedPreviewVideoRect({
+                  viewportWidth: frameRect.width,
+                  viewportHeight: frameRect.height,
+                  sourceWidth: sourceVideoSize.width,
+                  sourceHeight: sourceVideoSize.height,
+                })
+              : null;
           appendShortExportLog(
-            `Starting system export request${previewViewport ? ` with preview viewport ${Math.round(previewViewport.width)}x${Math.round(previewViewport.height)}` : ""}.`
+            `Starting system export request${previewViewport ? ` with preview viewport ${Math.round(previewViewport.width)}x${Math.round(previewViewport.height)}` : ""}${previewVideoRect ? ` and video rect ${Math.round(previewVideoRect.width)}x${Math.round(previewVideoRect.height)}` : ""}.`
           );
 
           const systemExport = await requestSystemCreatorShortExport({
@@ -2815,7 +2825,7 @@ export function CreatorHub({
             editor: currentEditorState,
             sourceVideoSize,
             previewViewport,
-            previewVideoRect: null,
+            previewVideoRect,
             onProgress: bumpExportProgress,
             onDebugLog: appendShortExportLog,
             renderLifecycle: {
