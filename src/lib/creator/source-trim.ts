@@ -34,6 +34,8 @@ export interface TrimSourceResult {
    * to get their positions relative to the trimmed file.
    */
   trimmedOffsetSeconds: number;
+  /** Requested duration of the trimmed segment before mux/container drift. */
+  trimmedDurationSeconds: number;
 }
 
 /**
@@ -59,6 +61,7 @@ export async function trimSourceForExport(input: {
     return {
       trimmedFile: input.sourceFile,
       trimmedOffsetSeconds: 0,
+      trimmedDurationSeconds: 0,
     };
   }
 
@@ -124,6 +127,7 @@ export async function trimSourceForExport(input: {
     return {
       trimmedFile,
       trimmedOffsetSeconds: trimStart,
+      trimmedDurationSeconds: trimDuration,
     };
   } catch (error) {
     // If cancellation was requested, re-throw
@@ -136,6 +140,7 @@ export async function trimSourceForExport(input: {
     return {
       trimmedFile: input.sourceFile,
       trimmedOffsetSeconds: 0,
+      trimmedDurationSeconds: 0,
     };
   } finally {
     try {

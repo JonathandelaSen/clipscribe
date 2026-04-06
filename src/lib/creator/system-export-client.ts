@@ -17,7 +17,7 @@ import {
   type CreatorShortSystemExportPayload,
 } from "@/lib/creator/system-export-contract";
 import { assertExportGeometryInvariants } from "@/lib/creator/core/export-contracts";
-import { buildShortExportGeometry } from "@/lib/creator/core/export-geometry";
+import { buildCanonicalShortExportGeometry } from "@/lib/creator/core/export-geometry";
 import { resolveCreatorSuggestedShort } from "@/lib/creator/shorts-compat";
 import { renderSubtitleAtlases } from "@/lib/creator/subtitle-canvas";
 import { trimSourceForExport } from "@/lib/creator/source-trim";
@@ -230,8 +230,6 @@ export interface RequestSystemCreatorShortExportInput {
   subtitleChunks: SubtitleChunk[];
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
-  previewViewport?: { width: number; height: number } | null;
-  previewVideoRect?: { width: number; height: number } | null;
   onProgress?: (progressPct: number) => void;
   onDebugLog?: (message: string) => void;
   renderLifecycle?: BrowserRenderLifecycle;
@@ -279,12 +277,10 @@ export async function requestSystemCreatorShortExport(
   throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   emitProgress(PROGRESS.init);
 
-  const geometry = buildShortExportGeometry({
+  const geometry = buildCanonicalShortExportGeometry({
     sourceWidth: input.sourceVideoSize.width,
     sourceHeight: input.sourceVideoSize.height,
     editor: input.editor,
-    previewViewport: input.previewViewport ?? null,
-    previewVideoRect: input.previewVideoRect ?? null,
     outputWidth: OUTPUT_WIDTH,
     outputHeight: OUTPUT_HEIGHT,
   });
@@ -301,7 +297,7 @@ export async function requestSystemCreatorShortExport(
   );
   emitProgress(PROGRESS.geometryReady);
   logDebug(
-    `Geometry ready: ${geometry.scaledWidth}x${geometry.scaledHeight} -> ${geometry.outputWidth}x${geometry.outputHeight}.`
+    `Geometry ready: mode=${geometry.layoutMode ?? "legacy"}, ${geometry.scaledWidth}x${geometry.scaledHeight} -> ${geometry.outputWidth}x${geometry.outputHeight}.`
   );
 
   const trimResult = await trimSourceForExport({
@@ -481,9 +477,14 @@ export async function requestSystemCreatorShortExport(
     short: adjustedShort,
     editor: input.editor,
     sourceVideoSize: input.sourceVideoSize,
+    sourceTrim:
+      trimResult.trimmedOffsetSeconds > 0 && trimResult.trimmedDurationSeconds > 0
+        ? {
+            requestedOffsetSeconds: trimResult.trimmedOffsetSeconds,
+            requestedDurationSeconds: trimResult.trimmedDurationSeconds,
+          }
+        : null,
     geometry,
-    previewViewport: input.previewViewport ?? null,
-    previewVideoRect: input.previewVideoRect ?? null,
     subtitleRenderMode,
     semanticSubtitles: subtitleRenderMode === "fast_ass" ? semanticSubtitles : null,
     subtitleBurnedIn: (semanticSubtitles?.chunks.length ?? 0) > 0 || subtitleAtlases.length > 0,

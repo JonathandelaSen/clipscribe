@@ -58,9 +58,11 @@ export interface CreatorShortSystemExportPayload {
   short: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
+  sourceTrim?: {
+    requestedOffsetSeconds: number;
+    requestedDurationSeconds: number;
+  } | null;
   geometry: ShortExportGeometryResult;
-  previewViewport?: { width: number; height: number } | null;
-  previewVideoRect?: { width: number; height: number } | null;
   subtitleRenderMode: "fast_ass" | "png_parity";
   semanticSubtitles?: CreatorShortSemanticSubtitlePayload | null;
   subtitleBurnedIn: boolean;

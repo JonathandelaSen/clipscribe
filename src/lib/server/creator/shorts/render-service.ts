@@ -8,6 +8,7 @@ import {
   type CreatorShortSystemExportPayload,
   type CreatorShortSystemExportResponseMetadata,
 } from "../../../creator/system-export-contract";
+import { buildCanonicalShortExportGeometry } from "../../../creator/core/export-geometry";
 import {
   exportCreatorShortWithSystemFfmpeg,
   isCreatorSystemRenderCanceledError,
@@ -181,6 +182,17 @@ function parsePayload(value: unknown): CreatorShortSystemExportPayload {
       typeof value.renderRequestId === "string" && value.renderRequestId.trim()
         ? value.renderRequestId.trim()
         : undefined,
+    sourceTrim:
+      isRecord(value.sourceTrim) &&
+      Number.isFinite(Number(value.sourceTrim.requestedOffsetSeconds)) &&
+      Number(value.sourceTrim.requestedOffsetSeconds) >= 0 &&
+      Number.isFinite(Number(value.sourceTrim.requestedDurationSeconds)) &&
+      Number(value.sourceTrim.requestedDurationSeconds) > 0
+        ? {
+            requestedOffsetSeconds: Number(value.sourceTrim.requestedOffsetSeconds),
+            requestedDurationSeconds: Number(value.sourceTrim.requestedDurationSeconds),
+          }
+        : null,
     subtitleRenderMode: value.subtitleRenderMode === "fast_ass" ? "fast_ass" : "png_parity",
     semanticSubtitles: isRecord(value.semanticSubtitles)
       ? (value.semanticSubtitles as unknown as CreatorShortSystemExportPayload["semanticSubtitles"])
@@ -199,8 +211,59 @@ function round3(value: number): number {
   return Number(Math.max(0, value).toFixed(3));
 }
 
-function getHybridSeekTimelineOffsetSeconds(startSeconds: number) {
+function resolveTrimLeadInCompensationSeconds(input: {
+  sourceTrim?: CreatorShortSystemExportPayload["sourceTrim"];
+  sourcePlaybackProfile: CreatorShortSourcePlaybackProfile;
+}) {
+  const requestedDurationSeconds = input.sourceTrim?.requestedDurationSeconds ?? 0;
+  if (!(requestedDurationSeconds > 0)) return 0;
+
+  const requestedOffsetSeconds = Math.max(0, input.sourceTrim?.requestedOffsetSeconds ?? 0);
+  const measuredDurationSeconds = Math.max(
+    0,
+    input.sourcePlaybackProfile.videoDurationSeconds,
+    input.sourcePlaybackProfile.audioDurationSeconds
+  );
+  if (!(measuredDurationSeconds > requestedDurationSeconds)) return 0;
+
+  const rawLeadInSeconds = measuredDurationSeconds - requestedDurationSeconds;
+  const boundedLeadInSeconds = Math.min(rawLeadInSeconds, requestedOffsetSeconds);
+  return boundedLeadInSeconds >= 0.25 ? round3(boundedLeadInSeconds) : 0;
+}
+
+function getHybridTimelineOffsetSeconds(startSeconds: number) {
   return round3(Math.min(FAST_SEEK_CUSHION_SECONDS, Math.max(0, startSeconds)));
+}
+
+function shiftOverlayTimeline(
+  overlays: readonly CreatorSystemRenderOverlayInput[],
+  offsetSeconds: number
+): CreatorSystemRenderOverlayInput[] {
+  if (!(offsetSeconds > 0)) return [...overlays];
+  return overlays.map((overlay) => ({
+    ...overlay,
+    start: round3(overlay.start + offsetSeconds),
+    end: round3(overlay.end + offsetSeconds),
+  }));
+}
+
+function shiftSemanticSubtitleTimeline(
+  semanticSubtitles: NonNullable<CreatorShortSystemExportPayload["semanticSubtitles"]>,
+  offsetSeconds: number
+): NonNullable<CreatorShortSystemExportPayload["semanticSubtitles"]> {
+  if (Math.abs(offsetSeconds) < 0.001) return semanticSubtitles;
+  return {
+    ...semanticSubtitles,
+    chunks: semanticSubtitles.chunks.map((chunk) => ({
+      ...chunk,
+      start: round3(chunk.start + offsetSeconds),
+      end: round3(chunk.end + offsetSeconds),
+    })),
+  };
+}
+
+function getHybridSeekTimelineOffsetSeconds(startSeconds: number) {
+  return getHybridTimelineOffsetSeconds(startSeconds);
 }
 
 function shiftTimedRangeToClipTimeline(
@@ -343,14 +406,41 @@ export async function renderCreatorShortSystemExport(
       });
     }
 
-    const clipDurationSeconds = Math.max(0.5, input.payload.short.durationSeconds);
+    const trimLeadInCompensationSeconds = resolveTrimLeadInCompensationSeconds({
+      sourceTrim: input.payload.sourceTrim,
+      sourcePlaybackProfile,
+    });
+    const effectiveShort =
+      trimLeadInCompensationSeconds > 0
+        ? {
+            ...input.payload.short,
+            startSeconds: round3(input.payload.short.startSeconds + trimLeadInCompensationSeconds),
+            endSeconds: round3(input.payload.short.endSeconds + trimLeadInCompensationSeconds),
+          }
+        : input.payload.short;
+
+    if (trimLeadInCompensationSeconds > 0) {
+      input.onProgressEvent?.({
+        stage: "setup",
+        message:
+          `Detected ${trimLeadInCompensationSeconds.toFixed(2)}s of keyframe lead-in from the pre-trimmed upload; ` +
+          "rebasing seek and overlay timing to keep export audio/video aligned.",
+      });
+    }
+
+    const clipDurationSeconds = Math.max(0.5, effectiveShort.durationSeconds);
+    const leadInTimelineOffsetDelta = round3(
+      getHybridTimelineOffsetSeconds(effectiveShort.startSeconds) -
+      getHybridTimelineOffsetSeconds(input.payload.short.startSeconds)
+    );
     const stillModeTimelineOffsetSeconds =
       sourcePlaybackProfile.mode === "still"
-        ? getHybridSeekTimelineOffsetSeconds(input.payload.short.startSeconds)
+        ? getHybridSeekTimelineOffsetSeconds(effectiveShort.startSeconds)
         : 0;
+    const leadInAdjustedOverlays = shiftOverlayTimeline(preparedOverlays, leadInTimelineOffsetDelta);
     const effectiveOverlays =
       stillModeTimelineOffsetSeconds > 0
-        ? preparedOverlays.flatMap((overlay) => {
+        ? leadInAdjustedOverlays.flatMap((overlay) => {
             const shiftedRange = shiftTimedRangeToClipTimeline(
               overlay.start,
               overlay.end,
@@ -366,35 +456,37 @@ export async function renderCreatorShortSystemExport(
               },
             ];
           })
-        : preparedOverlays;
+        : leadInAdjustedOverlays;
 
-    const effectiveSemanticSubtitles =
+    const leadInAdjustedSemanticSubtitles =
       input.payload.subtitleRenderMode === "fast_ass" &&
       input.payload.semanticSubtitles &&
       input.payload.semanticSubtitles.chunks.length > 0
-        ? {
-            ...input.payload.semanticSubtitles,
-            chunks:
-              stillModeTimelineOffsetSeconds > 0
-                ? input.payload.semanticSubtitles.chunks.flatMap((chunk) => {
-                    const shiftedRange = shiftTimedRangeToClipTimeline(
-                      chunk.start,
-                      chunk.end,
-                      stillModeTimelineOffsetSeconds,
-                      clipDurationSeconds
-                    );
-                    if (!shiftedRange) return [];
-                    return [
-                      {
-                        ...chunk,
-                        start: shiftedRange.start,
-                        end: shiftedRange.end,
-                      },
-                    ];
-                  })
-                : input.payload.semanticSubtitles.chunks,
-          }
+        ? shiftSemanticSubtitleTimeline(input.payload.semanticSubtitles, leadInTimelineOffsetDelta)
         : null;
+    const effectiveSemanticSubtitles =
+      leadInAdjustedSemanticSubtitles &&
+      stillModeTimelineOffsetSeconds > 0
+        ? {
+            ...leadInAdjustedSemanticSubtitles,
+            chunks: leadInAdjustedSemanticSubtitles.chunks.flatMap((chunk) => {
+              const shiftedRange = shiftTimedRangeToClipTimeline(
+                chunk.start,
+                chunk.end,
+                stillModeTimelineOffsetSeconds,
+                clipDurationSeconds
+              );
+              if (!shiftedRange) return [];
+              return [
+                {
+                  ...chunk,
+                  start: shiftedRange.start,
+                  end: shiftedRange.end,
+                },
+              ];
+            }),
+          }
+        : leadInAdjustedSemanticSubtitles;
 
     if (stillModeTimelineOffsetSeconds > 0) {
       input.onProgressEvent?.({
@@ -420,16 +512,21 @@ export async function renderCreatorShortSystemExport(
     });
 
     const outputPath = path.join(tempRoot, "output", "short_export.mp4");
+    const geometry = buildCanonicalShortExportGeometry({
+      sourceWidth: input.payload.sourceVideoSize.width,
+      sourceHeight: input.payload.sourceVideoSize.height,
+      editor: input.payload.editor,
+      outputWidth: input.payload.geometry.outputWidth,
+      outputHeight: input.payload.geometry.outputHeight,
+    });
     let lastLoggedProgress = -1;
     const result = await exportShort({
       sourceFilePath: sourcePath,
       sourceFilename: input.payload.sourceFilename,
-      short: input.payload.short,
+      short: effectiveShort,
       editor: input.payload.editor,
       sourceVideoSize: input.payload.sourceVideoSize,
-      geometry: input.payload.geometry,
-      previewViewport: input.payload.previewViewport ?? null,
-      previewVideoRect: input.payload.previewVideoRect ?? null,
+      geometry,
       overlays: effectiveOverlays,
       subtitleBurnedIn: input.payload.subtitleBurnedIn,
       subtitleTrackPath,

@@ -12,7 +12,7 @@ import {
   type CreatorShortSystemExportOverlayDescriptor,
   type CreatorShortSystemExportPayload,
 } from "../../../src/lib/creator/system-export-contract";
-import { buildShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
+import { buildCanonicalShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
 
 function createPayload(): CreatorShortSystemExportPayload {
   return {
@@ -50,16 +50,13 @@ function createPayload(): CreatorShortSystemExportPayload {
       showSafeZones: true,
     },
     sourceVideoSize: { width: 1920, height: 1080 },
-    geometry: buildShortExportGeometry({
+    geometry: buildCanonicalShortExportGeometry({
       sourceWidth: 1920,
       sourceHeight: 1080,
       editor: { zoom: 1.15, panX: 0, panY: 0 },
-      previewViewport: { width: 400, height: 800 },
       outputWidth: 1080,
       outputHeight: 1920,
     }),
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: null,
     subtitleRenderMode: "png_parity",
     semanticSubtitles: null,
     subtitleBurnedIn: true,
@@ -262,6 +259,135 @@ test("renderCreatorShortSystemExport returns bytes and cleans up temp files on s
     true
   );
   await assert.rejects(() => access(tempRoot));
+});
+
+test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed uploads", async () => {
+  const { sourceFile } = createFormData();
+  const payload: CreatorShortSystemExportPayload = {
+    ...createPayload(),
+    short: {
+      ...createPayload().short,
+      startSeconds: 10,
+      endSeconds: 30,
+      durationSeconds: 20,
+    },
+    sourceTrim: {
+      requestedOffsetSeconds: 34,
+      requestedDurationSeconds: 35,
+    },
+    subtitleRenderMode: "fast_ass",
+    semanticSubtitles: {
+      canvasWidth: 1080,
+      canvasHeight: 1920,
+      anchorX: 540,
+      anchorY: 1500,
+      fontSize: 56,
+      maxCharsPerLine: 24,
+      style: {
+        preset: "clean_caption",
+        textColor: "#FFFFFF",
+        letterWidth: 1.04,
+        borderColor: "#2A2A2A",
+        borderWidth: 3,
+        shadowColor: "#000000",
+        shadowOpacity: 0.32,
+        shadowDistance: 2.2,
+        backgroundColor: "#000000",
+        backgroundOpacity: 0,
+        backgroundEnabled: false,
+        backgroundPaddingX: 28,
+        backgroundPaddingY: 16,
+        backgroundRadius: 22,
+        textCase: "uppercase",
+      },
+      chunks: [{ text: "HELLO", start: 3, end: 5 }],
+    },
+    subtitleBurnedIn: true,
+    overlaySummary: {
+      subtitleFrameCount: 0,
+      introOverlayFrameCount: 1,
+      outroOverlayFrameCount: 0,
+    },
+  };
+
+  let exportedShortStart = 0;
+  let exportedShortEnd = 0;
+  let overlayStart = 0;
+  let overlayEnd = 0;
+  let builtAss = "";
+  const progressEvents: string[] = [];
+
+  const result = await renderCreatorShortSystemExport(
+    {
+      payload,
+      sourceFile,
+      overlays: [
+        {
+          descriptor: {
+            start: 3,
+            end: 5,
+            fileField: "overlay_0",
+            filename: "overlay.png",
+            kind: "intro_overlay",
+            x: 144,
+            y: 308,
+            width: 792,
+            height: 244,
+          },
+          file: new File(["png"], "overlay.png", { type: "image/png" }),
+        },
+      ],
+      onProgressEvent: (event) => {
+        progressEvents.push(event.message);
+      },
+    },
+    {
+      buildAssDocument: (input) => {
+        builtAss = JSON.stringify(input.chunks);
+        return "[Script Info]";
+      },
+      exportShort: async (input) => {
+        exportedShortStart = input.short.startSeconds;
+        exportedShortEnd = input.short.endSeconds;
+        overlayStart = input.overlays[0]?.start ?? 0;
+        overlayEnd = input.overlays[0]?.end ?? 0;
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(512, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 512,
+          durationSeconds: 20,
+          subtitleBurnedIn: true,
+          renderModeUsed: "fast_ass",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 12,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 39,
+        audioDurationSeconds: 39,
+        videoFrameCount: 1170,
+      }),
+    }
+  );
+
+  assert.equal(result.filename, "short.mp4");
+  assert.equal(exportedShortStart, 14);
+  assert.equal(exportedShortEnd, 34);
+  assert.equal(overlayStart, 3);
+  assert.equal(overlayEnd, 5);
+  assert.match(builtAss, /"start":3/);
+  assert.match(builtAss, /"end":5/);
+  assert.equal(progressEvents.some((message) => /keyframe lead-in/.test(message)), true);
 });
 
 test("renderCreatorShortSystemExport cleans up temp files when the export is aborted", async () => {

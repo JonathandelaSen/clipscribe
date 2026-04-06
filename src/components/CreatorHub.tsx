@@ -80,6 +80,12 @@ import { clipSubtitleChunks, findSubtitleChunkAtTime } from "@/lib/creator/core/
 import { buildShortExportDiagnostics } from "@/lib/creator/core/export-diagnostics";
 import { prepareShortExport } from "@/lib/creator/core/export-prep";
 import {
+  buildShortPreviewStyle,
+  resolveShortFrameLayout,
+  resolveShortFramePanLimits,
+  scaleShortFramePanToViewport,
+} from "@/lib/creator/core/short-frame-layout";
+import {
   getCreatorTextOverlayFallbackPreset,
   getCreatorTextOverlayFontSize,
   getDefaultCreatorTextOverlayState,
@@ -198,6 +204,15 @@ function legacyCopyText(text: string): boolean {
   return copied;
 }
 
+function clampShortZoomForUi(value: number): number {
+  if (!Number.isFinite(value)) return 1.15;
+  return Math.min(4, Math.max(1, value));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
 async function copyText(text: string, label: string) {
   const content = String(text ?? "");
   let copied = false;
@@ -264,10 +279,6 @@ function formatBytes(bytes: number): string {
   const power = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** power;
   return `${value >= 10 || power === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[power]}`;
-}
-
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
 }
 
 function getAnalyzeErrorDetails(message: string | null): { title: string; body: string } | null {
@@ -1483,7 +1494,6 @@ export function CreatorHub({
   const [trimEndNudge, setTrimEndNudge] = useState(0);
   const [zoom, setZoom] = useState(1.15);
   const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
   const [subtitleScale, setSubtitleScale] = useState(1);
   const [subtitleXPositionPct, setSubtitleXPositionPct] = useState(50);
   const [subtitleYOffsetPct, setSubtitleYOffsetPct] = useState(78);
@@ -1525,7 +1535,8 @@ export function CreatorHub({
   const [isMuted, setIsMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [activeSuggestionPreviewProjectId, setActiveSuggestionPreviewProjectId] = useState("");
-  const [previewFrameWidth, setPreviewFrameWidth] = useState(0);
+  const [previewFrameSize, setPreviewFrameSize] = useState({ width: 0, height: 0 });
+  const [previewSourceSize, setPreviewSourceSize] = useState({ width: 0, height: 0 });
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewFrameElRef = useRef<HTMLDivElement | null>(null);
   const shortExportSessionCounterRef = useRef(0);
@@ -1536,14 +1547,19 @@ export function CreatorHub({
   const shortExportHeartbeatStageRef = useRef<BrowserRenderStage>("preparing");
   const shortExportHeartbeatStatusRef = useRef("idle");
   const shortExportHeartbeatProgressRef = useRef(0);
-  // useCallback ref: stores element in previewFrameElRef AND sets up ResizeObserver for previewFrameWidth.
+  // useCallback ref: stores element in previewFrameElRef AND sets up ResizeObserver for preview frame size.
   const previewFrameRef = useCallback((el: HTMLDivElement | null) => {
     previewFrameElRef.current = el;
     if (!el) return;
-    setPreviewFrameWidth(el.getBoundingClientRect().width);
+    const rect = el.getBoundingClientRect();
+    setPreviewFrameSize({ width: rect.width, height: rect.height });
     const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width ?? 0;
-      if (w > 0) setPreviewFrameWidth(w);
+      const entry = entries[0]?.contentRect;
+      const width = entry?.width ?? 0;
+      const height = entry?.height ?? 0;
+      if (width > 0 && height > 0) {
+        setPreviewFrameSize({ width, height });
+      }
     });
     ro.observe(el);
     // ResizeObserver is GC'd when the element is removed from the DOM.
@@ -1784,6 +1800,13 @@ export function CreatorHub({
     const video = previewVideoRef.current;
     if (video) setCurrentTime(video.currentTime);
   }, []);
+  const handleVideoLoadedMetadata = useCallback(() => {
+    const video = previewVideoRef.current;
+    setPreviewSourceSize({
+      width: video?.videoWidth ?? 0,
+      height: video?.videoHeight ?? 0,
+    });
+  }, []);
   const handleVideoPlay = useCallback(() => setIsPlaying(true), []);
   const handleVideoPause = useCallback(() => {
     const video = previewVideoRef.current;
@@ -1859,6 +1882,10 @@ export function CreatorHub({
     setTrimStartNudge((prev) => (Math.abs(prev - nextStartNudge) < 0.01 ? prev : nextStartNudge));
     setTrimEndNudge((prev) => (Math.abs(prev - nextEndNudge) < 0.01 ? prev : nextEndNudge));
   }, [activeSavedShortProject, selectedClip]);
+
+  useEffect(() => {
+    setPreviewSourceSize({ width: 0, height: 0 });
+  }, [mediaUrl]);
 
   // Seek video to clip start when clip changes
   useEffect(() => {
@@ -1964,7 +1991,7 @@ export function CreatorHub({
     () => ({
       zoom,
       panX,
-      panY,
+      panY: 0,
       subtitleScale,
       subtitleXPositionPct,
       subtitleYOffsetPct,
@@ -1979,7 +2006,6 @@ export function CreatorHub({
       introOverlay,
       outroOverlay,
       panX,
-      panY,
       showSafeZones,
       showSubtitles,
       subtitleScale,
@@ -1989,6 +2015,67 @@ export function CreatorHub({
       subtitleYOffsetPct,
       zoom,
     ]
+  );
+  const shortPanLimits = useMemo(() => {
+    if (previewSourceSize.width <= 0 || previewSourceSize.height <= 0) {
+      return { minPanX: -600, maxPanX: 600, minPanY: 0, maxPanY: 0 };
+    }
+
+    return resolveShortFramePanLimits({
+      sourceWidth: previewSourceSize.width,
+      sourceHeight: previewSourceSize.height,
+      frameWidth: 1080,
+      frameHeight: 1920,
+      zoom,
+      panX: 0,
+      panY: 0,
+    });
+  }, [previewSourceSize.height, previewSourceSize.width, zoom]);
+
+  useEffect(() => {
+    setPanX((current) => clampNumber(current, shortPanLimits.minPanX, shortPanLimits.maxPanX));
+  }, [shortPanLimits.maxPanX, shortPanLimits.minPanX]);
+
+  const previewFrameScale = previewFrameSize.width > 0 ? previewFrameSize.width / 1080 : 1;
+  const previewVideoLayout = useMemo(() => {
+    if (
+      !isVideoMedia ||
+      previewFrameSize.width <= 0 ||
+      previewFrameSize.height <= 0 ||
+      previewSourceSize.width <= 0 ||
+      previewSourceSize.height <= 0
+    ) {
+      return null;
+    }
+
+    const scaledPan = scaleShortFramePanToViewport({
+      panX,
+      panY: 0,
+      viewportWidth: previewFrameSize.width,
+      viewportHeight: previewFrameSize.height,
+    });
+
+    return resolveShortFrameLayout({
+      sourceWidth: previewSourceSize.width,
+      sourceHeight: previewSourceSize.height,
+      frameWidth: previewFrameSize.width,
+      frameHeight: previewFrameSize.height,
+      zoom,
+      panX: scaledPan.panX,
+      panY: 0,
+    });
+  }, [
+    isVideoMedia,
+    panX,
+    previewFrameSize.height,
+    previewFrameSize.width,
+    previewSourceSize.height,
+    previewSourceSize.width,
+    zoom,
+  ]);
+  const previewVideoStyle = useMemo(
+    () => (previewVideoLayout ? buildShortPreviewStyle(previewVideoLayout) : null),
+    [previewVideoLayout]
   );
 
   useEffect(() => {
@@ -2525,9 +2612,8 @@ export function CreatorHub({
 
     setTrimStartNudge(0);
     setTrimEndNudge(0);
-    setZoom(hydratedEditor.zoom);
+    setZoom(clampShortZoomForUi(hydratedEditor.zoom));
     setPanX(hydratedEditor.panX);
-    setPanY(hydratedEditor.panY);
     setSubtitleScale(hydratedEditor.subtitleScale);
     setSubtitleXPositionPct(hydratedEditor.subtitleXPositionPct ?? 50);
     setSubtitleYOffsetPct(hydratedEditor.subtitleYOffsetPct);
@@ -2800,10 +2886,8 @@ export function CreatorHub({
             ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
             : await readVideoMetadata(mediaFile, previewVideoRef.current);
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
-          const frameRect = previewFrameElRef.current?.getBoundingClientRect();
-          const previewViewport = frameRect ? { width: frameRect.width, height: frameRect.height } : null;
           appendShortExportLog(
-            `Starting system export request${previewViewport ? ` with preview viewport ${Math.round(previewViewport.width)}x${Math.round(previewViewport.height)}` : ""}.`
+            `Starting system export request with canonical short framing ${sourceVideoSize.width}x${sourceVideoSize.height} -> 1080x1920.`
           );
 
           const systemExport = await requestSystemCreatorShortExport({
@@ -2814,8 +2898,6 @@ export function CreatorHub({
             subtitleChunks: exportSubtitleChunks,
             editor: currentEditorState,
             sourceVideoSize,
-            previewViewport,
-            previewVideoRect: null,
             onProgress: bumpExportProgress,
             onDebugLog: appendShortExportLog,
             renderLifecycle: {
@@ -3789,7 +3871,6 @@ export function CreatorHub({
                       setTrimEndNudge(0);
                       setZoom(1.15);
                       setPanX(0);
-                      setPanY(0);
                       setSubtitleScale(1);
                       setSubtitleXPositionPct(50);
                       setSubtitleYOffsetPct(78);
@@ -4079,19 +4160,20 @@ export function CreatorHub({
                               src={mediaUrl}
                               muted
                               playsInline
+                              onLoadedMetadata={handleVideoLoadedMetadata}
                               onTimeUpdate={handleVideoTimeUpdate}
                               onPlay={handleVideoPlay}
                               onPause={handleVideoPause}
                               onEnded={handleVideoEnded}
                               className="absolute"
                               style={{
-                                width: "100%",
-                                height: "100%",
-                                objectFit: "contain",
+                                width: previewVideoStyle?.width ?? "100%",
+                                height: previewVideoStyle?.height ?? "100%",
+                                objectFit: "cover",
+                                objectPosition: previewVideoStyle?.objectPosition ?? "50% 50%",
                                 left: "50%",
                                 top: "50%",
-                                transform: `translate(-50%, -50%) scale(${zoom}) translate(${panX}px, ${panY}px)`,
-                                transformOrigin: "center center",
+                                transform: "translate(-50%, -50%)",
                               }}
                             />
                           ) : (
@@ -4119,7 +4201,7 @@ export function CreatorHub({
                           )}
 
                           {activePreviewTextOverlays.map((entry) => {
-                            const previewScale = previewFrameWidth > 0 ? previewFrameWidth / 1080 : 1;
+                            const previewScale = previewFrameScale;
                             const cssFontSize = entry.fontSize * previewScale;
                             const cssLineHeight = entry.fontSize * 1.02 * previewScale;
                             const cssBorder = entry.style.borderWidth * previewScale;
@@ -4151,7 +4233,7 @@ export function CreatorHub({
                           {showSubtitles && previewWrappedSubtitleLine && (() => {
                             // Render the preview subtitle in the same coordinate space as the FFmpeg export.
                             // previewScale maps the 1080 px export canvas onto the preview frame pixels.
-                            const previewScale = previewFrameWidth > 0 ? previewFrameWidth / 1080 : 1;
+                            const previewScale = previewFrameScale;
                             const cssFontSize = exportFontSize * previewScale;
                             const cssMaxWidth = 1080 * 0.80 * previewScale;
                             const cssLineHeight = exportFontSize * 1.18 * previewScale;
@@ -4421,11 +4503,19 @@ export function CreatorHub({
                                   className="w-full"
                                 />
                             <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
-                            <input type="range" min={0.5} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Pan X: {panX}px</label>
-                            <input type="range" min={-600} max={600} step={1} value={panX} onChange={(e) => setPanX(Number(e.target.value))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Pan Y: {panY}px</label>
-                            <input type="range" min={-600} max={600} step={1} value={panY} onChange={(e) => setPanY(Number(e.target.value))} className="w-full" />
+                            <input type="range" min={1.0} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(clampShortZoomForUi(Number(e.target.value)))} className="w-full" />
+                            <label className="text-xs text-white/70 block">Pan X: {Math.round(panX)}px</label>
+                            <input
+                              type="range"
+                              min={shortPanLimits.minPanX}
+                              max={shortPanLimits.maxPanX}
+                              step={1}
+                              value={clampNumber(panX, shortPanLimits.minPanX, shortPanLimits.maxPanX)}
+                              onChange={(e) => {
+                                setPanX(clampNumber(Number(e.target.value), shortPanLimits.minPanX, shortPanLimits.maxPanX));
+                              }}
+                              className="w-full"
+                            />
                             </div>
                           </TabsContent>
 
@@ -4929,7 +5019,6 @@ export function CreatorHub({
                                   setTrimEndNudge(0);
                                   setZoom(1.15);
                                   setPanX(0);
-                                  setPanY(0);
                                   setSubtitleScale(1);
                                   setSubtitleXPositionPct(50);
                                   setSubtitleYOffsetPct(78);
