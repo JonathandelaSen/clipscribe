@@ -12,7 +12,7 @@ import {
   type CreatorShortSystemExportOverlayDescriptor,
   type CreatorShortSystemExportPayload,
 } from "../../../src/lib/creator/system-export-contract";
-import { buildShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
+import { buildCanonicalShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
 
 function createPayload(): CreatorShortSystemExportPayload {
   return {
@@ -50,16 +50,13 @@ function createPayload(): CreatorShortSystemExportPayload {
       showSafeZones: true,
     },
     sourceVideoSize: { width: 1920, height: 1080 },
-    geometry: buildShortExportGeometry({
+    geometry: buildCanonicalShortExportGeometry({
       sourceWidth: 1920,
       sourceHeight: 1080,
       editor: { zoom: 1.15, panX: 0, panY: 0 },
-      previewViewport: { width: 400, height: 800 },
       outputWidth: 1080,
       outputHeight: 1920,
     }),
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: null,
     subtitleRenderMode: "png_parity",
     semanticSubtitles: null,
     subtitleBurnedIn: true,

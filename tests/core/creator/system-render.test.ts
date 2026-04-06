@@ -8,7 +8,7 @@ import {
   exportCreatorShortWithSystemFfmpeg,
   type CreatorSystemRenderOverlayInput,
 } from "../../../src/lib/server/creator/shorts/system-render";
-import { buildShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
+import { buildCanonicalShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
 import type { CreatorSuggestedShort } from "../../../src/lib/creator/types";
 
 async function createTempDirectory() {
@@ -56,16 +56,13 @@ function createRenderInput(tempDir: string) {
       showSafeZones: true,
     },
     sourceVideoSize: { width: 1920, height: 1080 },
-    geometry: buildShortExportGeometry({
+    geometry: buildCanonicalShortExportGeometry({
       sourceWidth: 1920,
       sourceHeight: 1080,
       editor: { zoom: 1.15, panX: 0, panY: 0 },
-      previewViewport: { width: 400, height: 800 },
       outputWidth: 1080,
       outputHeight: 1920,
     }),
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: null,
     overlays: [] as CreatorSystemRenderOverlayInput[],
     subtitleBurnedIn: false,
     subtitleTrackPath: null as string | null,

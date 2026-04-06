@@ -8,6 +8,7 @@ import {
   type CreatorShortSystemExportPayload,
   type CreatorShortSystemExportResponseMetadata,
 } from "../../../creator/system-export-contract";
+import { buildCanonicalShortExportGeometry } from "../../../creator/core/export-geometry";
 import {
   exportCreatorShortWithSystemFfmpeg,
   isCreatorSystemRenderCanceledError,
@@ -420,6 +421,13 @@ export async function renderCreatorShortSystemExport(
     });
 
     const outputPath = path.join(tempRoot, "output", "short_export.mp4");
+    const geometry = buildCanonicalShortExportGeometry({
+      sourceWidth: input.payload.sourceVideoSize.width,
+      sourceHeight: input.payload.sourceVideoSize.height,
+      editor: input.payload.editor,
+      outputWidth: input.payload.geometry.outputWidth,
+      outputHeight: input.payload.geometry.outputHeight,
+    });
     let lastLoggedProgress = -1;
     const result = await exportShort({
       sourceFilePath: sourcePath,
@@ -427,9 +435,7 @@ export async function renderCreatorShortSystemExport(
       short: input.payload.short,
       editor: input.payload.editor,
       sourceVideoSize: input.payload.sourceVideoSize,
-      geometry: input.payload.geometry,
-      previewViewport: input.payload.previewViewport ?? null,
-      previewVideoRect: input.payload.previewVideoRect ?? null,
+      geometry,
       overlays: effectiveOverlays,
       subtitleBurnedIn: input.payload.subtitleBurnedIn,
       subtitleTrackPath,

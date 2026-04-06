@@ -1,151 +1,127 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { checkExportGeometryInvariants } from "../../../src/lib/creator/core/export-contracts";
-import { buildShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
+import {
+  buildCanonicalShortExportGeometry,
+  buildShortExportGeometryFromLayout,
+} from "../../../src/lib/creator/core/export-geometry";
+import {
+  buildShortPreviewStyle,
+  resolveShortFrameLayout,
+} from "../../../src/lib/creator/core/short-frame-layout";
 
 const sourceLandscape = { sourceWidth: 1920, sourceHeight: 1080 };
 
-test("buildShortExportGeometry maps previewVideoRect coordinates into export filter coordinates", () => {
-  const geometry = buildShortExportGeometry({
+test("resolveShortFrameLayout uses cover crop as the baseline at zoom 1", () => {
+  const layout = resolveShortFrameLayout({
     ...sourceLandscape,
-    editor: { zoom: 1, panX: 0, panY: 0 },
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: { width: 1422, height: 800 },
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1,
+    panX: 0,
+    panY: 0,
   });
 
-  assert.equal(geometry.usedPreviewVideoRect, true);
-  assert.equal(geometry.scaledWidth, 3839);
+  assert.equal(layout.mode, "cover_crop");
+  assert.equal(layout.mediaWidth, 3413);
+  assert.equal(layout.mediaHeight, 1920);
+  assert.equal(layout.cropX, 1167);
+  assert.equal(layout.cropY, 0);
+  assert.equal(layout.padX, 0);
+  assert.equal(layout.padY, 0);
+  assert.equal(layout.objectPositionXPercent, 50);
+  assert.equal(layout.objectPositionYPercent, 50);
+});
+
+test("resolveShortFrameLayout keeps pan clamped while zooming in", () => {
+  const centered = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1.35,
+    panX: 0,
+    panY: 0,
+  });
+  const panned = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 1.35,
+    panX: 220,
+    panY: 0,
+  });
+
+  assert.equal(centered.mode, "cover_crop");
+  assert.equal(panned.mode, "cover_crop");
+  assert.ok(panned.cropX < centered.cropX);
+  assert.ok(panned.objectPositionXPercent < centered.objectPositionXPercent);
+});
+
+test("resolveShortFrameLayout enters pad mode when zooming out", () => {
+  const layout = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 0.5,
+    panX: 0,
+    panY: 120,
+  });
+
+  assert.equal(layout.mode, "zoom_out_pad");
+  assert.equal(layout.mediaWidth, 1707);
+  assert.equal(layout.mediaHeight, 960);
+  assert.equal(layout.canvasWidth, 1707);
+  assert.equal(layout.canvasHeight, 1920);
+  assert.equal(layout.cropX, 314);
+  assert.equal(layout.cropY, 0);
+  assert.equal(layout.padY, 600);
+});
+
+test("buildShortExportGeometryFromLayout produces the expected FFmpeg filter sequence", () => {
+  const layout = resolveShortFrameLayout({
+    ...sourceLandscape,
+    frameWidth: 1080,
+    frameHeight: 1920,
+    zoom: 0.5,
+    panX: 0,
+    panY: 0,
+  });
+  const geometry = buildShortExportGeometryFromLayout(layout);
+
+  assert.equal(geometry.layoutMode, "zoom_out_pad");
+  assert.match(
+    geometry.filter,
+    /^scale=1708:960,pad=1708:1920:0:480:black,crop=1080:1920:314:0,format=yuv420p$/
+  );
+});
+
+test("buildCanonicalShortExportGeometry derives FFmpeg geometry from the canonical layout", () => {
+  const geometry = buildCanonicalShortExportGeometry({
+    ...sourceLandscape,
+    editor: { zoom: 1, panX: 0, panY: 0 },
+    outputWidth: 1080,
+    outputHeight: 1920,
+  });
+
+  assert.equal(geometry.layoutMode, "cover_crop");
+  assert.equal(geometry.scaledWidth, 3414);
   assert.equal(geometry.scaledHeight, 1920);
+  assert.equal(geometry.cropX, 1166);
   assert.equal(geometry.cropY, 0);
-  assert.ok(geometry.filter.includes("scale=3839:1920"));
-  assert.ok(!geometry.filter.includes("pad="));
-  assert.ok(geometry.filter.includes("crop=1080:1920:1380:0"));
 });
 
-test("buildShortExportGeometry produces pad mode for zoom-out framing with black bars", () => {
-  const geometry = buildShortExportGeometry({
+test("buildShortPreviewStyle keeps zoom-out preview clamped to cover-fit", () => {
+  const layout = resolveShortFrameLayout({
     ...sourceLandscape,
-    editor: { zoom: 0.5, panX: 0, panY: 0 },
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: { width: 711, height: 400 },
+    frameWidth: 420,
+    frameHeight: 746,
+    zoom: 0.5,
+    panX: 0,
+    panY: 0,
   });
+  const style = buildShortPreviewStyle(layout);
 
-  assert.equal(geometry.usedPreviewVideoRect, true);
-  assert.equal(geometry.scaledWidth, 1920);
-  assert.equal(geometry.scaledHeight, 960);
-  assert.equal(geometry.canvasWidth, 1920);
-  assert.equal(geometry.canvasHeight, 1920);
-  assert.equal(geometry.padX, 0);
-  assert.equal(geometry.padY, 480);
-  assert.equal(geometry.cropX, 420);
-  assert.equal(geometry.cropY, 0);
-  assert.ok(geometry.filter.includes("pad=1920:1920:0:480:black"));
-});
-
-test("buildShortExportGeometry maps panY into pad offset in zoom-out mode", () => {
-  const centered = buildShortExportGeometry({
-    ...sourceLandscape,
-    editor: { zoom: 0.5, panX: 0, panY: 0 },
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: { width: 711, height: 400 },
-  });
-  const panned = buildShortExportGeometry({
-    ...sourceLandscape,
-    editor: { zoom: 0.5, panX: 0, panY: 100 },
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: { width: 711, height: 400 },
-  });
-
-  assert.equal(centered.padY, 480);
-  assert.equal(panned.padY, 720);
-  assert.equal(panned.cropY, 0);
-});
-
-type FallbackMatrixScenario = {
-  name: string;
-  sourceWidth: number;
-  sourceHeight: number;
-  editor: { zoom: number; panX: number; panY: number };
-  previewViewport?: { width: number; height: number };
-};
-
-const fallbackMatrix: FallbackMatrixScenario[] = [
-  {
-    name: "landscape source + default zoom",
-    sourceWidth: 1920,
-    sourceHeight: 1080,
-    editor: { zoom: 1, panX: 0, panY: 0 },
-  },
-  {
-    name: "landscape source + zoom-out pad mode",
-    sourceWidth: 1920,
-    sourceHeight: 1080,
-    editor: { zoom: 0.5, panX: 0, panY: 100 },
-  },
-  {
-    name: "portrait source",
-    sourceWidth: 1080,
-    sourceHeight: 1920,
-    editor: { zoom: 1, panX: 140, panY: -120 },
-  },
-  {
-    name: "square source",
-    sourceWidth: 1080,
-    sourceHeight: 1080,
-    editor: { zoom: 1.35, panX: -220, panY: 180 },
-  },
-  {
-    name: "extreme pan/zoom boundaries",
-    sourceWidth: 3840,
-    sourceHeight: 2160,
-    editor: { zoom: 2.5, panX: 1200, panY: -1200 },
-  },
-  {
-    name: "explicit missing preview-rect path",
-    sourceWidth: 1920,
-    sourceHeight: 1080,
-    editor: { zoom: 1.12, panX: 90, panY: -110 },
-    previewViewport: { width: 420, height: 746 },
-  },
-];
-
-for (const scenario of fallbackMatrix) {
-  test(`buildShortExportGeometry keeps aspect ratio stable in fallback path: ${scenario.name}`, () => {
-    const geometry = buildShortExportGeometry({
-      sourceWidth: scenario.sourceWidth,
-      sourceHeight: scenario.sourceHeight,
-      editor: scenario.editor,
-      previewViewport: scenario.previewViewport ?? null,
-    });
-
-    assert.equal(geometry.usedPreviewVideoRect, false);
-    assert.equal(geometry.outputWidth, 1080);
-    assert.equal(geometry.outputHeight, 1920);
-
-    const invariants = checkExportGeometryInvariants({
-      sourceWidth: scenario.sourceWidth,
-      sourceHeight: scenario.sourceHeight,
-      geometry,
-    });
-
-    assert.equal(invariants.ok, true);
-  });
-}
-
-test("previewVideoRect path is flagged by geometry contracts when it introduces stretch", () => {
-  const geometry = buildShortExportGeometry({
-    ...sourceLandscape,
-    editor: { zoom: 1, panX: 0, panY: 0 },
-    previewViewport: { width: 400, height: 800 },
-    previewVideoRect: { width: 1422, height: 800 },
-  });
-
-  const invariants = checkExportGeometryInvariants({
-    ...sourceLandscape,
-    geometry,
-  });
-
-  assert.equal(invariants.ok, false);
-  assert.ok(invariants.violations.some((message) => /aspect ratio|non-uniform/i.test(message)));
+  assert.equal(style.width, "100%");
+  assert.equal(style.height, "100%");
+  assert.equal(style.objectPosition, "50% 50%");
 });

@@ -60,9 +60,8 @@ export interface CreatorSystemRenderInput {
     outputWidth: number;
     outputHeight: number;
     usedPreviewVideoRect: boolean;
+    layoutMode?: "cover_crop" | "zoom_out_pad";
   };
-  previewViewport?: { width: number; height: number } | null;
-  previewVideoRect?: { width: number; height: number } | null;
   overlays: readonly CreatorSystemRenderOverlayInput[];
   subtitleBurnedIn: boolean;
   subtitleTrackPath?: string | null;
@@ -558,8 +557,6 @@ export function buildCreatorSystemRenderCommand(input: {
   short: CreatorSuggestedShort;
   sourceVideoSize: { width: number; height: number };
   geometry: CreatorSystemRenderInput["geometry"];
-  previewViewport?: { width: number; height: number } | null;
-  previewVideoRect?: { width: number; height: number } | null;
   overlays: readonly CreatorSystemRenderOverlayInput[];
   subtitleBurnedIn: boolean;
   subtitleTrackPath?: string | null;
@@ -715,11 +712,8 @@ export function buildCreatorSystemRenderCommand(input: {
           : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
         : `Fallback exact-seek mode used from ${input.short.startSeconds.toFixed(2)}s for container compatibility.`,
       input.geometry.canvasWidth !== input.geometry.scaledWidth || input.geometry.canvasHeight !== input.geometry.scaledHeight
-        ? `Zoom-out/pad mode. Scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, padded canvas ${input.geometry.canvasWidth}x${input.geometry.canvasHeight} @ (${input.geometry.padX}, ${input.geometry.padY}), crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`
-        : `Crop based on zoom/pan. Scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`,
-      input.previewVideoRect
-        ? `Preview parity source: video rect ${Math.round(input.previewVideoRect.width)}x${Math.round(input.previewVideoRect.height)} inside viewport ${Math.round(input.previewViewport?.width ?? 0)}x${Math.round(input.previewViewport?.height ?? 0)}.`
-        : "Preview parity source: computed from source dimensions + editor zoom.",
+        ? `Geometry mode ${input.geometry.layoutMode ?? "zoom_out_pad"}: scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, padded canvas ${input.geometry.canvasWidth}x${input.geometry.canvasHeight} @ (${input.geometry.padX}, ${input.geometry.padY}), crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`
+        : `Geometry mode ${input.geometry.layoutMode ?? "cover_crop"}: scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`,
       input.subtitleBurnedIn
         ? input.renderModeUsed === "fast_ass"
           ? "Subtitles burned in via ASS fast path."
@@ -805,8 +799,6 @@ export async function exportCreatorShortWithSystemFfmpeg(
             short: input.short,
             sourceVideoSize: input.sourceVideoSize,
             geometry: input.geometry,
-            previewViewport: input.previewViewport,
-            previewVideoRect: input.previewVideoRect,
             overlays: input.overlays,
             subtitleBurnedIn: input.subtitleBurnedIn,
             subtitleTrackPath: input.subtitleTrackPath,
