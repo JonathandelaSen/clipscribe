@@ -44,6 +44,7 @@ export interface CreatorTextFeatureConfigResponse {
   feature: CreatorLLMFeature;
   provider: CreatorLLMProvider;
   defaultProvider: CreatorLLMProvider;
+  allowedProviders: CreatorLLMProvider[];
   defaultModel: string;
   temperature: number;
   models: CreatorFeatureModelOption[];

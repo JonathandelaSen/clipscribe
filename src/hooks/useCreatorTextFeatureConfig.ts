@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type { CreatorLLMFeature, CreatorTextFeatureConfigResponse } from "@/lib/creator/types";
+import { sanitizeCreatorProvider } from "@/lib/creator/ai";
 
 type UseCreatorTextFeatureConfigOptions = {
   headers?: HeadersInit;
+  provider?: string;
 };
 
 export function useCreatorTextFeatureConfig(
@@ -16,6 +18,7 @@ export function useCreatorTextFeatureConfig(
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const headersKey = JSON.stringify(options?.headers ?? {});
+  const provider = sanitizeCreatorProvider(options?.provider);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -24,11 +27,18 @@ export function useCreatorTextFeatureConfig(
       setIsLoading(true);
       setError(null);
       try {
-        const response = await fetch(`/api/creator/${feature === "video_info" ? "video-info" : "shorts"}/config`, {
+        const params = new URLSearchParams();
+        if (provider) {
+          params.set("provider", provider);
+        }
+        const response = await fetch(
+          `/api/creator/${feature === "video_info" ? "video-info" : "shorts"}/config${params.size ? `?${params.toString()}` : ""}`,
+          {
           headers: options?.headers,
           cache: "no-store",
           signal: controller.signal,
-        });
+          }
+        );
         if (!response.ok) {
           throw new Error(`Failed to load ${feature} config (${response.status})`);
         }
@@ -47,7 +57,7 @@ export function useCreatorTextFeatureConfig(
 
     void run();
     return () => controller.abort();
-  }, [feature, headersKey, options?.headers]);
+  }, [feature, headersKey, options?.headers, provider]);
 
   return useMemo(
     () => ({

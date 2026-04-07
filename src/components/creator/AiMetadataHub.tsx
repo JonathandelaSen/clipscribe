@@ -45,6 +45,7 @@ import { buildCollapsedVideoInfoPromptPreview, buildVideoInfoPrompt } from "@/li
 import { getCreatorProviderLabel } from "@/lib/creator/ai";
 import { buildCreatorTextProviderHeaders } from "@/lib/creator/user-ai-settings";
 import type {
+  CreatorLLMProvider,
   CreatorPromptSlotOverrideMode,
   CreatorVideoInfoBlock,
   CreatorVideoInfoGenerateRequest,
@@ -138,6 +139,14 @@ function formatRelativeDate(value: number) {
     hour: "numeric",
     minute: "2-digit",
   }).format(value);
+}
+
+function getCreatorProviderEnvKey(provider: CreatorLLMProvider): string {
+  return provider === "gemini" ? "GEMINI_API_KEY" : "OPENAI_API_KEY";
+}
+
+function getCreatorProviderKeyPlaceholder(provider: CreatorLLMProvider): string {
+  return provider === "gemini" ? "AIza..." : "sk-proj-...";
 }
 
 async function copyText(text: string, label: string) {
@@ -392,11 +401,17 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     openAIApiKey,
     geminiApiKey,
     hasOpenAIApiKey,
+    hasGeminiApiKey,
     maskedOpenAIApiKey,
+    maskedGeminiApiKey,
     videoInfoFeatureSettings,
     videoInfoPromptProfile,
     saveOpenAIApiKey,
+    saveGeminiApiKey,
     clearOpenAIApiKey,
+    clearGeminiApiKey,
+    saveFeatureModel,
+    saveFeatureProvider,
     saveVideoInfoPromptProfile,
   } = useCreatorAiSettings();
   const creatorProviderHeaders = useMemo(
@@ -405,8 +420,10 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
   );
   const { config: videoInfoAiConfig } = useCreatorTextFeatureConfig("video_info", {
     headers: creatorProviderHeaders,
+    provider: videoInfoFeatureSettings?.provider,
   });
   const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState("");
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState("");
   const [videoInfoBlocks, setVideoInfoBlocks] = useState<CreatorVideoInfoBlock[]>([]);
   const [promptEditorMode, setPromptEditorMode] = useState<VideoInfoPromptEditorMode>("global");
   const [globalPromptProfileDraft, setGlobalPromptProfileDraft] = useState<CreatorVideoInfoPromptProfile>(
@@ -489,9 +506,10 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     setOpenAIApiKeyDraft(openAIApiKey);
-  }, [openAIApiKey]);
+    setGeminiApiKeyDraft(geminiApiKey);
+  }, [geminiApiKey, openAIApiKey]);
 
-  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "openai";
+  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "gemini";
   const resolvedVideoInfoModel = useMemo(() => {
     const savedModel = videoInfoFeatureSettings?.model;
     if (savedModel && videoInfoAiConfig?.models.some((option) => option.value === savedModel)) {
@@ -499,11 +517,29 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     }
     return videoInfoAiConfig?.defaultModel ?? savedModel ?? "";
   }, [videoInfoAiConfig?.defaultModel, videoInfoAiConfig?.models, videoInfoFeatureSettings?.model]);
+  useEffect(() => {
+    if (!videoInfoAiConfig?.defaultModel) return;
+    if (videoInfoFeatureSettings?.provider !== videoInfoAiConfig.provider) return;
+    const savedModel = videoInfoFeatureSettings?.model;
+    if (savedModel && videoInfoAiConfig.models.some((option) => option.value === savedModel)) return;
+    saveFeatureModel("video_info", videoInfoAiConfig.defaultModel, videoInfoAiConfig.provider);
+  }, [
+    saveFeatureModel,
+    videoInfoAiConfig?.defaultModel,
+    videoInfoAiConfig?.models,
+    videoInfoAiConfig?.provider,
+    videoInfoFeatureSettings?.model,
+    videoInfoFeatureSettings?.provider,
+  ]);
   const resolvedVideoInfoApiKeySource =
     videoInfoAiConfig?.provider === resolvedVideoInfoProvider && videoInfoAiConfig.hasApiKey
       ? videoInfoAiConfig.apiKeySource
       : undefined;
   const hasResolvedVideoInfoApiKey = Boolean(resolvedVideoInfoApiKeySource);
+  const activeApiKeyDraft = resolvedVideoInfoProvider === "gemini" ? geminiApiKeyDraft : openAIApiKeyDraft;
+  const hasActiveVideoInfoApiKey = resolvedVideoInfoProvider === "gemini" ? hasGeminiApiKey : hasOpenAIApiKey;
+  const maskedActiveVideoInfoApiKey =
+    resolvedVideoInfoProvider === "gemini" ? maskedGeminiApiKey : maskedOpenAIApiKey;
 
   useEffect(() => {
     setGlobalPromptProfileDraft(cloneVideoInfoPromptProfile(videoInfoPromptProfile));
@@ -567,21 +603,30 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     Boolean(selectedTranscript?.transcript) &&
     Boolean(selectedTranscript?.chunks?.length);
 
-  const handleSaveOpenAIApiKey = useCallback(() => {
-    const trimmed = openAIApiKeyDraft.trim();
+  const handleSaveActiveApiKey = useCallback(() => {
+    const trimmed = activeApiKeyDraft.trim();
     if (!trimmed) {
-      toast.error("Paste an OpenAI API key first.");
+      toast.error(`Paste a ${getCreatorProviderLabel(resolvedVideoInfoProvider)} API key first.`);
       return;
     }
-    saveOpenAIApiKey(trimmed);
-    toast.success("OpenAI key saved in this browser.");
-  }, [openAIApiKeyDraft, saveOpenAIApiKey]);
+    if (resolvedVideoInfoProvider === "gemini") {
+      saveGeminiApiKey(trimmed);
+    } else {
+      saveOpenAIApiKey(trimmed);
+    }
+    toast.success(`${getCreatorProviderLabel(resolvedVideoInfoProvider)} key saved in this browser.`);
+  }, [activeApiKeyDraft, resolvedVideoInfoProvider, saveGeminiApiKey, saveOpenAIApiKey]);
 
-  const handleClearOpenAIApiKey = useCallback(() => {
-    clearOpenAIApiKey();
-    setOpenAIApiKeyDraft("");
-    toast.success("OpenAI key removed from this browser.");
-  }, [clearOpenAIApiKey]);
+  const handleClearActiveApiKey = useCallback(() => {
+    if (resolvedVideoInfoProvider === "gemini") {
+      clearGeminiApiKey();
+      setGeminiApiKeyDraft("");
+    } else {
+      clearOpenAIApiKey();
+      setOpenAIApiKeyDraft("");
+    }
+    toast.success(`${getCreatorProviderLabel(resolvedVideoInfoProvider)} key removed from this browser.`);
+  }, [clearGeminiApiKey, clearOpenAIApiKey, resolvedVideoInfoProvider]);
 
   const handleSaveGlobalPromptProfile = useCallback(() => {
     saveVideoInfoPromptProfile(hasGlobalDraftEdits ? globalPromptProfileDraft : undefined);
@@ -629,7 +674,9 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
       return;
     }
     if (!hasResolvedVideoInfoApiKey) {
-      toast.error("Add your OpenAI API key or set OPENAI_API_KEY on the server.");
+      toast.error(
+        `Add your ${getCreatorProviderLabel(resolvedVideoInfoProvider)} API key or set ${getCreatorProviderEnvKey(resolvedVideoInfoProvider)} on the server.`
+      );
       return;
     }
     if (videoInfoBlocks.length === 0) {
@@ -669,6 +716,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
     generateVideoInfo,
     hasResolvedVideoInfoApiKey,
     refreshLlmRuns,
+    resolvedVideoInfoProvider,
     saveProject,
     selectedProject,
     videoInfoBlocks.length,
@@ -728,7 +776,7 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
                     )}
                   >
                     {resolvedVideoInfoApiKeySource === "header"
-                      ? `Saved ${maskedOpenAIApiKey}`
+                      ? `Saved ${maskedActiveVideoInfoApiKey}`
                       : resolvedVideoInfoApiKeySource === "env"
                         ? "Server env"
                         : "Missing"}
@@ -736,17 +784,63 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
                 </div>
               </div>
             </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Provider</div>
+                <Select
+                  value={resolvedVideoInfoProvider}
+                  onValueChange={(value) => saveFeatureProvider("video_info", value as CreatorLLMProvider)}
+                  disabled={!videoInfoAiConfig || videoInfoAiConfig.allowedProviders.length === 0}
+                >
+                  <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                    <SelectValue placeholder="Select provider" />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                    {(videoInfoAiConfig?.allowedProviders ?? [resolvedVideoInfoProvider]).map((provider) => (
+                      <SelectItem key={provider} value={provider}>
+                        {getCreatorProviderLabel(provider)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Model</div>
+                <Select
+                  value={resolvedVideoInfoModel}
+                  onValueChange={(value) => saveFeatureModel("video_info", value, resolvedVideoInfoProvider)}
+                  disabled={!videoInfoAiConfig || videoInfoAiConfig.models.length === 0}
+                >
+                  <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                    {(videoInfoAiConfig?.models ?? []).map((option) => (
+                      <SelectItem key={`${option.provider}:${option.value}`} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
             <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto]">
               <Input
-                value={openAIApiKeyDraft}
-                onChange={(event) => setOpenAIApiKeyDraft(event.target.value)}
-                placeholder={`Paste the ${getCreatorProviderLabel(resolvedVideoInfoProvider)} key used for creator metadata`}
+                value={activeApiKeyDraft}
+                onChange={(event) => {
+                  if (resolvedVideoInfoProvider === "gemini") {
+                    setGeminiApiKeyDraft(event.target.value);
+                    return;
+                  }
+                  setOpenAIApiKeyDraft(event.target.value);
+                }}
+                placeholder={`Paste the ${getCreatorProviderLabel(resolvedVideoInfoProvider)} key used for creator metadata (${getCreatorProviderKeyPlaceholder(resolvedVideoInfoProvider)})`}
                 className="border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
               />
               <Button
                 type="button"
                 className="bg-white text-black hover:bg-zinc-200"
-                onClick={handleSaveOpenAIApiKey}
+                onClick={handleSaveActiveApiKey}
               >
                 <KeyRound className="mr-2 h-4 w-4" />
                 Save key
@@ -755,8 +849,8 @@ export function AiMetadataHub({ projectId }: { projectId: string }) {
                 type="button"
                 variant="ghost"
                 className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
-                onClick={handleClearOpenAIApiKey}
-                disabled={!hasOpenAIApiKey}
+                onClick={handleClearActiveApiKey}
+                disabled={!hasActiveVideoInfoApiKey}
               >
                 Clear
               </Button>

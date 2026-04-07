@@ -18,6 +18,7 @@ type CreatorFeatureEnvConfig = {
   feature: CreatorLLMFeature;
   provider: CreatorLLMProvider;
   defaultProvider: CreatorLLMProvider;
+  allowedProviders: readonly CreatorLLMProvider[];
   defaultModel: string;
   temperature: number;
 };
@@ -34,8 +35,8 @@ const FEATURE_CONFIG: Record<CreatorLLMFeature, FeatureConfigSpec> = {
     providerEnvKey: "CREATOR_VIDEO_INFO_PROVIDER",
     modelEnvKeys: ["CREATOR_VIDEO_INFO_MODEL", "OPENAI_CREATOR_VIDEO_INFO_MODEL"],
     temperatureEnvKeys: ["CREATOR_VIDEO_INFO_TEMPERATURE", "OPENAI_CREATOR_VIDEO_INFO_TEMPERATURE"],
-    defaultProvider: "openai",
-    allowedProviders: ["openai"],
+    defaultProvider: "gemini",
+    allowedProviders: ["gemini", "openai"],
   },
 };
 
@@ -47,16 +48,27 @@ function readFirstEnvValue(keys: readonly string[]): string {
   return "";
 }
 
-export function readCreatorFeatureEnvConfig(feature: CreatorLLMFeature): CreatorFeatureEnvConfig {
+export function readCreatorFeatureEnvConfig(
+  feature: CreatorLLMFeature,
+  requestedProvider?: CreatorLLMProvider
+): CreatorFeatureEnvConfig {
   const spec = FEATURE_CONFIG[feature];
   const explicitProvider = sanitizeCreatorProvider(process.env[spec.providerEnvKey]);
-  const requestedProvider = explicitProvider ?? spec.defaultProvider;
-  const provider = spec.allowedProviders.includes(requestedProvider) ? requestedProvider : spec.defaultProvider;
+  const envProviderCandidate = explicitProvider ?? spec.defaultProvider;
+  const envProvider = spec.allowedProviders.includes(envProviderCandidate) ? envProviderCandidate : spec.defaultProvider;
+  const provider = requestedProvider && spec.allowedProviders.includes(requestedProvider) ? requestedProvider : envProvider;
   const defaultProvider = CREATOR_DEFAULT_PROVIDER_BY_FEATURE[feature];
-  const modelEnvKeys =
-    provider === "openai"
+  const modelEnvKeys = (() => {
+    if (provider !== envProvider) {
+      return provider === "openai"
+        ? spec.modelEnvKeys.filter((key) => key.startsWith("OPENAI_"))
+        : [];
+    }
+
+    return provider === "openai"
       ? spec.modelEnvKeys
       : spec.modelEnvKeys.filter((key) => !key.startsWith("OPENAI_"));
+  })();
   const defaultModel =
     sanitizeCreatorModelSelection(readFirstEnvValue(modelEnvKeys)) ??
     getCuratedCreatorModelOptions(provider)[0]?.value ??
@@ -68,6 +80,7 @@ export function readCreatorFeatureEnvConfig(feature: CreatorLLMFeature): Creator
     feature,
     provider,
     defaultProvider,
+    allowedProviders: spec.allowedProviders,
     defaultModel,
     temperature,
   };
@@ -83,11 +96,12 @@ export function resolveCreatorFeatureGenerationConfig(
 } {
   const envConfig = readCreatorFeatureEnvConfig(feature);
   const provider = sanitizeCreatorProvider(requestConfig?.provider) ?? envConfig.provider;
-  const model = sanitizeCreatorModelSelection(requestConfig?.model) ?? envConfig.defaultModel;
+  const providerConfig = readCreatorFeatureEnvConfig(feature, provider);
+  const model = sanitizeCreatorModelSelection(requestConfig?.model) ?? providerConfig.defaultModel;
 
   return {
-    provider,
+    provider: providerConfig.provider,
     model,
-    temperature: envConfig.temperature,
+    temperature: providerConfig.temperature,
   };
 }

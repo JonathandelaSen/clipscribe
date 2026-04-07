@@ -1453,6 +1453,7 @@ export function CreatorHub({
     shortsFeatureSettings,
     videoInfoFeatureSettings,
     saveFeatureModel,
+    saveFeatureProvider,
   } = useCreatorAiSettings();
   const { activeTasks, startShortExport, cancelTask } = useBackgroundTasks();
   const creatorProviderHeaders = useMemo(
@@ -1464,6 +1465,7 @@ export function CreatorHub({
   });
   const { config: videoInfoAiConfig } = useCreatorTextFeatureConfig("video_info", {
     headers: creatorProviderHeaders,
+    provider: videoInfoFeatureSettings?.provider,
   });
 
   const [hubView, setHubView] = useState<HubView>(initialView);
@@ -2180,7 +2182,7 @@ export function CreatorHub({
     }
     return shortsAiConfig?.defaultModel ?? savedModel ?? "";
   }, [shortsAiConfig?.defaultModel, shortsAiConfig?.models, shortsFeatureSettings?.model]);
-  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "openai";
+  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "gemini";
   const resolvedVideoInfoModel = useMemo(() => {
     const savedModel = videoInfoFeatureSettings?.model;
     if (savedModel && videoInfoAiConfig?.models.some((option) => option.value === savedModel)) {
@@ -2188,14 +2190,42 @@ export function CreatorHub({
     }
     return videoInfoAiConfig?.defaultModel ?? savedModel ?? "";
   }, [videoInfoAiConfig?.defaultModel, videoInfoAiConfig?.models, videoInfoFeatureSettings?.model]);
+  useEffect(() => {
+    if (!videoInfoAiConfig?.defaultModel) return;
+    if (videoInfoFeatureSettings?.provider !== videoInfoAiConfig.provider) return;
+    const savedModel = videoInfoFeatureSettings?.model;
+    if (savedModel && videoInfoAiConfig.models.some((option) => option.value === savedModel)) return;
+    saveFeatureModel("video_info", videoInfoAiConfig.defaultModel, videoInfoAiConfig.provider);
+  }, [
+    saveFeatureModel,
+    videoInfoAiConfig?.defaultModel,
+    videoInfoAiConfig?.models,
+    videoInfoAiConfig?.provider,
+    videoInfoFeatureSettings?.model,
+    videoInfoFeatureSettings?.provider,
+  ]);
   const activeToolProvider: CreatorLLMProvider =
     activeTool === "video_info" ? resolvedVideoInfoProvider : resolvedShortsProvider;
   const activeToolModel = activeTool === "video_info" ? resolvedVideoInfoModel : resolvedShortsModel;
+  const videoInfoApiKeySource =
+    videoInfoAiConfig?.provider === resolvedVideoInfoProvider && videoInfoAiConfig.hasApiKey
+      ? videoInfoAiConfig.apiKeySource
+      : undefined;
+  const shortsApiKeySource =
+    shortsAiConfig?.provider === resolvedShortsProvider && shortsAiConfig.hasApiKey ? shortsAiConfig.apiKeySource : undefined;
   const openAIApiKeySource =
-    videoInfoAiConfig?.provider === "openai" && videoInfoAiConfig.hasApiKey ? videoInfoAiConfig.apiKeySource : undefined;
+    resolvedVideoInfoProvider === "openai"
+      ? videoInfoApiKeySource
+      : resolvedShortsProvider === "openai"
+        ? shortsApiKeySource
+        : undefined;
   const geminiApiKeySource =
-    shortsAiConfig?.provider === "gemini" && shortsAiConfig.hasApiKey ? shortsAiConfig.apiKeySource : undefined;
-  const activeToolApiKeySource = activeTool === "video_info" ? openAIApiKeySource : geminiApiKeySource;
+    resolvedVideoInfoProvider === "gemini"
+      ? videoInfoApiKeySource
+      : resolvedShortsProvider === "gemini"
+        ? shortsApiKeySource
+        : undefined;
+  const activeToolApiKeySource = activeTool === "video_info" ? videoInfoApiKeySource : shortsApiKeySource;
   const hasActiveProviderApiKey = Boolean(activeToolApiKeySource);
   const maskedActiveProviderApiKey =
     activeToolProvider === "openai" && activeToolApiKeySource === "header"
@@ -3491,6 +3521,49 @@ export function CreatorHub({
                         </SelectTrigger>
                         <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
                           {(shortsAiConfig?.models ?? []).map((option) => (
+                            <SelectItem key={`${option.provider}:${option.value}`} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+
+                {activeTool === "video_info" && (
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Provider</label>
+                      <Select
+                        value={resolvedVideoInfoProvider}
+                        onValueChange={(value) => saveFeatureProvider("video_info", value as CreatorLLMProvider)}
+                        disabled={!videoInfoAiConfig || videoInfoAiConfig.allowedProviders.length === 0}
+                      >
+                        <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                          <SelectValue placeholder="Select provider" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                          {(videoInfoAiConfig?.allowedProviders ?? [resolvedVideoInfoProvider]).map((provider) => (
+                            <SelectItem key={provider} value={provider}>
+                              {getCreatorProviderLabel(provider)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <label className="block text-xs uppercase tracking-wider text-white/50 mb-2">Model</label>
+                      <Select
+                        value={resolvedVideoInfoModel}
+                        onValueChange={(value) => saveFeatureModel("video_info", value, resolvedVideoInfoProvider)}
+                        disabled={!videoInfoAiConfig || videoInfoAiConfig.models.length === 0}
+                      >
+                        <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
+                          <SelectValue placeholder="Select model" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                          {(videoInfoAiConfig?.models ?? []).map((option) => (
                             <SelectItem key={`${option.provider}:${option.value}`} value={option.value}>
                               {option.label}
                             </SelectItem>

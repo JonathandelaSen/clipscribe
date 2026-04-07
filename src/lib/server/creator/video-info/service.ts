@@ -31,13 +31,6 @@ export async function generateCreatorVideoInfo(
   }
 
   const resolvedConfig = resolveCreatorFeatureGenerationConfig("video_info", request.generationConfig);
-  if (resolvedConfig.provider !== "openai") {
-    throw new CreatorAIError("Video info still runs on OpenAI in this phase of the migration.", {
-      status: 400,
-      code: "provider_not_supported_for_feature",
-    });
-  }
-
   const { apiKey, apiKeySource } = resolveCreatorProviderApiKey(options.headers, resolvedConfig.provider);
   const { parsed, llmRun } = await runTrackedCreatorJson({
     apiKey,

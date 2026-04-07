@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createVideoInfoPromptCustomizationSnapshot } from "../../../src/lib/creator/prompt-customization";
-import { CREATOR_OPENAI_API_KEY_HEADER } from "../../../src/lib/creator/user-ai-settings";
+import {
+  CREATOR_GEMINI_API_KEY_HEADER,
+  CREATOR_OPENAI_API_KEY_HEADER,
+} from "../../../src/lib/creator/user-ai-settings";
 import type { CreatorVideoInfoGenerateRequest } from "../../../src/lib/creator/types";
 import { CreatorAIError } from "../../../src/lib/server/creator/shared/errors";
 import { normalizeVideoInfoGenerateRequest } from "../../../src/lib/server/creator/shared/request-normalizers";
@@ -228,22 +231,6 @@ test("generateCreatorVideoInfo surfaces provider authentication errors", async (
   }
 });
 
-test("generateCreatorVideoInfo rejects non-openai providers during this migration phase", async () => {
-  await assert.rejects(
-    generateCreatorVideoInfo(
-      {
-        ...baseRequest,
-        generationConfig: {
-          provider: "gemini",
-          model: "gemini-2.5-flash",
-        },
-      },
-      { headers: new Headers() }
-    ),
-    /still runs on OpenAI/i
-  );
-});
-
 test("generateCreatorVideoInfo returns packaging results and uses the video info-only prompt", async () => {
   const originalProvider = process.env.CREATOR_VIDEO_INFO_PROVIDER;
   const originalModel = process.env.CREATOR_VIDEO_INFO_MODEL;
@@ -298,6 +285,77 @@ test("generateCreatorVideoInfo returns packaging results and uses the video info
         assert.equal(payload.llmRun?.status, "success");
         assert.equal(payload.llmRun?.feature, "video_info");
         assert.equal(payload.llmRun?.provider, "openai");
+        assert.equal(payload.llmRun?.promptVersion, CREATOR_VIDEO_INFO_PROMPT_VERSION);
+        assert.equal(payload.llmRun?.estimatedCostSource, "estimated");
+      }
+    );
+  } finally {
+    process.env.CREATOR_VIDEO_INFO_PROVIDER = originalProvider;
+    process.env.CREATOR_VIDEO_INFO_MODEL = originalModel;
+  }
+});
+
+test("generateCreatorVideoInfo supports Gemini and preserves provider traces", async () => {
+  const originalProvider = process.env.CREATOR_VIDEO_INFO_PROVIDER;
+  const originalModel = process.env.CREATOR_VIDEO_INFO_MODEL;
+  process.env.CREATOR_VIDEO_INFO_PROVIDER = "gemini";
+  process.env.CREATOR_VIDEO_INFO_MODEL = "gemini-2.5-flash";
+  try {
+    await withMockFetch(
+      async (input, init) => {
+        assert.match(String(input), /generativelanguage\.googleapis\.com/);
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          model?: string;
+          messages?: Array<{ role: string; content: string }>;
+        };
+        const userMessage = body.messages?.find((message) => message.role === "user")?.content ?? "";
+        assert.equal(body.model, "gemini-2.5-flash");
+        assert.match(userMessage, /youtube\.titleIdeas/i);
+        assert.doesNotMatch(userMessage, /shortsPlans/i);
+
+        return new Response(
+          JSON.stringify({
+            usage: {
+              prompt_tokens: 120,
+              completion_tokens: 40,
+              total_tokens: 160,
+            },
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify(videoInfoModelResponse),
+                },
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        );
+      },
+      async () => {
+        const payload = await generateCreatorVideoInfo(
+          {
+            ...baseRequest,
+            generationConfig: {
+              provider: "gemini",
+              model: "gemini-2.5-flash",
+            },
+          },
+          {
+            headers: new Headers({
+              [CREATOR_GEMINI_API_KEY_HEADER]: "AIza-demo",
+            }),
+          }
+        );
+
+        assert.equal(payload.response.providerMode, "gemini");
+        assert.equal(payload.response.model, "gemini-2.5-flash");
+        assert.equal(payload.llmRun?.provider, "gemini");
+        assert.equal(payload.llmRun?.model, "gemini-2.5-flash");
         assert.equal(payload.llmRun?.promptVersion, CREATOR_VIDEO_INFO_PROMPT_VERSION);
         assert.equal(payload.llmRun?.estimatedCostSource, "estimated");
       }

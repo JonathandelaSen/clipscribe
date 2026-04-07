@@ -12,7 +12,7 @@ export const CREATOR_PROVIDER_LABELS: Record<CreatorLLMProvider, string> = {
 
 export const CREATOR_DEFAULT_PROVIDER_BY_FEATURE: Record<CreatorLLMFeature, CreatorLLMProvider> = {
   shorts: "gemini",
-  video_info: "openai",
+  video_info: "gemini",
 };
 
 const CURATED_CREATOR_MODEL_OPTIONS: Record<CreatorLLMProvider, CreatorFeatureModelOption[]> = {
@@ -71,4 +71,3 @@ export function getCreatorProviderLabel(provider: CreatorLLMProvider): string {
 export function getCreatorPendingModelLabel(provider: CreatorLLMProvider): string {
   return `${getCreatorProviderLabel(provider)} pending`;
 }
-

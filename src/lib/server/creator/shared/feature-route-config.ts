@@ -1,4 +1,5 @@
 import type { CreatorLLMFeature, CreatorTextFeatureConfigResponse } from "../../../creator/types";
+import { sanitizeCreatorProvider } from "../../../creator/ai";
 import { resolveCreatorProviderApiKey } from "./api-key";
 import { readCreatorFeatureEnvConfig } from "./feature-config";
 import { getCreatorProviderFallbackModels, listOpenAICompatModels } from "./provider-registry";
@@ -29,9 +30,10 @@ function dedupeModels(
 export async function loadCreatorTextFeatureConfig(
   feature: CreatorLLMFeature,
   headers: Pick<Headers, "get">,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  requestedProvider?: string
 ): Promise<CreatorTextFeatureConfigResponse> {
-  const envConfig = readCreatorFeatureEnvConfig(feature);
+  const envConfig = readCreatorFeatureEnvConfig(feature, sanitizeCreatorProvider(requestedProvider));
   const fallbackModels = getCreatorProviderFallbackModels(envConfig.provider);
   let apiKeySource: CreatorTextFeatureConfigResponse["apiKeySource"];
   let hasApiKey = false;
@@ -51,6 +53,7 @@ export async function loadCreatorTextFeatureConfig(
       feature,
       provider: envConfig.provider,
       defaultProvider: envConfig.defaultProvider,
+      allowedProviders: [...envConfig.allowedProviders],
       defaultModel: envConfig.defaultModel,
       temperature: envConfig.temperature,
       models,
@@ -63,6 +66,7 @@ export async function loadCreatorTextFeatureConfig(
       feature,
       provider: envConfig.provider,
       defaultProvider: envConfig.defaultProvider,
+      allowedProviders: [...envConfig.allowedProviders],
       defaultModel: envConfig.defaultModel,
       temperature: envConfig.temperature,
       models: dedupeModels(envConfig.defaultModel, fallbackModels),
