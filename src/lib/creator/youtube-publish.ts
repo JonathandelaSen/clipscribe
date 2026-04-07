@@ -39,6 +39,7 @@ export interface YouTubeProjectExportOption {
   outputAssetId: string;
   sourceAssetId?: string;
   shortProjectId?: string;
+  displayName: string;
   filename: string;
   createdAt: number;
   kind: ProjectExportRecord["kind"];
@@ -319,6 +320,10 @@ export function getEligibleYouTubeProjectExports(
           outputAssetId: record.outputAssetId,
           sourceAssetId: record.sourceAssetId,
           shortProjectId: record.shortProjectId,
+          displayName:
+            record.kind === "short"
+              ? record.shortProjectName?.trim() || record.plan?.title?.trim() || record.short?.title?.trim() || record.filename || asset.filename
+              : record.filename || asset.filename,
           filename: record.filename || asset.filename,
           createdAt: record.createdAt,
           kind: record.kind,

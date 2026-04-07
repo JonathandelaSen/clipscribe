@@ -37,7 +37,7 @@ test("AI suggestion defaults preload intro and outro overlay text", () => {
   });
 
   assert.equal(intro.enabled, true);
-  assert.equal(intro.text, samplePlan.title);
+  assert.equal(intro.text, samplePlan.openingText);
   assert.equal(intro.startOffsetSeconds, 0);
   assert.equal(outro.enabled, true);
   assert.equal(outro.text, samplePlan.endCardText);
@@ -65,6 +65,7 @@ test("manual editor hydration keeps overlays disabled when missing", () => {
   assert.equal(hydrated.outroOverlay?.enabled, false);
   assert.equal(hydrated.introOverlay?.text, "");
   assert.equal(hydrated.outroOverlay?.text, "");
+  assert.deepEqual(hydrated.visualSource, { mode: "original" });
 });
 
 test("manual editor hydration clamps zoom into the UI-supported range", () => {
@@ -85,6 +86,35 @@ test("manual editor hydration clamps zoom into the UI-supported range", () => {
   );
 
   assert.equal(hydrated.zoom, 1);
+});
+
+test("editor hydration preserves visual source override when present", () => {
+  const hydrated = hydrateCreatorShortEditorState(
+    {
+      zoom: 1.2,
+      panX: 10,
+      panY: -5,
+      subtitleScale: 1,
+      subtitleXPositionPct: 50,
+      subtitleYOffsetPct: 78,
+      visualSource: {
+        mode: "asset",
+        assetId: "asset_visual_1",
+        kind: "image",
+      },
+    },
+    {
+      origin: "manual",
+      plan: samplePlan,
+      clipDurationSeconds: 22,
+    }
+  );
+
+  assert.deepEqual(hydrated.visualSource, {
+    mode: "asset",
+    assetId: "asset_visual_1",
+    kind: "image",
+  });
 });
 
 test("overlay windows clamp to clip duration instead of failing", () => {

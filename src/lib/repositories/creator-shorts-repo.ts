@@ -22,6 +22,7 @@ function toCreatorShortExportRecord(record: ProjectExportRecord): CreatorShortEx
   return {
     id: record.id,
     shortProjectId: record.shortProjectId || "",
+    shortProjectName: record.shortProjectName,
     projectId: record.projectId,
     sourceAssetId: record.sourceAssetId,
     outputAssetId: record.outputAssetId,
@@ -83,6 +84,7 @@ export function createDexieCreatorShortsRepository(database?: AudioTranscriberDB
         kind: "short",
         projectId: record.projectId,
         shortProjectId: record.shortProjectId,
+        shortProjectName: record.shortProjectName,
         sourceAssetId: record.sourceAssetId,
         outputAssetId: record.outputAssetId,
         createdAt: record.createdAt,

@@ -52,6 +52,7 @@ export interface CreatorShortProjectRecord {
 export interface CreatorShortExportRecord {
   id: string;
   shortProjectId: string;
+  shortProjectName?: string;
   projectId: string;
   sourceAssetId?: string;
   outputAssetId?: string;

@@ -1270,7 +1270,7 @@ export function YouTubeUploadHub({
                           ) : (
                             eligibleExportOptions.map((option) => (
                               <SelectItem key={option.exportId} value={option.exportId}>
-                                {option.filename} • {option.kind} • {formatRelativeDate(option.createdAt)}
+                                {option.displayName} • {option.kind} • {formatRelativeDate(option.createdAt)}
                               </SelectItem>
                             ))
                           )}
@@ -1508,7 +1508,10 @@ export function YouTubeUploadHub({
                       </div>
                       {selectedExportOption ? (
                         <div className="space-y-2">
-                          <h3 className="text-xl font-semibold text-white">{selectedExportOption.filename}</h3>
+                          <h3 className="text-xl font-semibold text-white">{selectedExportOption.displayName}</h3>
+                          {selectedExportOption.displayName !== selectedExportOption.filename ? (
+                            <div className="text-xs text-zinc-500">{selectedExportOption.filename}</div>
+                          ) : null}
                           <div className="text-xs text-zinc-500">{selectedSourceLabel}</div>
                         </div>
                       ) : (

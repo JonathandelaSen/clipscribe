@@ -224,6 +224,9 @@ function createProgressTimer(input: {
 export interface RequestSystemCreatorShortExportInput {
   sourceFile: File;
   sourceFilename: string;
+  visualSourceFile?: File | null;
+  visualSourceKind?: "video" | "image";
+  shortName?: string;
   short?: CreatorSuggestedShort;
   clip?: CreatorViralClip;
   plan?: CreatorShortPlan;
@@ -474,9 +477,17 @@ export async function requestSystemCreatorShortExport(
   const payload: CreatorShortSystemExportPayload = {
     renderRequestId,
     sourceFilename: input.sourceFilename,
+    shortName: input.shortName?.trim() || undefined,
     short: adjustedShort,
     editor: input.editor,
     sourceVideoSize: input.sourceVideoSize,
+    visualSource:
+      input.visualSourceFile && input.visualSourceKind
+        ? {
+            kind: input.visualSourceKind,
+            filename: input.visualSourceFile.name,
+          }
+        : null,
     sourceTrim:
       trimResult.trimmedOffsetSeconds > 0 && trimResult.trimmedDurationSeconds > 0
         ? {
@@ -499,6 +510,13 @@ export async function requestSystemCreatorShortExport(
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.engine, "system");
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.payload, JSON.stringify(payload));
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.sourceFile, trimResult.trimmedFile, trimResult.trimmedFile.name);
+  if (input.visualSourceFile && input.visualSourceKind) {
+    formData.set(
+      CREATOR_SYSTEM_EXPORT_FORM_FIELDS.visualSourceFile,
+      input.visualSourceFile,
+      input.visualSourceFile.name
+    );
+  }
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, JSON.stringify(overlayDescriptors));
   const requestAssemblyMs = roundMs(nowMs() - requestAssemblyStartedAt);
   logDebug(`Server render request id: ${renderRequestId}.`);
@@ -644,7 +662,7 @@ export async function requestSystemCreatorShortExport(
     setBrowserRenderStage(input.renderLifecycle, "handoff");
     emitProgress(PROGRESS.responseRead);
     const metadata = parseCreatorShortSystemExportResponseHeaders(response.headers, {
-      filename: buildCreatorShortExportFilename(input.sourceFilename, short),
+      filename: buildCreatorShortExportFilename(input.sourceFilename, short, input.shortName),
     });
     logDebug(
       `Response headers received after ${postMs}ms: renderMode=${metadata.renderModeUsed}, encoder=${metadata.encoderUsed}.`

@@ -5,7 +5,9 @@ import { createEditorAssetRecord } from "../../../src/lib/editor/storage";
 import {
   getActiveProjectSourceAsset,
   getSelectableProjectSourceAssets,
+  getSelectableProjectVisualAssets,
   isSelectableProjectSourceAsset,
+  isSelectableProjectVisualAsset,
 } from "../../../src/lib/projects/source-assets";
 import type { ProjectAssetRecord } from "../../../src/lib/projects/types";
 
@@ -76,5 +78,21 @@ test("selectable project sources include audio and video but exclude images", ()
   assert.deepEqual(
     getSelectableProjectSourceAssets(assets).map((asset) => asset.id),
     ["asset_audio", "asset_video"]
+  );
+});
+
+test("selectable project visuals include videos and images but exclude audio", () => {
+  const assets = [
+    createAsset({ id: "asset_audio", kind: "audio" }),
+    createAsset({ id: "asset_video", kind: "video", role: "derived" }),
+    createAsset({ id: "asset_image", kind: "image", role: "support" }),
+  ];
+
+  assert.equal(isSelectableProjectVisualAsset(assets[0]!), false);
+  assert.equal(isSelectableProjectVisualAsset(assets[1]!), true);
+  assert.equal(isSelectableProjectVisualAsset(assets[2]!), true);
+  assert.deepEqual(
+    getSelectableProjectVisualAssets(assets).map((asset) => asset.id),
+    ["asset_video", "asset_image"]
   );
 });

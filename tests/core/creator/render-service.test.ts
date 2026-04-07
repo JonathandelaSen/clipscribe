@@ -121,6 +121,25 @@ test("parseCreatorShortSystemExportFormData reads payload, source file, and over
   assert.equal(parsed.overlays[0]?.file.name, "overlay.png");
 });
 
+test("parseCreatorShortSystemExportFormData reads an optional visual source file", () => {
+  const { formData } = createFormData();
+  const visualFile = new File(["image"], "replacement.png", { type: "image/png" });
+  const payload = {
+    ...createPayload(),
+    visualSource: {
+      kind: "image" as const,
+      filename: visualFile.name,
+    },
+  };
+  formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.payload, JSON.stringify(payload));
+  formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.visualSourceFile, visualFile, visualFile.name);
+
+  const parsed = parseCreatorShortSystemExportFormData(formData);
+
+  assert.equal(parsed.visualSourceFile?.name, "replacement.png");
+  assert.equal(parsed.payload.visualSource?.kind, "image");
+});
+
 test("parseCreatorShortSystemExportFormData rejects missing source files", () => {
   const { formData } = createFormData();
   formData.delete(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.sourceFile);
@@ -259,6 +278,62 @@ test("renderCreatorShortSystemExport returns bytes and cleans up temp files on s
     true
   );
   await assert.rejects(() => access(tempRoot));
+});
+
+test("renderCreatorShortSystemExport forwards replacement visual metadata to the renderer", async () => {
+  const { payload, sourceFile } = createFormData();
+  const visualSourceFile = new File(["video"], "replacement.mp4", { type: "video/mp4" });
+  let receivedVisualPath = "";
+  let receivedVisualKind = "";
+
+  await renderCreatorShortSystemExport(
+    {
+      payload: {
+        ...payload,
+        visualSource: {
+          kind: "video",
+          filename: visualSourceFile.name,
+        },
+      },
+      sourceFile,
+      visualSourceFile,
+      overlays: [],
+    },
+    {
+      exportShort: async (input) => {
+        receivedVisualPath = input.visualSourceFilePath ?? "";
+        receivedVisualKind = input.visualSourceKind ?? "";
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(256, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 256,
+          durationSeconds: 20,
+          subtitleBurnedIn: false,
+          renderModeUsed: "png_parity",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 12,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 20,
+        audioDurationSeconds: 20,
+        videoFrameCount: 600,
+      }),
+    }
+  );
+
+  assert.match(receivedVisualPath, /replacement\.mp4$/);
+  assert.equal(receivedVisualKind, "video");
 });
 
 test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed uploads", async () => {

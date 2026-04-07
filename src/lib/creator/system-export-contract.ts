@@ -13,6 +13,7 @@ export const CREATOR_SYSTEM_EXPORT_FORM_FIELDS = {
   payload: "payload",
   engine: "engine",
   sourceFile: "source_file",
+  visualSourceFile: "visual_source_file",
   overlays: "overlays",
 } as const;
 
@@ -55,9 +56,14 @@ export interface CreatorShortSystemExportOverlaySummary {
 export interface CreatorShortSystemExportPayload {
   renderRequestId?: string;
   sourceFilename: string;
+  shortName?: string;
   short: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
+  visualSource?: {
+    kind: "video" | "image";
+    filename: string;
+  } | null;
   sourceTrim?: {
     requestedOffsetSeconds: number;
     requestedDurationSeconds: number;

@@ -151,7 +151,9 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       assets.map((asset) => {
         const blockers: string[] = [];
         const hasTranscript = projectHistory.some((item) => item.id === asset.id && item.transcripts.length > 0);
-        const usedInShorts = shortProjects.some((item) => item.sourceAssetId === asset.id);
+        const usedInShorts = shortProjects.some(
+          (item) => item.sourceAssetId === asset.id || item.editor?.visualSource?.assetId === asset.id
+        );
         const usedInTimeline = Boolean(
           project &&
             (
@@ -255,7 +257,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     router.replace(`/projects/${encodeURIComponent(project.id)}?${nextParams.toString()}`);
   };
 
-  if (isLoading) {
+  if (isLoading && !project) {
     return (
       <main className="px-4 py-10 flex-1">
         <div className="mx-auto max-w-6xl rounded-3xl border border-white/10 bg-black/30 p-8 text-white/60">Loading project…</div>
@@ -263,7 +265,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     );
   }
 
-  if (!project || error) {
+  if (!project) {
     return (
       <main className="px-4 py-10 flex-1">
         <div className="mx-auto max-w-6xl rounded-3xl border border-red-400/20 bg-red-500/10 p-8 text-red-100">
@@ -284,6 +286,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
         "flex w-full flex-col flex-1",
         currentTab === "timeline" ? "" : "gap-6 pt-2"
       )}>
+        {error && (
+          <div className="rounded-2xl border border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            {error}
+          </div>
+        )}
 
         <div className={cn(
           "flex-1 w-full",
@@ -452,6 +459,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
               projectId={project.id}
               initialSourceAssetId={activeSourceAsset?.id}
               initialView="start"
+              onProjectAssetsChanged={() => void refresh()}
               sourceAssetFallback={
                 activeSourceAsset
                   ? {

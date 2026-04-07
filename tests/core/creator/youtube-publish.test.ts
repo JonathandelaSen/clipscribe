@@ -310,6 +310,7 @@ test("getEligibleYouTubeProjectExports only returns completed video exports back
   assert.deepEqual(results.map((item) => item.exportId), ["export_ok"]);
   assert.equal(results[0]?.sourceAssetId, eligible.sourceAssetId);
   assert.equal(results[0]?.durationSeconds, asset.durationSeconds);
+  assert.equal(results[0]?.displayName, eligible.filename);
 });
 
 test("getEligibleYouTubeProjectExports preserves short suggestion metadata for publish prefill", () => {
@@ -320,6 +321,7 @@ test("getEligibleYouTubeProjectExports preserves short suggestion metadata for p
     kind: "short",
     outputAssetId: asset.id,
     shortProjectId: "short_project_1",
+    shortProjectName: "Gemma 4 resumen",
     short: {
       id: "short_1",
       startSeconds: 0,
@@ -347,6 +349,7 @@ test("getEligibleYouTubeProjectExports preserves short suggestion metadata for p
   const [result] = getEligibleYouTubeProjectExports([exportRecord], assetsById);
   assert.equal(result?.shortProjectId, "short_project_1");
   assert.equal(result?.short?.title, "Short suggestion title");
+  assert.equal(result?.displayName, "Gemma 4 resumen");
 });
 
 test("getEligibleYouTubeProjectAssets only returns project videos backed by blobs", () => {
@@ -402,6 +405,7 @@ test("resolveInitialYouTubePublishSelection honors valid deep links and falls ba
           exportId: "export_1",
           projectId: "project_1",
           outputAssetId: "asset_1",
+          displayName: "Clip corto",
           filename: "clip.mp4",
           createdAt: 1_000,
           kind: "short" as const,

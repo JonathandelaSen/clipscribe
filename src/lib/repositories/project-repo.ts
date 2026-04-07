@@ -176,6 +176,7 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
         [
           database.projectAssets,
           database.assetTranscripts,
+          database.projectShorts,
           database.projectVoiceovers,
           database.projectExports,
           database.projectYouTubeUploads,
@@ -190,6 +191,29 @@ export function createDexieProjectRepository(database: AudioTranscriberDB = db):
             .toArray();
           const linkedExportIds = linkedExports.map((record) => record.id);
           await database.projectExports.bulkDelete(linkedExportIds);
+          const shortsToSanitize = await database.projectShorts
+            .filter((record) => record.editor?.visualSource?.assetId === assetId)
+            .toArray();
+          if (shortsToSanitize.length > 0) {
+            await database.projectShorts.bulkPut(
+              shortsToSanitize.map((record) => ({
+                ...record,
+                editor: hydrateCreatorShortEditorState(
+                  {
+                    ...record.editor,
+                    visualSource: {
+                      mode: "original",
+                    },
+                  },
+                  {
+                    origin: record.origin,
+                    short: record.short,
+                    clipDurationSeconds: record.short?.durationSeconds,
+                  }
+                ),
+              }))
+            );
+          }
 
           const uploadsToSanitize = await database.projectYouTubeUploads
             .filter(

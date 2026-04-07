@@ -311,6 +311,7 @@ export function restoreShortProjectAfterCanceledExport(
 export function buildCompletedShortExportRecord(input: {
   id: string;
   shortProjectId: string;
+  shortProjectName?: string;
   projectId: string;
   sourceAssetId?: string;
   outputAssetId?: string;
@@ -339,6 +340,7 @@ export function buildCompletedShortExportRecord(input: {
   return {
     id: input.id,
     shortProjectId: input.shortProjectId,
+    shortProjectName: input.shortProjectName,
     projectId: input.projectId,
     sourceAssetId: input.sourceAssetId,
     outputAssetId: input.outputAssetId,

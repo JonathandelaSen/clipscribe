@@ -30,6 +30,7 @@ export interface ParsedCreatorShortSystemExportFormData {
   engine: "system";
   payload: CreatorShortSystemExportPayload;
   sourceFile: File;
+  visualSourceFile?: File;
   overlays: Array<{
     descriptor: CreatorShortSystemExportOverlayDescriptor;
     file: File;
@@ -182,6 +183,10 @@ function parsePayload(value: unknown): CreatorShortSystemExportPayload {
       typeof value.renderRequestId === "string" && value.renderRequestId.trim()
         ? value.renderRequestId.trim()
         : undefined,
+    shortName:
+      typeof value.shortName === "string" && value.shortName.trim()
+        ? value.shortName.trim()
+        : undefined,
     sourceTrim:
       isRecord(value.sourceTrim) &&
       Number.isFinite(Number(value.sourceTrim.requestedOffsetSeconds)) &&
@@ -191,6 +196,16 @@ function parsePayload(value: unknown): CreatorShortSystemExportPayload {
         ? {
             requestedOffsetSeconds: Number(value.sourceTrim.requestedOffsetSeconds),
             requestedDurationSeconds: Number(value.sourceTrim.requestedDurationSeconds),
+          }
+        : null,
+    visualSource:
+      isRecord(value.visualSource) &&
+      (value.visualSource.kind === "video" || value.visualSource.kind === "image") &&
+      typeof value.visualSource.filename === "string" &&
+      value.visualSource.filename.trim()
+        ? {
+            kind: value.visualSource.kind,
+            filename: value.visualSource.filename.trim(),
           }
         : null,
     subtitleRenderMode: value.subtitleRenderMode === "fast_ass" ? "fast_ass" : "png_parity",
@@ -296,6 +311,10 @@ export function parseCreatorShortSystemExportFormData(formData: FormData): Parse
   if (!(sourceFileValue instanceof File)) {
     throw new Error("source_file is required.");
   }
+  const visualSourceFileValue = formData.get(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.visualSourceFile);
+  if (visualSourceFileValue != null && !(visualSourceFileValue instanceof File)) {
+    throw new Error("visual_source_file must be a file when provided.");
+  }
 
   const rawDescriptors = parseJson<unknown[]>(
     formData.get(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.overlays),
@@ -317,6 +336,7 @@ export function parseCreatorShortSystemExportFormData(formData: FormData): Parse
     engine: "system",
     payload,
     sourceFile: sourceFileValue,
+    visualSourceFile: visualSourceFileValue instanceof File ? visualSourceFileValue : undefined,
     overlays,
   };
 }
@@ -325,6 +345,7 @@ export async function renderCreatorShortSystemExport(
   input: {
     payload: CreatorShortSystemExportPayload;
     sourceFile: File;
+    visualSourceFile?: File;
     overlays: Array<{
       descriptor: CreatorShortSystemExportOverlayDescriptor;
       file: File;
@@ -355,6 +376,19 @@ export async function renderCreatorShortSystemExport(
     const writeStartedAt = performance.now();
     const sourceBytes = new Uint8Array(await input.sourceFile.arrayBuffer());
     await writeFile(sourcePath, sourceBytes);
+    let visualSourcePath: string | null = null;
+    let visualSourceBytesLength = 0;
+    if (input.visualSourceFile) {
+      const visualFilename = sanitizeFilenameSegment(
+        input.payload.visualSource?.filename || input.visualSourceFile.name,
+        "visual_source"
+      );
+      visualSourcePath = path.join(tempRoot, "visual_source", visualFilename);
+      await mkdir(path.dirname(visualSourcePath), { recursive: true });
+      const visualBytes = new Uint8Array(await input.visualSourceFile.arrayBuffer());
+      visualSourceBytesLength = visualBytes.byteLength;
+      await writeFile(visualSourcePath, visualBytes);
+    }
 
     const preparedOverlays: CreatorSystemRenderOverlayInput[] = [];
     let overlayBytesTotal = 0;
@@ -390,20 +424,39 @@ export async function renderCreatorShortSystemExport(
       videoDurationSeconds: 0,
       audioDurationSeconds: 0,
     };
-    try {
-      sourcePlaybackProfile = await detectSourcePlaybackProfile(sourcePath);
+    if (input.payload.visualSource?.kind === "image") {
+      sourcePlaybackProfile = {
+        mode: "still",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 0,
+        audioDurationSeconds: 0,
+      };
       input.onProgressEvent?.({
         stage: "setup",
-        message:
-          sourcePlaybackProfile.mode === "still"
-            ? `Detected still-video source profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}); using static-video render path.`
-            : `Detected normal source playback profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}).`,
+        message: "Using static image visual override; original source audio remains authoritative for the short.",
       });
-    } catch (error) {
+    } else if (visualSourcePath) {
       input.onProgressEvent?.({
         stage: "setup",
-        message: `Source playback profiling unavailable: ${error instanceof Error ? error.message : "unknown error"}; continuing with normal render path.`,
+        message: "Using replacement video visual override; original source audio remains authoritative for the short.",
       });
+    } else {
+      try {
+        sourcePlaybackProfile = await detectSourcePlaybackProfile(sourcePath);
+        input.onProgressEvent?.({
+          stage: "setup",
+          message:
+            sourcePlaybackProfile.mode === "still"
+              ? `Detected still-video source profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}); using static-video render path.`
+              : `Detected normal source playback profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}).`,
+        });
+      } catch (error) {
+        input.onProgressEvent?.({
+          stage: "setup",
+          message: `Source playback profiling unavailable: ${error instanceof Error ? error.message : "unknown error"}; continuing with normal render path.`,
+        });
+      }
     }
 
     const trimLeadInCompensationSeconds = resolveTrimLeadInCompensationSeconds({
@@ -508,7 +561,10 @@ export async function renderCreatorShortSystemExport(
 
     input.onProgressEvent?.({
       stage: "setup",
-      message: `Server temp files ready in ${Number(tempFileWriteMs.toFixed(2))}ms (source=${sourceBytes.byteLength}B, overlays=${overlayBytesTotal}B).`,
+      message:
+        `Server temp files ready in ${Number(tempFileWriteMs.toFixed(2))}ms (` +
+        `source=${sourceBytes.byteLength}B, ` +
+        `visual=${visualSourceBytesLength}B, overlays=${overlayBytesTotal}B).`,
     });
 
     const outputPath = path.join(tempRoot, "output", "short_export.mp4");
@@ -522,7 +578,10 @@ export async function renderCreatorShortSystemExport(
     let lastLoggedProgress = -1;
     const result = await exportShort({
       sourceFilePath: sourcePath,
+      visualSourceFilePath: visualSourcePath,
+      visualSourceKind: input.payload.visualSource?.kind ?? null,
       sourceFilename: input.payload.sourceFilename,
+      shortName: input.payload.shortName,
       short: effectiveShort,
       editor: input.payload.editor,
       sourceVideoSize: input.payload.sourceVideoSize,

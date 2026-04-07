@@ -92,6 +92,7 @@ export interface ProjectExportRecord {
   kind: ProjectExportKind;
   sourceAssetId?: string;
   shortProjectId?: string;
+  shortProjectName?: string;
   outputAssetId?: string;
   createdAt: number;
   status: ProjectExportStatus;

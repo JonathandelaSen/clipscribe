@@ -2,6 +2,7 @@ import type {
   CreatorShortEditorState,
   CreatorShortPlan,
   CreatorSuggestedShort,
+  CreatorShortVisualAssetKind,
   CreatorTextOverlayPreset,
   CreatorTextOverlayState,
 } from "@/lib/creator/types";
@@ -147,6 +148,10 @@ export function hydrateCreatorShortEditorState(
   input: Partial<CreatorShortEditorState> | undefined,
   options: HydrateTextOverlayOptions = {}
 ): CreatorShortEditorState {
+  const visualSourceKind: CreatorShortVisualAssetKind | undefined =
+    input?.visualSource?.kind === "video" || input?.visualSource?.kind === "image"
+      ? input.visualSource.kind
+      : undefined;
   const zoom =
     typeof input?.zoom === "number" && Number.isFinite(input.zoom)
       ? Math.min(4, Math.max(1, input.zoom))
@@ -186,6 +191,16 @@ export function hydrateCreatorShortEditorState(
       input?.subtitleStyle && typeof input.subtitleStyle === "object" ? input.subtitleStyle : {},
     introOverlay: hydrateCreatorTextOverlayState("intro", input?.introOverlay, options),
     outroOverlay: hydrateCreatorTextOverlayState("outro", input?.outroOverlay, options),
+    visualSource:
+      input?.visualSource?.mode === "asset" && typeof input.visualSource.assetId === "string" && input.visualSource.assetId.trim()
+        ? {
+            mode: "asset",
+            assetId: input.visualSource.assetId.trim(),
+            kind: visualSourceKind,
+          }
+        : {
+            mode: "original",
+          },
   };
 }
 

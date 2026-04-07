@@ -43,7 +43,10 @@ export interface CreatorSystemRenderOverlayInput {
 
 export interface CreatorSystemRenderInput {
   sourceFilePath: string;
+  visualSourceFilePath?: string | null;
+  visualSourceKind?: "video" | "image" | null;
   sourceFilename: string;
+  shortName?: string;
   short: CreatorSuggestedShort;
   editor: CreatorShortEditorState;
   sourceVideoSize: { width: number; height: number };
@@ -554,6 +557,8 @@ function hasMeaningfulFfmpegStartupProgress(input: {
 
 export function buildCreatorSystemRenderCommand(input: {
   sourceFilePath: string;
+  visualSourceFilePath?: string | null;
+  visualSourceKind?: "video" | "image" | null;
   short: CreatorSuggestedShort;
   sourceVideoSize: { width: number; height: number };
   geometry: CreatorSystemRenderInput["geometry"];
@@ -575,6 +580,9 @@ export function buildCreatorSystemRenderCommand(input: {
   encoderUsed: string;
 } {
   const clipDuration = Math.max(0.5, input.short.endSeconds - input.short.startSeconds);
+  const hasVisualOverride = Boolean(input.visualSourceFilePath);
+  const isReplacementVideo = hasVisualOverride && input.visualSourceKind === "video";
+  const isReplacementImage = hasVisualOverride && input.visualSourceKind === "image";
   const isStillSourcePlayback = input.sourcePlaybackMode === "still";
   const inputSeekSeconds = Math.max(0, input.short.startSeconds - FAST_SEEK_CUSHION_SECONDS);
   const exactTrimAfterSeekSeconds = Math.max(0, input.short.startSeconds - inputSeekSeconds);
@@ -582,35 +590,68 @@ export function buildCreatorSystemRenderCommand(input: {
   const postInputSeekSeconds =
     input.seekMode === "hybrid" ? exactTrimAfterSeekSeconds : input.short.startSeconds;
   const overlayInputArgs = input.overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]);
-  const filterArgs = isStillSourcePlayback
-    ? (() => {
-        const stillBaseFilter = `${input.geometry.filter},format=yuv420p,tpad=stop_mode=clone:stop_duration=${clipDuration.toFixed(3)}`;
-        const filterGraph = buildOverlayFilterGraph({
-          baseInputLabel: "0:v",
-          baseFilter: stillBaseFilter,
-          overlays: input.overlays,
-          subtitleTrackPath: input.subtitleTrackPath,
-          overlayInputStartIndex: 2,
-        });
-        return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "1:a?"];
-      })()
-    : input.overlays.length > 0
-      ? (() => {
-          const filterGraph = buildOverlayFilterGraph({
-            baseFilter: input.geometry.filter,
-            overlays: input.overlays,
-            subtitleTrackPath: input.subtitleTrackPath,
-          });
-          return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "0:a?"];
-        })()
-      : (() => {
-          const videoFilter = input.subtitleTrackPath
-            ? `${input.geometry.filter},${buildAssFilterExpression(input.subtitleTrackPath)}`
-            : input.geometry.filter;
-          return ["-vf", videoFilter, "-map", "0:v", "-map", "0:a?"];
-        })();
+  const buildOverrideFilterArgs = (
+    inputIndexForVideo: string,
+    audioMapLabel: string,
+    baseFilter: string,
+    overlayInputStartIndex: number
+  ) => {
+    if (input.overlays.length > 0) {
+      const filterGraph = buildOverlayFilterGraph({
+        baseInputLabel: inputIndexForVideo,
+        baseFilter,
+        overlays: input.overlays,
+        subtitleTrackPath: input.subtitleTrackPath,
+        overlayInputStartIndex,
+      });
+      return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", audioMapLabel];
+    }
 
-  const ffmpegArgs = isStillSourcePlayback
+    const videoFilter = input.subtitleTrackPath
+      ? `${baseFilter},${buildAssFilterExpression(input.subtitleTrackPath)}`
+      : baseFilter;
+    return ["-vf", videoFilter, "-map", inputIndexForVideo, "-map", audioMapLabel];
+  };
+
+  const filterArgs =
+    isReplacementImage
+      ? buildOverrideFilterArgs("0:v", "1:a?", input.geometry.filter, 2)
+      : isReplacementVideo
+        ? buildOverrideFilterArgs(
+            "0:v",
+            "1:a?",
+            `${input.geometry.filter},tpad=stop_mode=clone:stop_duration=${clipDuration.toFixed(3)}`,
+            2
+          )
+        : isStillSourcePlayback
+          ? (() => {
+              const stillBaseFilter = `${input.geometry.filter},format=yuv420p,tpad=stop_mode=clone:stop_duration=${clipDuration.toFixed(3)}`;
+              const filterGraph = buildOverlayFilterGraph({
+                baseInputLabel: "0:v",
+                baseFilter: stillBaseFilter,
+                overlays: input.overlays,
+                subtitleTrackPath: input.subtitleTrackPath,
+                overlayInputStartIndex: 2,
+              });
+              return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "1:a?"];
+            })()
+          : input.overlays.length > 0
+            ? (() => {
+                const filterGraph = buildOverlayFilterGraph({
+                  baseFilter: input.geometry.filter,
+                  overlays: input.overlays,
+                  subtitleTrackPath: input.subtitleTrackPath,
+                });
+                return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "0:a?"];
+              })()
+            : (() => {
+                const videoFilter = input.subtitleTrackPath
+                  ? `${input.geometry.filter},${buildAssFilterExpression(input.subtitleTrackPath)}`
+                  : input.geometry.filter;
+                return ["-vf", videoFilter, "-map", "0:v", "-map", "0:a?"];
+              })();
+
+  const ffmpegArgs = isReplacementImage
     ? [
         "-hide_banner",
         "-nostdin",
@@ -622,8 +663,10 @@ export function buildCreatorSystemRenderCommand(input: {
         "pipe:2",
         "-benchmark_all",
         input.overwrite ? "-y" : "-n",
+        "-loop",
+        "1",
         "-i",
-        input.sourceFilePath,
+        input.visualSourceFilePath!,
         "-ss",
         String(input.short.startSeconds),
         "-i",
@@ -641,35 +684,97 @@ export function buildCreatorSystemRenderCommand(input: {
         "+faststart",
         input.outputPath,
       ]
-    : [
-        "-hide_banner",
-        "-nostdin",
-        "-v",
-        "info",
-        "-stats_period",
-        "0.5",
-        "-progress",
-        "pipe:2",
-        "-benchmark_all",
-        input.overwrite ? "-y" : "-n",
-        ...preInputSeek,
-        "-i",
-        input.sourceFilePath,
-        ...overlayInputArgs,
-        "-ss",
-        String(postInputSeekSeconds),
-        "-t",
-        String(clipDuration),
-        ...filterArgs,
-        ...input.videoEncoder.outputArgs,
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-movflags",
-        "+faststart",
-        input.outputPath,
-      ];
+    : isReplacementVideo
+      ? [
+          "-hide_banner",
+          "-nostdin",
+          "-v",
+          "info",
+          "-stats_period",
+          "0.5",
+          "-progress",
+          "pipe:2",
+          "-benchmark_all",
+          input.overwrite ? "-y" : "-n",
+          "-i",
+          input.visualSourceFilePath!,
+          "-ss",
+          String(input.short.startSeconds),
+          "-i",
+          input.sourceFilePath,
+          ...overlayInputArgs,
+          "-t",
+          String(clipDuration),
+          ...filterArgs,
+          ...input.videoEncoder.outputArgs,
+          "-c:a",
+          "aac",
+          "-b:a",
+          "128k",
+          "-movflags",
+          "+faststart",
+          input.outputPath,
+        ]
+      : isStillSourcePlayback
+        ? [
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "info",
+            "-stats_period",
+            "0.5",
+            "-progress",
+            "pipe:2",
+            "-benchmark_all",
+            input.overwrite ? "-y" : "-n",
+            "-i",
+            input.sourceFilePath,
+            "-ss",
+            String(input.short.startSeconds),
+            "-i",
+            input.sourceFilePath,
+            ...overlayInputArgs,
+            "-t",
+            String(clipDuration),
+            ...filterArgs,
+            ...input.videoEncoder.outputArgs,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            input.outputPath,
+          ]
+        : [
+            "-hide_banner",
+            "-nostdin",
+            "-v",
+            "info",
+            "-stats_period",
+            "0.5",
+            "-progress",
+            "pipe:2",
+            "-benchmark_all",
+            input.overwrite ? "-y" : "-n",
+            ...preInputSeek,
+            "-i",
+            input.sourceFilePath,
+            ...overlayInputArgs,
+            "-ss",
+            String(postInputSeekSeconds),
+            "-t",
+            String(clipDuration),
+            ...filterArgs,
+            ...input.videoEncoder.outputArgs,
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            input.outputPath,
+          ];
 
   const geometryCheck = assertExportGeometryInvariants(
     {
@@ -700,17 +805,23 @@ export function buildCreatorSystemRenderCommand(input: {
       "System short export via native ffmpeg.",
       `Render mode: ${input.renderModeUsed}.`,
       `Video encoder: ${input.videoEncoder.encoderUsed}${input.videoEncoder.isHardwareAccelerated ? " (hardware accelerated)" : ""}.`,
-      isStillSourcePlayback
-        ? "Source playback profile: still-video compatibility path using a static video frame plus independently seeked audio."
-        : "Source playback profile: normal timed video playback.",
+      isReplacementImage
+        ? "Visual override: static image composed over the full short while audio stays on the original source timeline."
+        : isReplacementVideo
+          ? "Visual override: replacement video starts at 0s, pads the last frame when needed, and keeps original source audio."
+          : isStillSourcePlayback
+            ? "Source playback profile: still-video compatibility path using a static video frame plus independently seeked audio."
+            : "Source playback profile: normal timed video playback.",
       `Geometry contract checks passed (scaleDelta=${geometryCheck.metrics.scaleDeltaPct.toFixed(4)}%, aspectDelta=${geometryCheck.metrics.aspectRatioDeltaPct.toFixed(4)}%).`,
-      input.seekMode === "still_static"
-        ? `Static-video mode enabled: reused the first video frame for ${clipDuration.toFixed(2)}s and seeked audio from ${input.short.startSeconds.toFixed(2)}s.`
-        : input.seekMode === "hybrid"
-        ? inputSeekSeconds > 0
-          ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
-          : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
-        : `Fallback exact-seek mode used from ${input.short.startSeconds.toFixed(2)}s for container compatibility.`,
+      isReplacementImage || isReplacementVideo
+        ? `Original source audio seeked from ${input.short.startSeconds.toFixed(2)}s while replacement visuals render for ${clipDuration.toFixed(2)}s.`
+        : input.seekMode === "still_static"
+          ? `Static-video mode enabled: reused the first video frame for ${clipDuration.toFixed(2)}s and seeked audio from ${input.short.startSeconds.toFixed(2)}s.`
+          : input.seekMode === "hybrid"
+            ? inputSeekSeconds > 0
+              ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
+              : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
+            : `Fallback exact-seek mode used from ${input.short.startSeconds.toFixed(2)}s for container compatibility.`,
       input.geometry.canvasWidth !== input.geometry.scaledWidth || input.geometry.canvasHeight !== input.geometry.scaledHeight
         ? `Geometry mode ${input.geometry.layoutMode ?? "zoom_out_pad"}: scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, padded canvas ${input.geometry.canvasWidth}x${input.geometry.canvasHeight} @ (${input.geometry.padX}, ${input.geometry.padY}), crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`
         : `Geometry mode ${input.geometry.layoutMode ?? "cover_crop"}: scaled frame ${input.geometry.scaledWidth}x${input.geometry.scaledHeight}, crop @ (${input.geometry.cropX}, ${input.geometry.cropY}).`,
@@ -796,6 +907,8 @@ export async function exportCreatorShortWithSystemFfmpeg(
           let attemptLastProgressSnapshot: FfmpegProgressSnapshot | null = null;
           builtCommand = buildCreatorSystemRenderCommand({
             sourceFilePath: input.sourceFilePath,
+            visualSourceFilePath: input.visualSourceFilePath,
+            visualSourceKind: input.visualSourceKind,
             short: input.short,
             sourceVideoSize: input.sourceVideoSize,
             geometry: input.geometry,
@@ -1018,7 +1131,7 @@ export async function exportCreatorShortWithSystemFfmpeg(
 
   return {
     outputPath,
-    filename: buildCreatorShortExportFilename(input.sourceFilename, input.short),
+    filename: buildCreatorShortExportFilename(input.sourceFilename, input.short, input.shortName),
     width: OUTPUT_WIDTH,
     height: OUTPUT_HEIGHT,
     sizeBytes: outputStats?.size ?? 0,

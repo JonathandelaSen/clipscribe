@@ -108,6 +108,32 @@ test("exportCreatorShortWithSystemFfmpeg returns render details for a successful
   assert.equal(result.renderModeUsed, "fast_ass");
 });
 
+test("exportCreatorShortWithSystemFfmpeg prefers the saved short name for the output filename", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = {
+    ...createRenderInput(tempDir),
+    shortName: "Gemma 4 resumen",
+  };
+  const result = await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      assert.ok(args.includes(input.outputPath));
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+
+  assert.equal(result.filename, "Gemma_4_resumen.mp4");
+});
+
 test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG overlays are present", async (t) => {
   const tempDir = await createTempDirectory();
   t.after(async () => {
@@ -258,6 +284,61 @@ test("exportCreatorShortWithSystemFfmpeg builds a static-video render path for s
 
   assert.match(result.notes.join("\n"), /still-video compatibility path/);
   assert.equal(result.encoderUsed, "libx264");
+});
+
+test("exportCreatorShortWithSystemFfmpeg uses a replacement video while keeping audio on the original source", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    visualSourceFilePath: "/media/replacement.mp4",
+    visualSourceKind: "video",
+    commandRunner: async (_, args) => {
+      assert.equal(args.filter((arg) => arg === "-i").length, 2);
+      assert.equal(args[args.indexOf("-i") + 1], "/media/replacement.mp4");
+      assert.match(args.join(" "), /-ss 12/);
+      assert.match(args.join(" "), /tpad=stop_mode=clone:stop_duration=20\.000/);
+      assert.ok(args.includes("1:a?"));
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg uses a replacement image while keeping audio on the original source", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    visualSourceFilePath: "/media/replacement.png",
+    visualSourceKind: "image",
+    sourcePlaybackMode: "still",
+    commandRunner: async (_, args) => {
+      assert.equal(args[args.indexOf("-loop") + 1], "1");
+      assert.equal(args[args.indexOf("-i") + 1], "/media/replacement.png");
+      assert.ok(args.includes("1:a?"));
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
 });
 
 test("exportCreatorShortWithSystemFfmpeg retries with exact seek after a hybrid seek failure", async (t) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type SyntheticEvent } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -113,6 +113,7 @@ import {
   resolveShortPreviewBoundary,
 } from "@/lib/creator/core/short-preview";
 import type { CreatorShortExportRecord, CreatorShortProjectRecord } from "@/lib/creator/storage";
+import { readMediaMetadata } from "@/lib/editor/media";
 import { createEditorAssetRecord } from "@/lib/editor/storage";
 import { buildCompletedCreatorShortRenderResponse } from "@/lib/creator/system-export-contract";
 import { requestSystemCreatorShortExport } from "@/lib/creator/system-export-client";
@@ -144,6 +145,9 @@ import { useCreatorLlmRuns } from "@/hooks/useCreatorLlmRuns";
 import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
 import { useCreatorTextFeatureConfig } from "@/hooks/useCreatorTextFeatureConfig";
 import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
+import { PROJECT_LIBRARY_UPDATED_EVENT } from "@/lib/projects/events";
+import { getSelectableProjectVisualAssets } from "@/lib/projects/source-assets";
+import type { ProjectAssetRecord } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -1407,6 +1411,7 @@ type CreatorHubProps = {
   projectId?: string;
   initialSourceAssetId?: string;
   initialView?: HubView;
+  onProjectAssetsChanged?: () => void | Promise<void>;
   sourceAssetFallback?: {
     id: string;
     filename: string;
@@ -1421,6 +1426,7 @@ export function CreatorHub({
   projectId,
   initialSourceAssetId,
   initialView = "start",
+  onProjectAssetsChanged,
   sourceAssetFallback,
 }: CreatorHubProps = {}) {
   const { history, isLoading: isLoadingHistory, error: historyError, refresh } = useHistoryLibrary(projectId);
@@ -1533,6 +1539,14 @@ export function CreatorHub({
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [isMediaPreviewLoading, setIsMediaPreviewLoading] = useState(false);
   const [isVideoMedia, setIsVideoMedia] = useState(false);
+  const [projectVisualAssets, setProjectVisualAssets] = useState<ProjectAssetRecord[]>([]);
+  const [visualSourceMode, setVisualSourceMode] = useState<"original" | "asset">("original");
+  const [visualSourceAssetId, setVisualSourceAssetId] = useState("");
+  const [visualMediaUrl, setVisualMediaUrl] = useState<string | null>(null);
+  const [visualMediaFilename, setVisualMediaFilename] = useState<string | null>(null);
+  const [visualMediaFile, setVisualMediaFile] = useState<File | null>(null);
+  const [visualMediaKind, setVisualMediaKind] = useState<"video" | "image" | null>(null);
+  const [isVisualMediaPreviewLoading, setIsVisualMediaPreviewLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
@@ -1540,7 +1554,9 @@ export function CreatorHub({
   const [previewFrameSize, setPreviewFrameSize] = useState({ width: 0, height: 0 });
   const [previewSourceSize, setPreviewSourceSize] = useState({ width: 0, height: 0 });
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewFrameElRef = useRef<HTMLDivElement | null>(null);
+  const visualAssetInputRef = useRef<HTMLInputElement | null>(null);
   const shortExportSessionCounterRef = useRef(0);
   const shortExportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
   const shortExportRestoreSnapshotRef = useRef<Pick<CreatorShortProjectRecord, "status" | "lastExportId" | "lastError"> | null>(null);
@@ -1598,6 +1614,14 @@ export function CreatorHub({
   }, [history, projectId, selectedProjectId, sourceAssetFallback]);
   const selectedProjectRootId = (selectedProject as (HistoryItem & { projectId?: string }) | undefined)?.projectId ?? selectedProject?.id;
   const selectedSourceAssetId = selectedProject?.id;
+  const projectVisualAssetsById = useMemo(
+    () => new Map(projectVisualAssets.map((asset) => [asset.id, asset])),
+    [projectVisualAssets]
+  );
+  const selectedVisualAsset = useMemo(() => {
+    if (visualSourceMode !== "asset" || !visualSourceAssetId) return undefined;
+    return projectVisualAssetsById.get(visualSourceAssetId);
+  }, [projectVisualAssetsById, visualSourceAssetId, visualSourceMode]);
 
   const {
     projects: shortProjects,
@@ -1723,6 +1747,41 @@ export function CreatorHub({
   }, [manualFallbackClip]);
 
   useEffect(() => {
+    if (!selectedProjectRootId) {
+      setProjectVisualAssets([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadProjectVisualAssets = async () => {
+      try {
+        const assets = await db.projectAssets.where("projectId").equals(selectedProjectRootId).toArray();
+        if (cancelled) return;
+        const selectable = getSelectableProjectVisualAssets(assets as ProjectAssetRecord[])
+          .filter((asset) => asset.id !== selectedSourceAssetId && !!asset.fileBlob)
+          .sort((left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt));
+        setProjectVisualAssets(selectable);
+      } catch (error) {
+        console.error("Failed to load visual assets for creator hub", error);
+        if (!cancelled) {
+          setProjectVisualAssets([]);
+        }
+      }
+    };
+
+    void loadProjectVisualAssets();
+    const handleProjectLibraryUpdated = () => {
+      void loadProjectVisualAssets();
+    };
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    };
+  }, [selectedProjectRootId, selectedSourceAssetId]);
+
+  useEffect(() => {
     let objectUrl: string | null = null;
     let cancelled = false;
 
@@ -1775,6 +1834,49 @@ export function CreatorHub({
   }, [selectedProject, selectedSourceAssetId]);
 
   useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    async function loadVisualMedia() {
+      if (!selectedVisualAsset?.fileBlob || visualSourceMode !== "asset") {
+        setIsVisualMediaPreviewLoading(false);
+        setVisualMediaUrl(null);
+        setVisualMediaFilename(null);
+        setVisualMediaFile(null);
+        setVisualMediaKind(null);
+        return;
+      }
+
+      try {
+        setIsVisualMediaPreviewLoading(true);
+        objectUrl = URL.createObjectURL(selectedVisualAsset.fileBlob);
+        if (cancelled) return;
+        setVisualMediaUrl(objectUrl);
+        setVisualMediaFilename(selectedVisualAsset.fileBlob.name);
+        setVisualMediaFile(selectedVisualAsset.fileBlob);
+        setVisualMediaKind(selectedVisualAsset.kind === "image" ? "image" : "video");
+        setIsVisualMediaPreviewLoading(false);
+      } catch (error) {
+        console.error("Failed to load visual override preview", error);
+        if (!cancelled) {
+          setIsVisualMediaPreviewLoading(false);
+          setVisualMediaUrl(null);
+          setVisualMediaFilename(null);
+          setVisualMediaFile(null);
+          setVisualMediaKind(null);
+        }
+      }
+    }
+
+    void loadVisualMedia();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [selectedVisualAsset, visualSourceMode]);
+
+  useEffect(() => {
     setActiveSavedShortProjectId("");
     setDetachedShortSelection(null);
     setLocalRenderError(null);
@@ -1788,34 +1890,26 @@ export function CreatorHub({
     setShowSafeZones(true);
     setIntroOverlay(getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(getDefaultCreatorTextOverlayState("outro"));
+    setVisualSourceMode("original");
+    setVisualSourceAssetId("");
     setActiveSuggestionPreviewProjectId("");
   }, [selectedProject?.id]);
+
+  const hasVisualOverride =
+    visualSourceMode === "asset" && !!selectedVisualAsset && !!visualMediaFile && !!visualMediaUrl && !!visualMediaKind;
+  const resolvedVisualSourceUrl = hasVisualOverride ? visualMediaUrl : isVideoMedia ? mediaUrl : null;
+  const resolvedVisualSourceFilename = hasVisualOverride ? visualMediaFilename : mediaFilename;
+  const resolvedVisualSourceFile = hasVisualOverride ? visualMediaFile : isVideoMedia ? mediaFile : null;
+  const resolvedVisualSourceKind = hasVisualOverride ? visualMediaKind : isVideoMedia ? "video" : null;
+  const isResolvedVisualVideo = resolvedVisualSourceKind === "video";
+  const isResolvedVisualImage = resolvedVisualSourceKind === "image";
+  const isResolvedVisualPreviewLoading = hasVisualOverride ? isVisualMediaPreviewLoading : isMediaPreviewLoading;
 
   useEffect(() => {
     if (hubView !== "start" && hubView !== "ai_lab") {
       setActiveSuggestionPreviewProjectId("");
     }
   }, [hubView]);
-
-  // Video event callbacks — attached as JSX props on the <video>, no effect needed
-  const handleVideoTimeUpdate = useCallback(() => {
-    const video = previewVideoRef.current;
-    if (video) setCurrentTime(video.currentTime);
-  }, []);
-  const handleVideoLoadedMetadata = useCallback(() => {
-    const video = previewVideoRef.current;
-    setPreviewSourceSize({
-      width: video?.videoWidth ?? 0,
-      height: video?.videoHeight ?? 0,
-    });
-  }, []);
-  const handleVideoPlay = useCallback(() => setIsPlaying(true), []);
-  const handleVideoPause = useCallback(() => {
-    const video = previewVideoRef.current;
-    if (video) setCurrentTime(video.currentTime);
-    setIsPlaying(false);
-  }, []);
-  const handleVideoEnded = useCallback(() => setIsPlaying(false), []);
 
   const activeSavedShortProject = useMemo(() => {
     if (!shortProjects.length) return undefined;
@@ -1872,6 +1966,59 @@ export function CreatorHub({
     });
   }, [selectedClip, sourceDurationSeconds, trimEndNudge, trimStartNudge]);
 
+  const syncPreviewVisualToCurrentTime = useCallback(
+    (absoluteTimeSeconds: number) => {
+      if (!isResolvedVisualVideo || !editedClip) return;
+      const video = previewVideoRef.current;
+      if (!video) return;
+      const targetTime = hasVisualOverride ? Math.max(0, absoluteTimeSeconds - editedClip.startSeconds) : absoluteTimeSeconds;
+      if (Math.abs(video.currentTime - targetTime) > 0.2) {
+        video.currentTime = targetTime;
+      }
+    },
+    [editedClip, hasVisualOverride, isResolvedVisualVideo]
+  );
+
+  // Preview playback is driven by the original source audio timeline so subtitles and trim stay authoritative.
+  const handleAudioTimeUpdate = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    setCurrentTime(audio.currentTime);
+    syncPreviewVisualToCurrentTime(audio.currentTime);
+  }, [syncPreviewVisualToCurrentTime]);
+  const handleVideoLoadedMetadata = useCallback(() => {
+    const video = previewVideoRef.current;
+    setPreviewSourceSize({
+      width: video?.videoWidth ?? 0,
+      height: video?.videoHeight ?? 0,
+    });
+    const audio = previewAudioRef.current;
+    if (audio) {
+      syncPreviewVisualToCurrentTime(audio.currentTime);
+    } else if (editedClip) {
+      syncPreviewVisualToCurrentTime(editedClip.startSeconds);
+    }
+  }, [editedClip, syncPreviewVisualToCurrentTime]);
+  const handlePreviewImageLoad = useCallback((event: SyntheticEvent<HTMLImageElement>) => {
+    setPreviewSourceSize({
+      width: event.currentTarget.naturalWidth,
+      height: event.currentTarget.naturalHeight,
+    });
+  }, []);
+  const handleAudioPlay = useCallback(() => setIsPlaying(true), []);
+  const handleAudioPause = useCallback(() => {
+    const audio = previewAudioRef.current;
+    if (audio) {
+      setCurrentTime(audio.currentTime);
+    }
+    previewVideoRef.current?.pause();
+    setIsPlaying(false);
+  }, []);
+  const handleAudioEnded = useCallback(() => {
+    previewVideoRef.current?.pause();
+    setIsPlaying(false);
+  }, []);
+
   useEffect(() => {
     if (!activeSavedShortProject || !selectedClip) return;
     if (selectedClip.id !== activeSavedShortProject.clipId) return;
@@ -1887,44 +2034,54 @@ export function CreatorHub({
 
   useEffect(() => {
     setPreviewSourceSize({ width: 0, height: 0 });
-  }, [mediaUrl]);
+  }, [resolvedVisualSourceUrl]);
 
-  // Seek video to clip start when clip changes
+  // Seek preview media to clip start when clip or visual source changes.
   useEffect(() => {
-    const video = previewVideoRef.current;
-    if (!video || !editedClip) return;
-    video.currentTime = editedClip.startSeconds;
+    const audio = previewAudioRef.current;
+    if (!editedClip) return;
+    if (audio) {
+      audio.currentTime = editedClip.startSeconds;
+    }
+    syncPreviewVisualToCurrentTime(editedClip.startSeconds);
     setCurrentTime(editedClip.startSeconds);
-  }, [editedClip, mediaUrl]);
+  }, [editedClip, resolvedVisualSourceUrl, syncPreviewVisualToCurrentTime]);
 
   // Enforce clip boundaries during playback
   useEffect(() => {
     if (!editedClip || !isPlaying) return;
-    const video = previewVideoRef.current;
-    if (!video) return;
+    const audio = previewAudioRef.current;
+    if (!audio) return;
     if (currentTime >= editedClip.endSeconds) {
-      video.currentTime = editedClip.startSeconds;
+      audio.currentTime = editedClip.startSeconds;
+      syncPreviewVisualToCurrentTime(editedClip.startSeconds);
     }
-  }, [currentTime, editedClip, isPlaying]);
+  }, [currentTime, editedClip, isPlaying, syncPreviewVisualToCurrentTime]);
 
   const togglePlayPause = useCallback(() => {
-    const video = previewVideoRef.current;
-    if (!video) return;
-    if (video.paused) {
-      if (editedClip && video.currentTime >= editedClip.endSeconds) {
-        video.currentTime = editedClip.startSeconds;
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    if (audio.paused) {
+      if (editedClip && audio.currentTime >= editedClip.endSeconds) {
+        audio.currentTime = editedClip.startSeconds;
       }
-      void video.play();
+      syncPreviewVisualToCurrentTime(audio.currentTime);
+      void audio.play();
+      if (isResolvedVisualVideo) {
+        const video = previewVideoRef.current;
+        video?.play().catch(() => {});
+      }
     } else {
-      video.pause();
+      audio.pause();
+      previewVideoRef.current?.pause();
     }
-  }, [editedClip]);
+  }, [editedClip, isResolvedVisualVideo, syncPreviewVisualToCurrentTime]);
 
   const toggleMute = useCallback(() => {
-    const video = previewVideoRef.current;
-    if (!video) return;
-    video.muted = !video.muted;
-    setIsMuted(video.muted);
+    const audio = previewAudioRef.current;
+    if (!audio) return;
+    audio.muted = !audio.muted;
+    setIsMuted(audio.muted);
   }, []);
 
   const selectedWordLevelSubtitleChunks = useMemo(() => {
@@ -2003,8 +2160,19 @@ export function CreatorHub({
       showSafeZones,
       introOverlay,
       outroOverlay,
+      visualSource:
+        hasVisualOverride && visualMediaKind && visualSourceAssetId
+          ? {
+              mode: "asset",
+              assetId: visualSourceAssetId,
+              kind: visualMediaKind,
+            }
+          : {
+              mode: "original",
+            },
     }),
     [
+      hasVisualOverride,
       introOverlay,
       outroOverlay,
       panX,
@@ -2015,6 +2183,8 @@ export function CreatorHub({
       subtitleTimingMode,
       subtitleXPositionPct,
       subtitleYOffsetPct,
+      visualMediaKind,
+      visualSourceAssetId,
       zoom,
     ]
   );
@@ -2041,7 +2211,7 @@ export function CreatorHub({
   const previewFrameScale = previewFrameSize.width > 0 ? previewFrameSize.width / 1080 : 1;
   const previewVideoLayout = useMemo(() => {
     if (
-      !isVideoMedia ||
+      !resolvedVisualSourceKind ||
       previewFrameSize.width <= 0 ||
       previewFrameSize.height <= 0 ||
       previewSourceSize.width <= 0 ||
@@ -2067,12 +2237,12 @@ export function CreatorHub({
       panY: 0,
     });
   }, [
-    isVideoMedia,
     panX,
     previewFrameSize.height,
     previewFrameSize.width,
     previewSourceSize.height,
     previewSourceSize.width,
+    resolvedVisualSourceKind,
     zoom,
   ]);
   const previewVideoStyle = useMemo(
@@ -2237,7 +2407,8 @@ export function CreatorHub({
   const canAnalyze = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!selectedTranscript.transcript;
   const canAnalyzeWithAI = canAnalyze && hasActiveProviderApiKey;
   const canRender = !!selectedProject && !!selectedTranscript && !!selectedSubtitle && !!editedClip && !!selectedPlan;
-  const canExportVideo = canRender && !!mediaFile && isVideoMedia && !isActiveShortExportTask;
+  const canExportShort =
+    canRender && !!mediaFile && !!resolvedVisualSourceFile && !!resolvedVisualSourceKind && !isActiveShortExportTask;
   const canCancelShortExport =
     Boolean(activeShortExportTask?.canCancel) &&
     (isActiveShortExportTask || isBrowserRenderCancelableStage(shortExportStage));
@@ -2350,6 +2521,9 @@ export function CreatorHub({
       showSubtitles: true,
       subtitleStyle: {},
       showSafeZones: true,
+      visualSource: {
+        mode: "original",
+      },
     }),
     []
   );
@@ -2624,6 +2798,81 @@ export function CreatorHub({
     }
   }, [activeEditableShortProjectId, buildCurrentShortProjectRecord, upsertProject]);
 
+  const handleUploadVisualAsset = useCallback(
+    async (file: File) => {
+      if (!selectedProjectRootId) {
+        toast.error("Select a project source before uploading replacement media.", {
+          className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
+        });
+        return;
+      }
+
+      try {
+        const metadata = await readMediaMetadata(file);
+        if (metadata.kind !== "video" && metadata.kind !== "image") {
+          throw new Error("Replacement media must be a video or image file.");
+        }
+
+        const now = Date.now();
+        const asset = createEditorAssetRecord({
+          projectId: selectedProjectRootId,
+          role: "support",
+          origin: "manual",
+          kind: metadata.kind,
+          filename: file.name,
+          mimeType:
+            file.type ||
+            (metadata.kind === "video" ? "video/mp4" : "image/png"),
+          sizeBytes: file.size,
+          durationSeconds: metadata.durationSeconds,
+          width: metadata.width,
+          height: metadata.height,
+          hasAudio: metadata.hasAudio,
+          sourceType: "upload",
+          captionSource: { kind: "none" },
+          fileBlob: file,
+          now,
+        }) as ProjectAssetRecord;
+
+        await db.transaction("rw", db.projects, db.projectAssets, async () => {
+          await db.projectAssets.put(asset);
+          const projectRecord = await db.projects.get(selectedProjectRootId);
+          if (projectRecord) {
+            await db.projects.put({
+              ...projectRecord,
+              assetIds: projectRecord.assetIds.includes(asset.id) ? projectRecord.assetIds : [...projectRecord.assetIds, asset.id],
+              updatedAt: now,
+            });
+          }
+        });
+
+        setProjectVisualAssets((prev) => [asset, ...prev.filter((item) => item.id !== asset.id)]);
+        setVisualSourceMode("asset");
+        setVisualSourceAssetId(asset.id);
+        await onProjectAssetsChanged?.();
+        toast.success(`${metadata.kind === "image" ? "Image" : "Video"} added as visual source`, {
+          className: "bg-green-500/20 border-green-500/50 text-green-100",
+        });
+      } catch (error) {
+        console.error(error);
+        toast.error(error instanceof Error ? error.message : "Failed to upload replacement media.", {
+          className: "bg-red-500/20 border-red-500/50 text-red-100",
+        });
+      }
+    },
+    [onProjectAssetsChanged, selectedProjectRootId]
+  );
+
+  const handleVisualAssetFileChange = useCallback(
+    async (event: SyntheticEvent<HTMLInputElement>) => {
+      const file = event.currentTarget.files?.[0];
+      event.currentTarget.value = "";
+      if (!file) return;
+      await handleUploadVisualAsset(file);
+    },
+    [handleUploadVisualAsset]
+  );
+
   const applySavedShortProject = useCallback((project: CreatorShortProjectRecord) => {
     const hydratedEditor = hydrateCreatorShortEditorState(project.editor, {
       origin: project.origin,
@@ -2653,6 +2902,8 @@ export function CreatorHub({
     setShowSafeZones(hydratedEditor.showSafeZones ?? true);
     setIntroOverlay(hydratedEditor.introOverlay ?? getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(hydratedEditor.outroOverlay ?? getDefaultCreatorTextOverlayState("outro"));
+    setVisualSourceMode(hydratedEditor.visualSource?.mode === "asset" ? "asset" : "original");
+    setVisualSourceAssetId(hydratedEditor.visualSource?.mode === "asset" ? hydratedEditor.visualSource.assetId ?? "" : "");
   }, []);
 
   const handleDeleteShortProject = useCallback(
@@ -2740,8 +2991,8 @@ export function CreatorHub({
       });
       return;
     }
-    if (!isVideoMedia) {
-      toast.error("Short export requires a video source.", {
+    if (!resolvedVisualSourceFile || !resolvedVisualSourceKind) {
+      toast.error("Short export requires a visual source. Use the original video or add a replacement image/video.", {
         className: "bg-amber-500/20 border-amber-500/50 text-amber-100",
       });
       return;
@@ -2771,7 +3022,7 @@ export function CreatorHub({
         setLocalRenderError(null);
         setLocalRenderDiagnostics(null);
         beginShortExportLogSession(
-          `Export started for ${mediaFilename || selectedProject.filename}: ${secondsToClock(editedClip.startSeconds)} -> ${secondsToClock(editedClip.endSeconds)}.`
+          `Export started for ${mediaFilename || selectedProject.filename} with ${resolvedVisualSourceFilename || "original visual"}: ${secondsToClock(editedClip.startSeconds)} -> ${secondsToClock(editedClip.endSeconds)}.`
         );
         shortExportHeartbeatStageRef.current = session.stage;
         task.update({
@@ -2815,15 +3066,17 @@ export function CreatorHub({
           });
         };
 
-        let sourceVideoMeta: { width: number; height: number; durationSeconds?: number } | null = null;
+        let visualSourceMeta: { width: number; height: number; durationSeconds?: number } | null = null;
         let exportClip = editedClip;
         let exportSubtitleChunks = selectedClipSubtitleChunks;
         const buildDiagnosticsSnapshot = (errorMessage?: string) =>
           buildShortExportDiagnostics({
-            sourceFilename: mediaFilename || selectedProject.filename,
+            sourceFilename:
+              `${mediaFilename || selectedProject.filename}` +
+              (resolvedVisualSourceFilename ? ` [visual:${resolvedVisualSourceFilename}]` : ""),
             requestedClip: editedClip,
             exportClip,
-            sourceMeta: sourceVideoMeta,
+            sourceMeta: visualSourceMeta,
             selectedSubtitleChunkCount: selectedClipSubtitleChunks.length,
             exportSubtitleChunkCount: exportSubtitleChunks.length,
             stylePreset: resolvedSubtitleStyle.preset,
@@ -2831,11 +3084,19 @@ export function CreatorHub({
           });
 
         try {
-          appendShortExportLog("Reading source video metadata.");
-          sourceVideoMeta = await readVideoMetadata(mediaFile, previewVideoRef.current);
+          appendShortExportLog("Reading visual source metadata.");
+          const visualMetadata = await readMediaMetadata(resolvedVisualSourceFile);
+          if ((visualMetadata.kind !== "video" && visualMetadata.kind !== "image") || !visualMetadata.width || !visualMetadata.height) {
+            throw new Error("Visual source is missing dimensions.");
+          }
+          visualSourceMeta = {
+            width: visualMetadata.width,
+            height: visualMetadata.height,
+            durationSeconds: visualMetadata.durationSeconds,
+          };
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           appendShortExportLog(
-            `Source metadata ready: ${sourceVideoMeta.width}x${sourceVideoMeta.height}, duration=${sourceVideoMeta.durationSeconds?.toFixed(2) ?? "unknown"}s.`
+            `Visual metadata ready: ${visualSourceMeta.width}x${visualSourceMeta.height}, duration=${visualSourceMeta.durationSeconds?.toFixed(2) ?? "unknown"}s (${resolvedVisualSourceKind}).`
           );
           const prepared = prepareShortExport({
             requestedClip: editedClip,
@@ -2843,7 +3104,7 @@ export function CreatorHub({
               effectiveSubtitleTimingMode === "segment"
                 ? selectedSubtitle.chunks
                 : selectedWordLevelSubtitleChunks,
-            sourceDurationSeconds: sourceVideoMeta.durationSeconds,
+            sourceDurationSeconds,
             minClipDurationSeconds: 0.25,
           });
           exportClip = prepared.exportClip;
@@ -2912,9 +3173,11 @@ export function CreatorHub({
           setDetachedShortSelection({ clip: shortProjectRecord.clip, plan: shortProjectRecord.plan });
           setShortProjectNameDraft(shortProjectRecord.name);
 
-          const sourceVideoSize = sourceVideoMeta
-            ? { width: sourceVideoMeta.width, height: sourceVideoMeta.height }
-            : await readVideoMetadata(mediaFile, previewVideoRef.current);
+          const sourceVideoSize = visualSourceMeta
+            ? { width: visualSourceMeta.width, height: visualSourceMeta.height }
+            : (() => {
+                throw new Error("Visual source metadata is unavailable.");
+              })();
           if (shortExportSessionRef.current?.id !== session.id || task.isCanceled()) return;
           appendShortExportLog(
             `Starting system export request with canonical short framing ${sourceVideoSize.width}x${sourceVideoSize.height} -> 1080x1920.`
@@ -2923,6 +3186,9 @@ export function CreatorHub({
           const systemExport = await requestSystemCreatorShortExport({
             sourceFile: mediaFile,
             sourceFilename: mediaFilename || selectedProject.filename,
+            visualSourceFile: hasVisualOverride ? resolvedVisualSourceFile : null,
+            visualSourceKind: hasVisualOverride ? resolvedVisualSourceKind ?? undefined : undefined,
+            shortName: shortProjectRecord.name,
             clip: exportClip,
             plan: selectedPlan,
             subtitleChunks: exportSubtitleChunks,
@@ -2997,6 +3263,7 @@ export function CreatorHub({
           const exportRecord = buildCompletedShortExportRecord({
             id: makeId("shortexport"),
             shortProjectId: shortProjectRecord.id,
+            shortProjectName: shortProjectRecord.name,
             projectId: currentShortTaskProjectId || selectedProject.id,
             sourceAssetId: selectedSourceAssetId || selectedProject.id,
             outputAssetId: outputAsset.id,
@@ -3950,6 +4217,8 @@ export function CreatorHub({
                       setSubtitleStyleOverrides({});
                       setShowSubtitles(true);
                       setShowSafeZones(true);
+                      setVisualSourceMode("original");
+                      setVisualSourceAssetId("");
                       setIntroOverlay(
                         getDefaultCreatorTextOverlayState("intro", {
                           origin: "manual",
@@ -4222,22 +4491,54 @@ export function CreatorHub({
                   <CardContent className="space-y-5">
                     <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] 2xl:grid-cols-[440px_1fr] gap-8">
                       <div className="space-y-3 sticky top-6 self-start">
+                        <input
+                          ref={visualAssetInputRef}
+                          type="file"
+                          accept="image/*,video/*,.mkv"
+                          className="hidden"
+                          onChange={(event) => void handleVisualAssetFileChange(event)}
+                        />
+                        <audio
+                          ref={previewAudioRef}
+                          src={mediaUrl ?? undefined}
+                          preload="metadata"
+                          hidden
+                          playsInline
+                          muted={isMuted}
+                          onTimeUpdate={handleAudioTimeUpdate}
+                          onPlay={handleAudioPlay}
+                          onPause={handleAudioPause}
+                          onEnded={handleAudioEnded}
+                        />
                         <div
                           ref={previewFrameRef}
                           className="relative mx-auto w-full max-w-[420px] aspect-[9/16] rounded-[1.6rem] border border-white/15 overflow-hidden bg-black shadow-2xl"
                         >
-                          {isVideoMedia && mediaUrl ? (
+                          {isResolvedVisualVideo && resolvedVisualSourceUrl ? (
                             <video
-                              key={mediaUrl}
+                              key={resolvedVisualSourceUrl}
                               ref={previewVideoRef}
-                              src={mediaUrl}
+                              src={resolvedVisualSourceUrl}
                               muted
                               playsInline
                               onLoadedMetadata={handleVideoLoadedMetadata}
-                              onTimeUpdate={handleVideoTimeUpdate}
-                              onPlay={handleVideoPlay}
-                              onPause={handleVideoPause}
-                              onEnded={handleVideoEnded}
+                              className="absolute"
+                              style={{
+                                width: previewVideoStyle?.width ?? "100%",
+                                height: previewVideoStyle?.height ?? "100%",
+                                objectFit: "cover",
+                                objectPosition: previewVideoStyle?.objectPosition ?? "50% 50%",
+                                left: "50%",
+                                top: "50%",
+                                transform: "translate(-50%, -50%)",
+                              }}
+                            />
+                          ) : isResolvedVisualImage && resolvedVisualSourceUrl ? (
+                            <img
+                              key={resolvedVisualSourceUrl}
+                              src={resolvedVisualSourceUrl}
+                              alt={resolvedVisualSourceFilename || "Replacement visual"}
+                              onLoad={handlePreviewImageLoad}
                               className="absolute"
                               style={{
                                 width: previewVideoStyle?.width ?? "100%",
@@ -4254,7 +4555,11 @@ export function CreatorHub({
                               <div>
                                 <div className="text-xs uppercase tracking-[0.2em] text-white/40 mb-2">Preview Placeholder</div>
                                 <div className="text-sm text-white/70 leading-relaxed">
-                                  {mediaFilename ? `Audio-only source: ${mediaFilename}` : "No video preview available. You can still save editor presets for later."}
+                                  {isResolvedVisualPreviewLoading
+                                    ? "Loading visual source…"
+                                    : mediaFilename
+                                      ? "Current source is audio-only. Add a replacement image or video to render this short."
+                                      : "No video preview available. You can still save editor presets for later."}
                                 </div>
                               </div>
                             </div>
@@ -4335,7 +4640,7 @@ export function CreatorHub({
                           })()}
 
                           {/* Playback controls overlay at bottom of frame */}
-                          {isVideoMedia && mediaUrl && (
+                          {!!mediaFile && editedClip && (isResolvedVisualVideo || isResolvedVisualImage) && (
                             <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent pt-8 pb-3 px-3">
                               {/* Seek bar */}
                               <div
@@ -4345,9 +4650,10 @@ export function CreatorHub({
                                   const rect = e.currentTarget.getBoundingClientRect();
                                   const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
                                   const seekTime = editedClip.startSeconds + pct * editedClip.durationSeconds;
-                                  const video = previewVideoRef.current;
-                                  if (video) {
-                                    video.currentTime = seekTime;
+                                  const audio = previewAudioRef.current;
+                                  if (audio) {
+                                    audio.currentTime = seekTime;
+                                    syncPreviewVisualToCurrentTime(seekTime);
                                     setCurrentTime(seekTime);
                                   }
                                 }}
@@ -4467,6 +4773,110 @@ export function CreatorHub({
                             <div className="rounded-xl border border-white/10 bg-black/20 p-5 space-y-5">
                               <div className="text-sm font-semibold text-white/90 flex items-center gap-2">
                                 Framing Controls
+                              </div>
+                              <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-4">
+                                <div className="flex items-start justify-between gap-4">
+                                  <div>
+                                    <div className="text-sm font-semibold text-white/92">Visual source</div>
+                                    <div className="text-[11px] leading-relaxed text-white/55">
+                                      Audio, transcript and subtitles stay on the original source. This only changes the visual layer.
+                                    </div>
+                                  </div>
+                                  {hasVisualOverride ? (
+                                    <div className="rounded-full border border-cyan-400/20 bg-cyan-400/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-cyan-100">
+                                      Override active
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-white/50">
+                                      Original visual
+                                    </div>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+                                  <label className="text-xs text-white/70 block">
+                                    Mode
+                                    <Select
+                                      value={visualSourceMode}
+                                      onValueChange={(value) => {
+                                        if (value !== "original" && value !== "asset") return;
+                                        setVisualSourceMode(value);
+                                        if (value === "original") {
+                                          setVisualSourceAssetId("");
+                                        } else if (!visualSourceAssetId && projectVisualAssets[0]) {
+                                          setVisualSourceAssetId(projectVisualAssets[0].id);
+                                        }
+                                      }}
+                                    >
+                                      <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                        <SelectItem value="original" className="focus:bg-emerald-500/20 cursor-pointer">Original</SelectItem>
+                                        <SelectItem value="asset" className="focus:bg-cyan-500/20 cursor-pointer">Replace Visual</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </label>
+
+                                  <label className="text-xs text-white/70 block">
+                                    Replacement asset
+                                    <Select
+                                      value={visualSourceAssetId}
+                                      onValueChange={(value) => {
+                                        setVisualSourceMode("asset");
+                                        setVisualSourceAssetId(value);
+                                      }}
+                                      disabled={visualSourceMode !== "asset" || projectVisualAssets.length === 0}
+                                    >
+                                      <SelectTrigger className="mt-1 h-9 w-full bg-white/5 border-white/10 text-white/90">
+                                        <SelectValue placeholder={projectVisualAssets.length > 0 ? "Select project image or video" : "No visual assets yet"} />
+                                      </SelectTrigger>
+                                      <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
+                                        {projectVisualAssets.map((asset) => (
+                                          <SelectItem key={asset.id} value={asset.id} className="focus:bg-cyan-500/20 cursor-pointer">
+                                            {asset.filename} ({asset.kind})
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                  </label>
+                                </div>
+
+                                <div className="flex flex-wrap gap-2">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="bg-white/5 hover:bg-white/10 text-white/85"
+                                    onClick={() => visualAssetInputRef.current?.click()}
+                                  >
+                                    <FileVideo className="mr-2 h-4 w-4" />
+                                    Upload Image / Video
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="bg-white/5 hover:bg-white/10 text-white/80"
+                                    onClick={() => {
+                                      setVisualSourceMode("original");
+                                      setVisualSourceAssetId("");
+                                    }}
+                                    disabled={!hasVisualOverride}
+                                  >
+                                    Reset To Original
+                                  </Button>
+                                </div>
+
+                                <div className="rounded-xl border border-white/10 bg-white/[0.03] px-3 py-3 text-[11px] leading-relaxed text-white/60">
+                                  {hasVisualOverride
+                                    ? `Rendering visuals from ${resolvedVisualSourceFilename || "selected asset"} (${resolvedVisualSourceKind}).`
+                                    : isVideoMedia
+                                      ? `Using the original video as the visual source: ${mediaFilename}.`
+                                      : mediaFilename
+                                        ? `Original source is audio-only: ${mediaFilename}. Add a replacement image or video to export a visual short.`
+                                        : "Select a project source first."}
+                                </div>
                               </div>
                             {editedClip && (
                               <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-5">
@@ -5027,10 +5437,10 @@ export function CreatorHub({
                                 </Button>
                               </div>
                             </div>
-                            {!isVideoMedia && mediaFilename && (
+                            {!resolvedVisualSourceFile && mediaFilename && (
                               <div className="text-xs text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2 flex items-start gap-2">
                                 <TriangleAlert className="w-4 h-4 mt-0.5 shrink-0" />
-                                Current source is audio-only. Save config is available, MP4 export needs a video source.
+                                Current source has no visual media. Add a replacement video or image to export this short.
                               </div>
                             )}
                             {!canRender && !isActiveShortExportTask && (
@@ -5052,7 +5462,7 @@ export function CreatorHub({
                               </Button>
                               <Button
                                 onClick={handleRenderShort}
-                                disabled={!canExportVideo}
+                                disabled={!canExportShort}
                                 className="bg-gradient-to-r from-fuchsia-500 to-cyan-400 text-black font-semibold hover:from-fuchsia-400 hover:to-cyan-300"
                               >
                                 {isActiveShortExportTask ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <HardDriveDownload className="w-4 h-4 mr-2" />}
@@ -5098,6 +5508,8 @@ export function CreatorHub({
                                   setSubtitleStyleOverrides({});
                                   setShowSafeZones(true);
                                   setShowSubtitles(true);
+                                  setVisualSourceMode("original");
+                                  setVisualSourceAssetId("");
                                   setIntroOverlay(
                                     getDefaultCreatorTextOverlayState("intro", {
                                       origin: activeSavedShortProject?.origin ?? "manual",

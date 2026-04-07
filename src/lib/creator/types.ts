@@ -366,6 +366,15 @@ export interface CreatorTextOverlayState {
   style?: Partial<CreatorTextOverlayStyleSettings>;
 }
 
+export type CreatorShortVisualSourceMode = "original" | "asset";
+export type CreatorShortVisualAssetKind = "video" | "image";
+
+export interface CreatorShortVisualSourceState {
+  mode: CreatorShortVisualSourceMode;
+  assetId?: string;
+  kind?: CreatorShortVisualAssetKind;
+}
+
 export interface CreatorShortEditorState {
   zoom: number;
   panX: number;
@@ -379,6 +388,7 @@ export interface CreatorShortEditorState {
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
   introOverlay?: CreatorTextOverlayState;
   outroOverlay?: CreatorTextOverlayState;
+  visualSource?: CreatorShortVisualSourceState;
 }
 
 export interface CreatorShortRenderResponse {
