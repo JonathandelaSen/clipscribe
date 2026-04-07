@@ -44,6 +44,7 @@ export type ProjectYouTubeUploadSourceMode = "local_file" | "project_asset" | "p
 export type ProjectYouTubeUploadStepState = "applied" | "skipped" | "failed";
 
 export interface ProjectYouTubeUploadDraftSnapshot {
+  publishIntent?: "short" | "standard";
   title: string;
   description: string;
   privacyStatus: "private" | "unlisted" | "public";

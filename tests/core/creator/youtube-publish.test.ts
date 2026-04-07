@@ -3,18 +3,25 @@ import assert from "node:assert/strict";
 
 import type { ProjectAssetRecord, ProjectExportRecord } from "../../../src/lib/projects/types";
 import {
+  buildShortSuggestionPublishDraft,
   DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS,
   appendChapterBlockToDescription,
   applySuggestedDescription,
   applySuggestedTags,
   applySuggestedTitle,
+  buildVideoInfoPublishDraft,
   buildProjectYouTubeUploadRecord,
   getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
+  inferYouTubePublishIntent,
+  resolveMatchingVideoInfoRecord,
+  resolveYouTubeShortEligibility,
   resolveInitialYouTubePublishSelection,
   resolveYouTubePublishView,
+  YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
 } from "../../../src/lib/creator/youtube-publish";
 import type { YouTubePublishResult, YouTubeUploadDraft } from "../../../src/lib/youtube/types";
+import type { CreatorVideoInfoProjectRecord } from "../../../src/lib/creator/types";
 
 function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetRecord {
   return {
@@ -28,6 +35,8 @@ function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetR
     mimeType: overrides.mimeType ?? "video/mp4",
     sizeBytes: overrides.sizeBytes ?? 1024,
     durationSeconds: overrides.durationSeconds ?? 15,
+    width: overrides.width ?? 1080,
+    height: overrides.height ?? 1920,
     captionSource: overrides.captionSource ?? { kind: "none" },
     createdAt: overrides.createdAt ?? 1_000,
     updatedAt: overrides.updatedAt ?? 1_000,
@@ -44,10 +53,52 @@ function createExport(overrides: Partial<ProjectExportRecord> = {}): ProjectExpo
     kind: overrides.kind ?? "short",
     createdAt: overrides.createdAt ?? 2_000,
     status: overrides.status ?? "completed",
+    sourceAssetId: overrides.sourceAssetId ?? "asset_1",
     filename: overrides.filename ?? "export.mp4",
     mimeType: overrides.mimeType ?? "video/mp4",
     sizeBytes: overrides.sizeBytes ?? 2048,
     outputAssetId: overrides.outputAssetId ?? "asset_1",
+  };
+}
+
+function createVideoInfoRecord(overrides: Partial<CreatorVideoInfoProjectRecord> = {}): CreatorVideoInfoProjectRecord {
+  return {
+    id: overrides.id ?? "vi_1",
+    generatedAt: overrides.generatedAt ?? 1_000,
+    sourceAssetId: overrides.sourceAssetId ?? "asset_1",
+    sourceSignature: overrides.sourceSignature,
+    inputSummary: overrides.inputSummary ?? {
+      videoInfoBlocks: ["titleIdeas", "description", "hashtags"],
+    },
+    analysis: overrides.analysis ?? {
+      ok: true,
+      providerMode: "openai",
+      model: "gpt-test",
+      generatedAt: 1_000,
+      runtimeSeconds: 2,
+      youtube: {
+        titleIdeas: ["Launch this clip"],
+        description: "Description from AI",
+        pinnedComment: "",
+        hashtags: ["#clipscribe", "#launch"],
+        thumbnailHooks: [],
+        chapterText: "",
+      },
+      content: {
+        videoSummary: "",
+        keyMoments: [],
+        hookIdeas: [],
+        ctaIdeas: [],
+        repurposeIdeas: [],
+      },
+      chapters: [],
+      insights: {
+        transcriptWordCount: 10,
+        estimatedSpeakingRateWpm: 120,
+        repeatedTerms: [],
+        detectedTheme: "Testing",
+      },
+    },
   };
 }
 
@@ -78,6 +129,58 @@ test("apply suggestion helpers only update the targeted draft fields", () => {
   assert.equal(withDescription.title, draft.title);
   assert.equal(withDescription.description, "Better description");
   assert.equal(withDescription.tagsInput, draft.tagsInput);
+});
+
+test("buildVideoInfoPublishDraft maps the AI publish fields without adding chapters", () => {
+  const draft = buildVideoInfoPublishDraft({
+    youtube: {
+      titleIdeas: ["  First title  "],
+      description: "  Final description  ",
+      pinnedComment: "Pin this",
+      hashtags: ["#clipscribe", "#launch"],
+      thumbnailHooks: ["Hook"],
+      chapterText: "0:00 Intro",
+    },
+  });
+
+  assert.deepEqual(draft, {
+    title: "First title",
+    description: "Final description",
+    tagsInput: "clipscribe, launch",
+  });
+});
+
+test("buildShortSuggestionPublishDraft maps short title and caption into publish fields", () => {
+  const draft = buildShortSuggestionPublishDraft({
+    short: {
+      id: "short_1",
+      startSeconds: 0,
+      endSeconds: 30,
+      durationSeconds: 30,
+      score: 0.9,
+      title: "  Viral short title  ",
+      reason: "Hook",
+      caption: "  This is the short caption. #shorts #clipscribe  ",
+      openingText: "Opening",
+      endCardText: "End",
+      sourceChunkIndexes: [0],
+      suggestedSubtitleLanguage: "en",
+      editorPreset: {
+        aspectRatio: "9:16",
+        resolution: "1080x1920",
+        subtitleStyle: "clean_caption",
+        safeTopPct: 10,
+        safeBottomPct: 14,
+        targetDurationRange: [20, 45],
+      },
+    },
+  });
+
+  assert.deepEqual(draft, {
+    title: "Viral short title",
+    description: "This is the short caption. #shorts #clipscribe",
+    tagsInput: "shorts, clipscribe",
+  });
 });
 
 test("applySuggestedTags normalizes and deduplicates hashtags into the tags input", () => {
@@ -116,6 +219,73 @@ test("appendChapterBlockToDescription appends chapters once and preserves existi
   assert.equal(deduped.description, next.description);
 });
 
+test("resolveYouTubeShortEligibility uses export kind or vertical/square plus duration", () => {
+  assert.equal(
+    resolveYouTubeShortEligibility({
+      exportKind: "short",
+    }).eligible,
+    true
+  );
+
+  assert.deepEqual(
+    resolveYouTubeShortEligibility({
+      width: 1080,
+      height: 1920,
+      durationSeconds: YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
+    }),
+    {
+      eligible: true,
+      isVerticalOrSquare: true,
+      durationWithinLimit: true,
+      durationSeconds: YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
+      width: 1080,
+      height: 1920,
+    }
+  );
+
+  assert.equal(
+    resolveYouTubeShortEligibility({
+      width: 1920,
+      height: 1080,
+      durationSeconds: 45,
+    }).eligible,
+    false
+  );
+  assert.equal(
+    resolveYouTubeShortEligibility({
+      width: 1080,
+      height: 1920,
+      durationSeconds: YOUTUBE_SHORTS_MAX_DURATION_SECONDS + 1,
+    }).eligible,
+    false
+  );
+});
+
+test("inferYouTubePublishIntent defaults to short only for eligible sources", () => {
+  assert.equal(
+    inferYouTubePublishIntent({
+      exportKind: "short",
+    }),
+    "short"
+  );
+  assert.equal(
+    inferYouTubePublishIntent({
+      width: 1080,
+      height: 1920,
+      durationSeconds: 30,
+    }),
+    "short"
+  );
+  assert.equal(
+    inferYouTubePublishIntent({
+      width: 1920,
+      height: 1080,
+      durationSeconds: 30,
+    }),
+    "standard"
+  );
+});
+
 test("getEligibleYouTubeProjectExports only returns completed video exports backed by blobs", () => {
   const asset = createAsset();
   const assetsById = new Map<string, ProjectAssetRecord>([[asset.id, asset]]);
@@ -138,6 +308,45 @@ test("getEligibleYouTubeProjectExports only returns completed video exports back
   );
 
   assert.deepEqual(results.map((item) => item.exportId), ["export_ok"]);
+  assert.equal(results[0]?.sourceAssetId, eligible.sourceAssetId);
+  assert.equal(results[0]?.durationSeconds, asset.durationSeconds);
+});
+
+test("getEligibleYouTubeProjectExports preserves short suggestion metadata for publish prefill", () => {
+  const asset = createAsset();
+  const assetsById = new Map<string, ProjectAssetRecord>([[asset.id, asset]]);
+  const exportRecord = createExport({
+    id: "export_short_ai",
+    kind: "short",
+    outputAssetId: asset.id,
+    shortProjectId: "short_project_1",
+    short: {
+      id: "short_1",
+      startSeconds: 0,
+      endSeconds: 25,
+      durationSeconds: 25,
+      score: 0.88,
+      title: "Short suggestion title",
+      reason: "Reason",
+      caption: "Short caption #shorts",
+      openingText: "Opening",
+      endCardText: "Outro",
+      sourceChunkIndexes: [0],
+      suggestedSubtitleLanguage: "en",
+      editorPreset: {
+        aspectRatio: "9:16",
+        resolution: "1080x1920",
+        subtitleStyle: "clean_caption",
+        safeTopPct: 10,
+        safeBottomPct: 14,
+        targetDurationRange: [20, 45],
+      },
+    },
+  });
+
+  const [result] = getEligibleYouTubeProjectExports([exportRecord], assetsById);
+  assert.equal(result?.shortProjectId, "short_project_1");
+  assert.equal(result?.short?.title, "Short suggestion title");
 });
 
 test("getEligibleYouTubeProjectAssets only returns project videos backed by blobs", () => {
@@ -167,6 +376,7 @@ test("getEligibleYouTubeProjectAssets only returns project videos backed by blob
   ]);
 
   assert.deepEqual(results.map((item) => item.assetId), ["asset_video", "asset_mime_video"]);
+  assert.equal(results[0]?.width, videoAsset.width);
 });
 
 test("resolveInitialYouTubePublishSelection honors valid deep links and falls back safely", () => {
@@ -260,6 +470,34 @@ test("resolveYouTubePublishView defaults to list and forces the new flow for dee
   assert.equal(resolveYouTubePublishView({ requestedView: "list", exportId: "export_1" }), "new");
 });
 
+test("resolveMatchingVideoInfoRecord returns the latest exact sourceAssetId match", () => {
+  const latest = createVideoInfoRecord({ id: "latest", generatedAt: 2_000, sourceAssetId: "asset_1" });
+  const older = createVideoInfoRecord({ id: "older", generatedAt: 1_000, sourceAssetId: "asset_1" });
+  const other = createVideoInfoRecord({ id: "other", generatedAt: 3_000, sourceAssetId: "asset_2" });
+
+  assert.equal(
+    resolveMatchingVideoInfoRecord({
+      history: [older, other, latest],
+      sourceAssetId: "asset_1",
+    })?.id,
+    "latest"
+  );
+  assert.equal(
+    resolveMatchingVideoInfoRecord({
+      history: [other],
+      sourceAssetId: "asset_1",
+    }),
+    null
+  );
+  assert.equal(
+    resolveMatchingVideoInfoRecord({
+      history: [latest],
+      sourceAssetId: undefined,
+    }),
+    null
+  );
+});
+
 test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for project history", () => {
   const draft: YouTubeUploadDraft = {
     title: "Launch video",
@@ -296,6 +534,7 @@ test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for p
   const record = buildProjectYouTubeUploadRecord({
     projectId: "project_1",
     sourceMode: "project_export",
+    publishIntent: "short",
     sourceAssetId: "asset_1",
     sourceExportId: "export_1",
     outputAssetId: "asset_derived_1",
@@ -312,6 +551,7 @@ test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for p
   assert.equal(record.sourceAssetId, "asset_1");
   assert.equal(record.sourceExportId, "export_1");
   assert.equal(record.outputAssetId, "asset_derived_1");
+  assert.equal(record.draft.publishIntent, "short");
   assert.deepEqual(record.draft.tags, ["clipscribe", "launch"]);
   assert.equal(record.draft.localizations[0]?.locale, "es");
   assert.equal(record.result.processingStatus, "processing");

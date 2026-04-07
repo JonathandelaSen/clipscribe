@@ -33,14 +33,22 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import { readMediaMetadata } from "@/lib/editor/media";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
 import { resolveProjectVideoInfoHistory } from "@/lib/creator/video-info-storage";
 import {
+  buildShortSuggestionPublishDraft,
+  buildVideoInfoPublishDraft,
   buildProjectYouTubeUploadRecord,
   getEligibleYouTubeProjectAssets,
   getEligibleYouTubeProjectExports,
+  inferYouTubePublishIntent,
+  resolveMatchingVideoInfoRecord,
   resolveInitialYouTubePublishSelection,
+  resolveYouTubeShortEligibility,
+  YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
   type YouTubePublishDraft,
+  type YouTubePublishIntent,
   type YouTubePublishSourceMode,
 } from "@/lib/creator/youtube-publish";
 import type { ProjectYouTubeUploadRecord } from "@/lib/projects/types";
@@ -171,6 +179,19 @@ function formatDateInput(value: string) {
 function formatFileSize(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "Unknown size";
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function formatDurationSeconds(value: number | undefined) {
+  if (!Number.isFinite(value) || value === undefined) return "Unknown duration";
+  if (value < 60) return `${Math.round(value)}s`;
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s`;
+}
+
+function formatVideoShape(width?: number, height?: number) {
+  if (!width || !height) return "Unknown ratio";
+  return `${width}x${height}`;
 }
 
 function resultTone(state: YouTubePublishStepResult["state"]) {
@@ -321,9 +342,13 @@ export function YouTubeUploadHub({
     () => projects.find((project) => project.id === selectedProjectId),
     [projects, selectedProjectId]
   );
-  const hasAiGenerations = useMemo(
-    () => resolveProjectVideoInfoHistory(selectedProject).length > 0,
+  const projectVideoInfoHistory = useMemo(
+    () => resolveProjectVideoInfoHistory(selectedProject),
     [selectedProject]
+  );
+  const hasAiGenerations = useMemo(
+    () => projectVideoInfoHistory.length > 0,
+    [projectVideoInfoHistory]
   );
 
   const [session, setSession] = useState<SessionPayload | null>(null);
@@ -334,15 +359,25 @@ export function YouTubeUploadHub({
   const [remoteError, setRemoteError] = useState<string | null>(null);
 
   const [localVideoFile, setLocalVideoFile] = useState<File | null>(null);
+  const [localVideoTraits, setLocalVideoTraits] = useState<{
+    durationSeconds?: number;
+    width?: number;
+    height?: number;
+  } | null>(null);
+  const [isReadingLocalVideoMetadata, setIsReadingLocalVideoMetadata] = useState(false);
+  const [localVideoMetadataError, setLocalVideoMetadataError] = useState<string | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [thumbnailFile, setThumbnailFile] = useState<File | null>(null);
   const [captionFile, setCaptionFile] = useState<File | null>(null);
+  const [publishIntent, setPublishIntent] = useState<YouTubePublishIntent>("standard");
+  const [isPublishIntentDirty, setIsPublishIntentDirty] = useState(false);
 
   const [publishDraft, setPublishDraft] = useState<YouTubePublishDraft>({
     title: "",
     description: "",
     tagsInput: "",
   });
+  const [hasManualDraftEdits, setHasManualDraftEdits] = useState(false);
   const [privacyStatus, setPrivacyStatus] = useState<YouTubePrivacyStatus>("private");
   const [categoryId, setCategoryId] = useState("");
   const [defaultLanguage, setDefaultLanguage] = useState("");
@@ -369,6 +404,9 @@ export function YouTubeUploadHub({
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const thumbnailInputRef = useRef<HTMLInputElement | null>(null);
   const captionInputRef = useRef<HTMLInputElement | null>(null);
+  const localVideoSelectionTokenRef = useRef(0);
+  const lastAutoPrefillAttemptKeyRef = useRef("");
+  const [autoPrefilledSourceKey, setAutoPrefilledSourceKey] = useState("");
 
   const regionCode = useMemo(() => {
     if (typeof navigator === "undefined") return "US";
@@ -474,6 +512,16 @@ export function YouTubeUploadHub({
     [eligibleExportOptions, selectedExportId]
   );
 
+  const activeSourceAssetId = useMemo(() => {
+    if (sourceMode === "project_asset") {
+      return selectedAssetOption?.assetId ?? "";
+    }
+    if (sourceMode === "project_export") {
+      return selectedExportOption?.sourceAssetId ?? "";
+    }
+    return "";
+  }, [selectedAssetOption?.assetId, selectedExportOption?.sourceAssetId, sourceMode]);
+
   useEffect(() => {
     if (initialAssetId && eligibleProjectAssetOptions.some((option) => option.assetId === initialAssetId)) {
       setSelectedAssetId(initialAssetId);
@@ -496,6 +544,86 @@ export function YouTubeUploadHub({
         ? selectedExportOption?.file ?? null
         : localVideoFile;
 
+  const sourceSelectionKey = useMemo(() => {
+    if (sourceMode === "project_asset") {
+      return selectedAssetOption ? `project_asset:${selectedProjectId}:${selectedAssetOption.assetId}` : "project_asset:none";
+    }
+    if (sourceMode === "project_export") {
+      return selectedExportOption ? `project_export:${selectedProjectId}:${selectedExportOption.exportId}` : "project_export:none";
+    }
+    return localVideoFile
+      ? `local_file:${localVideoFile.name}:${localVideoFile.size}:${localVideoFile.lastModified}`
+      : "local_file:none";
+  }, [localVideoFile, selectedAssetOption, selectedExportOption, selectedProjectId, sourceMode]);
+
+  const activeVideoTraits = useMemo(() => {
+    if (sourceMode === "project_asset") {
+      return {
+        durationSeconds: selectedAssetOption?.durationSeconds,
+        width: selectedAssetOption?.width,
+        height: selectedAssetOption?.height,
+      };
+    }
+    if (sourceMode === "project_export") {
+      return {
+        exportKind: selectedExportOption?.kind,
+        durationSeconds: selectedExportOption?.durationSeconds,
+        width: selectedExportOption?.width,
+        height: selectedExportOption?.height,
+      };
+    }
+    return {
+      durationSeconds: localVideoTraits?.durationSeconds,
+      width: localVideoTraits?.width,
+      height: localVideoTraits?.height,
+    };
+  }, [localVideoTraits, selectedAssetOption, selectedExportOption, sourceMode]);
+
+  const defaultPublishIntent = useMemo(
+    () => inferYouTubePublishIntent(activeVideoTraits),
+    [activeVideoTraits]
+  );
+
+  const shortEligibility = useMemo(
+    () => resolveYouTubeShortEligibility(activeVideoTraits),
+    [activeVideoTraits]
+  );
+
+  const matchingVideoInfoRecord = useMemo(
+    () =>
+      resolveMatchingVideoInfoRecord({
+        history: projectVideoInfoHistory,
+        sourceAssetId: activeSourceAssetId,
+      }),
+    [activeSourceAssetId, projectVideoInfoHistory]
+  );
+  const matchingVideoInfoAnalysis = matchingVideoInfoRecord?.analysis ?? null;
+  const shortSuggestionPrefillDraft = useMemo(() => {
+    if (sourceMode !== "project_export" || selectedExportOption?.kind !== "short") {
+      return null;
+    }
+
+    return buildShortSuggestionPublishDraft({
+      short: selectedExportOption.short,
+      plan: selectedExportOption.plan,
+    });
+  }, [selectedExportOption, sourceMode]);
+  const activeMetadataSourceKey = useMemo(() => {
+    if (!selectedProjectId || !activeSourceAssetId) return "";
+    return `${selectedProjectId}:${activeSourceAssetId}`;
+  }, [activeSourceAssetId, selectedProjectId]);
+  const preferredPrefillDraft = shortSuggestionPrefillDraft
+    ?? (matchingVideoInfoAnalysis ? buildVideoInfoPublishDraft(matchingVideoInfoAnalysis) : null);
+  const preferredPrefillSource = shortSuggestionPrefillDraft
+    ? "short_suggestion"
+    : matchingVideoInfoAnalysis
+      ? "video_info"
+      : null;
+  const preferredPrefillKey = shortSuggestionPrefillDraft
+    ? sourceSelectionKey
+    : activeMetadataSourceKey;
+  const hasAutoloadMetadata = Boolean(preferredPrefillDraft) || hasAiGenerations;
+
   useEffect(() => {
     let objectUrl: string | null = null;
     if (!activeVideoFile) {
@@ -508,6 +636,35 @@ export function YouTubeUploadHub({
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [activeVideoFile]);
+
+  useEffect(() => {
+    setIsPublishIntentDirty(false);
+  }, [sourceSelectionKey]);
+
+  useEffect(() => {
+    if (isPublishIntentDirty) return;
+    setPublishIntent(defaultPublishIntent);
+  }, [defaultPublishIntent, isPublishIntentDirty]);
+
+  useEffect(() => {
+    const currentKey = preferredPrefillKey;
+    if (lastAutoPrefillAttemptKeyRef.current === currentKey) {
+      return;
+    }
+
+    lastAutoPrefillAttemptKeyRef.current = currentKey;
+
+    if (!currentKey || hasManualDraftEdits || !preferredPrefillDraft) {
+      return;
+    }
+
+    if (!preferredPrefillDraft.title && !preferredPrefillDraft.description && !preferredPrefillDraft.tagsInput) {
+      return;
+    }
+
+    setPublishDraft(preferredPrefillDraft);
+    setAutoPrefilledSourceKey(currentKey);
+  }, [hasManualDraftEdits, preferredPrefillDraft, preferredPrefillKey]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -608,12 +765,35 @@ export function YouTubeUploadHub({
     ]
   );
 
+  const shortEligibilityMessage = useMemo(() => {
+    const shapeLabel = formatVideoShape(shortEligibility.width, shortEligibility.height);
+    const durationLabel = formatDurationSeconds(shortEligibility.durationSeconds);
+
+    if (shortEligibility.eligible) {
+      return `Eligible for a Shorts-first upload: ${shapeLabel} and ${durationLabel}.`;
+    }
+
+    if (!shortEligibility.isVerticalOrSquare && !shortEligibility.durationWithinLimit) {
+      return `This file looks like a standard video right now: ${shapeLabel} and ${durationLabel}. Shorts need a square or vertical frame and a duration of ${YOUTUBE_SHORTS_MAX_DURATION_SECONDS} seconds or less.`;
+    }
+    if (!shortEligibility.isVerticalOrSquare) {
+      return `This file is ${shapeLabel}. Shorts need a square or vertical frame.`;
+    }
+    if (!shortEligibility.durationWithinLimit) {
+      return `This file runs ${durationLabel}. Shorts need to be ${YOUTUBE_SHORTS_MAX_DURATION_SECONDS} seconds or less.`;
+    }
+    return "ClipScribe could not verify that this file qualifies as a Short yet.";
+  }, [shortEligibility]);
+
+  const isShortPublishBlocked = publishIntent === "short" && !shortEligibility.eligible;
+
   const canUpload = Boolean(
     session?.configured &&
       session.connected &&
       activeVideoFile &&
       publishDraft.title.trim() &&
-      publishDraft.description.trim()
+      publishDraft.description.trim() &&
+      !isShortPublishBlocked
   );
   const categoryLabel = useMemo(
     () => catalog?.categories.find((category) => category.id === categoryId)?.title ?? "Not set",
@@ -640,11 +820,54 @@ export function YouTubeUploadHub({
 
 
   const handleLocalVideoSelection = useCallback((file: File | null) => {
+    const token = ++localVideoSelectionTokenRef.current;
     setPublishResult(null);
     setUploadError(null);
     setUploadProgress(null);
     setLocalVideoFile(file);
+    setLocalVideoTraits(null);
+    setLocalVideoMetadataError(null);
+
+    if (!file) {
+      setIsReadingLocalVideoMetadata(false);
+      return;
+    }
+
+    setIsReadingLocalVideoMetadata(true);
+    void readMediaMetadata(file)
+      .then((metadata) => {
+        if (localVideoSelectionTokenRef.current !== token) return;
+        if (metadata.kind !== "video") {
+          throw new Error("Select a video file to publish on YouTube.");
+        }
+        setLocalVideoTraits({
+          durationSeconds: metadata.durationSeconds,
+          width: metadata.width,
+          height: metadata.height,
+        });
+      })
+      .catch((error) => {
+        if (localVideoSelectionTokenRef.current !== token) return;
+        setLocalVideoMetadataError(
+          error instanceof Error ? error.message : "Failed to inspect the selected video."
+        );
+      })
+      .finally(() => {
+        if (localVideoSelectionTokenRef.current !== token) return;
+        setIsReadingLocalVideoMetadata(false);
+      });
   }, []);
+
+  const updatePublishDraftField = useCallback(
+    (field: keyof YouTubePublishDraft, value: string) => {
+      setHasManualDraftEdits(true);
+      setPublishDraft((prev) => ({
+        ...prev,
+        [field]: value,
+      }));
+    },
+    []
+  );
 
   const handleDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -654,7 +877,7 @@ export function YouTubeUploadHub({
       toast.error("Drop a video file to prepare a YouTube upload.");
       return;
     }
-    handleLocalVideoSelection(file);
+    void handleLocalVideoSelection(file);
   };
 
   const handleConnect = () => {
@@ -699,6 +922,33 @@ export function YouTubeUploadHub({
     setAutoloadField(field);
     setAutoloadPickerOpen(true);
   };
+
+  const applyPreferredPrefill = useCallback(
+    (field: AutoloadField) => {
+      if (!preferredPrefillDraft || !preferredPrefillKey || !preferredPrefillSource) {
+        openAutoloadPicker(field);
+        return;
+      }
+
+      if (field === "title") {
+        setPublishDraft((prev) => ({ ...prev, title: preferredPrefillDraft.title }));
+      } else if (field === "description") {
+        setPublishDraft((prev) => ({ ...prev, description: preferredPrefillDraft.description }));
+      } else if (field === "tags") {
+        setPublishDraft((prev) => ({ ...prev, tagsInput: preferredPrefillDraft.tagsInput }));
+      } else {
+        setPublishDraft(preferredPrefillDraft);
+      }
+
+      setAutoPrefilledSourceKey(preferredPrefillKey);
+      toast.success(
+        preferredPrefillSource === "short_suggestion"
+          ? "Short suggestion metadata loaded"
+          : "AI metadata loaded"
+      );
+    },
+    [preferredPrefillDraft, preferredPrefillKey, preferredPrefillSource]
+  );
 
   const handleUpload = async () => {
     if (!activeVideoFile) return;
@@ -748,7 +998,13 @@ export function YouTubeUploadHub({
         const record = buildProjectYouTubeUploadRecord({
           projectId,
           sourceMode,
-          sourceAssetId: sourceMode === "project_asset" ? selectedAssetId || undefined : undefined,
+          publishIntent,
+          sourceAssetId:
+            sourceMode === "project_asset"
+              ? selectedAssetId || undefined
+              : sourceMode === "project_export"
+                ? selectedExportOption?.sourceAssetId
+                : undefined,
           sourceExportId: sourceMode === "project_export" ? selectedExportId || undefined : undefined,
           outputAssetId: sourceMode === "project_export" ? selectedExportOption?.outputAssetId : undefined,
           sourceFilename:
@@ -790,6 +1046,7 @@ export function YouTubeUploadHub({
     { label: "Contains synthetic media", value: formatOptionalBoolean(containsSyntheticMedia, { trueLabel: "Yes", falseLabel: "No" }) },
     { label: "License", value: formatOptionalLicense(license) },
   ];
+  const publishIntentLabel = publishIntent === "short" ? "Short" : "Video";
 
 
 
@@ -1024,6 +1281,61 @@ export function YouTubeUploadHub({
                       </div>
                     </div>
                   ) : null}
+
+                  <div className="grid gap-3 rounded-2xl border border-white/8 bg-black/20 p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <Label className="text-zinc-200">Publish as</Label>
+                        <div className="mt-1 text-xs text-zinc-500">
+                          ClipScribe uploads a standard YouTube video. This setting controls our defaults and checks before upload.
+                        </div>
+                      </div>
+                      <Badge className="border-white/10 bg-white/5 text-white/80">
+                        Auto: {defaultPublishIntent === "short" ? "Short" : "Video"}
+                      </Badge>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPublishIntent("short");
+                          setIsPublishIntentDirty(true);
+                        }}
+                        className={cn(
+                          "rounded-2xl border p-4 text-left transition-colors",
+                          publishIntent === "short"
+                            ? "border-cyan-300/30 bg-cyan-400/10 text-cyan-50"
+                            : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        )}
+                      >
+                        <div className="text-sm font-semibold">Short</div>
+                        <div className="mt-1 text-xs text-current/70">
+                          Use Shorts-friendly defaults and require a square or vertical file under {YOUTUBE_SHORTS_MAX_DURATION_SECONDS} seconds.
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPublishIntent("standard");
+                          setIsPublishIntentDirty(true);
+                        }}
+                        className={cn(
+                          "rounded-2xl border p-4 text-left transition-colors",
+                          publishIntent === "standard"
+                            ? "border-emerald-300/30 bg-emerald-400/10 text-emerald-50"
+                            : "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
+                        )}
+                      >
+                        <div className="text-sm font-semibold">Video normal</div>
+                        <div className="mt-1 text-xs text-current/70">
+                          Keep the regular long-form publish flow even if the source looks Short-ready.
+                        </div>
+                      </button>
+                    </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300">
+                      {shortEligibilityMessage}
+                    </div>
+                  </div>
                 </div>
 
               </CardContent>
@@ -1139,7 +1451,7 @@ export function YouTubeUploadHub({
                   type="file"
                   accept="video/*"
                   className="hidden"
-                  onChange={(event) => handleLocalVideoSelection(event.target.files?.[0] ?? null)}
+                  onChange={(event) => void handleLocalVideoSelection(event.target.files?.[0] ?? null)}
                 />
 
                 {sourceMode === "local_file" ? (
@@ -1228,6 +1540,61 @@ export function YouTubeUploadHub({
                         </Button>
                       ) : null}
                     </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge className="border-white/10 bg-white/5 text-white/80">
+                        {publishIntentLabel}
+                      </Badge>
+                      <Badge className="border-white/10 bg-white/5 text-white/80">
+                        {formatVideoShape(shortEligibility.width, shortEligibility.height)}
+                      </Badge>
+                      <Badge className="border-white/10 bg-white/5 text-white/80">
+                        {formatDurationSeconds(shortEligibility.durationSeconds)}
+                      </Badge>
+                      {publishIntent === "short" ? (
+                        <Badge
+                          className={cn(
+                            shortEligibility.eligible
+                              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-100"
+                              : "border-amber-400/25 bg-amber-400/10 text-amber-100"
+                          )}
+                        >
+                          {shortEligibility.eligible ? "Short-ready" : "Needs Short fixes"}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    {sourceMode === "local_file" && isReadingLocalVideoMetadata ? (
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
+                        Inspecting local video metadata...
+                      </div>
+                    ) : null}
+                    {localVideoMetadataError ? (
+                      <Alert className="border-red-400/25 bg-red-400/10 text-red-50">
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTitle>Could not inspect the local video</AlertTitle>
+                        <AlertDescription className="text-red-50/80">{localVideoMetadataError}</AlertDescription>
+                      </Alert>
+                    ) : null}
+                    {publishIntent === "short" ? (
+                      <Alert
+                        className={cn(
+                          shortEligibility.eligible
+                            ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-50"
+                            : "border-amber-400/25 bg-amber-400/10 text-amber-50"
+                        )}
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        <AlertTitle>
+                          {shortEligibility.eligible ? "Short checks passed" : "Short checks need attention"}
+                        </AlertTitle>
+                        <AlertDescription className="text-current/80">
+                          {shortEligibilityMessage}
+                        </AlertDescription>
+                      </Alert>
+                    ) : (
+                      <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3 text-sm text-zinc-400">
+                        YouTube will still receive a standard video upload. If the final file meets Shorts rules, YouTube can surface it as a Short.
+                      </div>
+                    )}
                     {videoPreviewUrl ? (
                       <video
                         className="aspect-video w-full rounded-2xl border border-white/10 bg-black"
@@ -1252,11 +1619,11 @@ export function YouTubeUploadHub({
                     <FileText className="h-5 w-5 text-emerald-300" />
                     Publish draft
                   </div>
-                  {hasAiGenerations ? (
+                  {hasAutoloadMetadata ? (
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => openAutoloadPicker("all")}
+                      onClick={() => applyPreferredPrefill("all")}
                       className="border-emerald-500/30 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
                     >
                       <WandSparkles className="mr-2 h-3.5 w-3.5" />
@@ -1266,6 +1633,30 @@ export function YouTubeUploadHub({
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-6 p-6">
+                {preferredPrefillDraft && preferredPrefillKey ? (
+                  <Alert className="border-cyan-400/25 bg-cyan-400/10 text-cyan-50">
+                    <Sparkles className="h-4 w-4" />
+                    <AlertTitle>
+                      {autoPrefilledSourceKey === preferredPrefillKey
+                        ? preferredPrefillSource === "short_suggestion"
+                          ? "Short suggestion metadata loaded"
+                          : "Matching AI metadata loaded"
+                        : preferredPrefillSource === "short_suggestion"
+                          ? "Short suggestion metadata available"
+                          : "Matching AI metadata available"}
+                    </AlertTitle>
+                    <AlertDescription className="text-cyan-50/80">
+                      {autoPrefilledSourceKey === preferredPrefillKey
+                        ? preferredPrefillSource === "short_suggestion"
+                          ? "Title, description, and tags were prefilled from the exported short suggestion. You can still edit everything before publish."
+                          : "Title, description, and tags were prefilled from the latest video_info run for this source. You can still edit everything before publish."
+                        : preferredPrefillSource === "short_suggestion"
+                          ? "This short export carries its own suggestion metadata. Use Autoload all if you want to replace the current draft with the short-specific packaging."
+                          : "This source has compatible video_info metadata. Use Autoload all if you want to replace the current draft with the latest AI packaging."}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
                 <div className="grid gap-5">
                   <div className="grid gap-2">
                     <div className="flex items-center justify-between">
@@ -1273,19 +1664,14 @@ export function YouTubeUploadHub({
                         Title
                       </Label>
                       <AiAutoloadButton 
-                        disabled={!hasAiGenerations} 
-                        onClick={() => openAutoloadPicker("title")} 
+                        disabled={!hasAutoloadMetadata} 
+                        onClick={() => applyPreferredPrefill("title")} 
                       />
                     </div>
                     <Input
                       id="yt-title"
                       value={publishDraft.title}
-                      onChange={(event) =>
-                        setPublishDraft((prev) => ({
-                          ...prev,
-                          title: event.target.value,
-                        }))
-                      }
+                      onChange={(event) => updatePublishDraftField("title", event.target.value)}
                       placeholder="Give the video a precise, human title"
                       className="border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
                     />
@@ -1297,19 +1683,14 @@ export function YouTubeUploadHub({
                         Description
                       </Label>
                       <AiAutoloadButton 
-                        disabled={!hasAiGenerations} 
-                        onClick={() => openAutoloadPicker("description")} 
+                        disabled={!hasAutoloadMetadata} 
+                        onClick={() => applyPreferredPrefill("description")} 
                       />
                     </div>
                     <Textarea
                       id="yt-description"
                       value={publishDraft.description}
-                      onChange={(event) =>
-                        setPublishDraft((prev) => ({
-                          ...prev,
-                          description: event.target.value,
-                        }))
-                      }
+                      onChange={(event) => updatePublishDraftField("description", event.target.value)}
                       placeholder="Write the final description exactly as it should land on YouTube"
                       className="min-h-44 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
                     />
@@ -1437,19 +1818,14 @@ export function YouTubeUploadHub({
                             Tags
                           </Label>
                           <AiAutoloadButton 
-                            disabled={!hasAiGenerations} 
-                            onClick={() => openAutoloadPicker("tags")} 
+                            disabled={!hasAutoloadMetadata} 
+                            onClick={() => applyPreferredPrefill("tags")} 
                           />
                         </div>
                         <Input
                           id="yt-tags"
                           value={publishDraft.tagsInput}
-                          onChange={(event) =>
-                            setPublishDraft((prev) => ({
-                              ...prev,
-                              tagsInput: event.target.value,
-                            }))
-                          }
+                          onChange={(event) => updatePublishDraftField("tagsInput", event.target.value)}
                           placeholder="workflow, clip editing, youtube upload"
                           className="border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
                         />
@@ -1804,6 +2180,16 @@ export function YouTubeUploadHub({
 
                 <Separator className="bg-white/8" />
 
+                {isShortPublishBlocked ? (
+                  <Alert className="border-amber-400/25 bg-amber-400/10 text-amber-50">
+                    <AlertTriangle className="h-4 w-4" />
+                    <AlertTitle>Short publish is blocked for this file</AlertTitle>
+                    <AlertDescription className="text-amber-50/80">
+                      {shortEligibilityMessage}
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+
                 <div className="flex flex-wrap items-center justify-between gap-4">
                   <div className="text-sm text-zinc-400">
                     Uploads use your live OAuth session and will fail fast if it is not connected.
@@ -1952,16 +2338,19 @@ export function YouTubeUploadHub({
           field={autoloadField}
           open={autoloadPickerOpen}
           onOpenChange={setAutoloadPickerOpen}
-          onApplyTitle={(title) => setPublishDraft(p => ({ ...p, title }))}
-          onApplyDescription={(description) => setPublishDraft(p => ({ ...p, description }))}
-          onApplyTags={(tags) => setPublishDraft(p => ({ ...p, tagsInput: tags }))}
+          onApplyTitle={(title) => setPublishDraft((p) => ({ ...p, title }))}
+          onApplyDescription={(description) => setPublishDraft((p) => ({ ...p, description }))}
+          onApplyTags={(tags) => setPublishDraft((p) => ({ ...p, tagsInput: tags }))}
           onApplyAll={(values) => {
-            setPublishDraft(p => ({ 
-              ...p, 
+            setPublishDraft((p) => ({
+              ...p,
               title: values.title,
               description: values.description,
-              tagsInput: values.tags 
+              tagsInput: values.tags,
             }));
+            if (activeMetadataSourceKey) {
+              setAutoPrefilledSourceKey(activeMetadataSourceKey);
+            }
           }}
         />
       )}
@@ -2017,6 +2406,15 @@ export function YouTubeUploadHub({
                         {activeVideoFile ? formatFileSize(activeVideoFile.size) : "No file"}
                       </Badge>
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Badge className="border-white/10 bg-black/20 text-white/80">{publishIntentLabel}</Badge>
+                      <Badge className="border-white/10 bg-black/20 text-white/80">
+                        {formatVideoShape(shortEligibility.width, shortEligibility.height)}
+                      </Badge>
+                      <Badge className="border-white/10 bg-black/20 text-white/80">
+                        {formatDurationSeconds(shortEligibility.durationSeconds)}
+                      </Badge>
+                    </div>
                     {videoPreviewUrl ? (
                       <video
                         className="mt-4 aspect-video w-full rounded-2xl border border-white/10 bg-black"
@@ -2070,6 +2468,7 @@ export function YouTubeUploadHub({
                   </div>
                   <div className="grid gap-3">
                     {[
+                      { label: "Publish as", value: publishIntentLabel },
                       { label: "Privacy", value: privacyLabel },
                       { label: "Category", value: categoryLabel },
                       { label: "Default language", value: defaultLanguageLabel },
@@ -2092,6 +2491,15 @@ export function YouTubeUploadHub({
                     <ShieldAlert className="h-4 w-4 text-amber-300" />
                     Compliance & distribution
                   </div>
+                  {publishIntent === "short" && isShortPublishBlocked ? (
+                    <Alert className="mb-4 border-amber-400/25 bg-amber-400/10 text-amber-50">
+                      <AlertTriangle className="h-4 w-4" />
+                      <AlertTitle>Short checks still fail</AlertTitle>
+                      <AlertDescription className="text-amber-50/80">
+                        {shortEligibilityMessage}
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
                   <div className="grid gap-3">
                     {complianceRows.map((item) => (
                       <div
@@ -2163,7 +2571,7 @@ export function YouTubeUploadHub({
               ) : (
                 <Upload className="mr-2 h-4 w-4" />
               )}
-              Confirm upload
+              Confirm {publishIntent === "short" ? "Short" : "upload"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -134,6 +134,7 @@ function createUpload(overrides: Partial<ProjectYouTubeUploadRecord> = {}): Proj
     outputAssetId: overrides.outputAssetId,
     sourceFilename: overrides.sourceFilename ?? "render.mp4",
     draft: overrides.draft ?? {
+      publishIntent: "standard",
       title: "Upload",
       description: "Description",
       privacyStatus: "private",

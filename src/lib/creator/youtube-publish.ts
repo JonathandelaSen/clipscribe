@@ -1,4 +1,10 @@
-import type { CreatorVideoInfoBlock, CreatorVideoInfoGenerateResponse } from "@/lib/creator/types";
+import type {
+  CreatorShortPlan,
+  CreatorSuggestedShort,
+  CreatorVideoInfoBlock,
+  CreatorVideoInfoGenerateResponse,
+  CreatorVideoInfoProjectRecord,
+} from "@/lib/creator/types";
 import { makeId } from "@/lib/history";
 import type {
   ProjectAssetRecord,
@@ -15,9 +21,11 @@ export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] 
   "chapters",
   "pinnedComment",
 ];
+export const YOUTUBE_SHORTS_MAX_DURATION_SECONDS = 180;
 
 export type YouTubePublishSourceMode = "local_file" | "project_asset" | "project_export";
 export type YouTubePublishView = "list" | "new";
+export type YouTubePublishIntent = "short" | "standard";
 
 export interface YouTubePublishDraft {
   title: string;
@@ -29,9 +37,16 @@ export interface YouTubeProjectExportOption {
   exportId: string;
   projectId: string;
   outputAssetId: string;
+  sourceAssetId?: string;
+  shortProjectId?: string;
   filename: string;
   createdAt: number;
   kind: ProjectExportRecord["kind"];
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+  short?: CreatorSuggestedShort;
+  plan?: CreatorShortPlan;
   file: File;
 }
 
@@ -40,12 +55,32 @@ export interface YouTubeProjectAssetOption {
   projectId: string;
   filename: string;
   createdAt: number;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
   file: File;
+}
+
+export interface YouTubePublishVideoTraits {
+  exportKind?: ProjectExportRecord["kind"];
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+}
+
+export interface YouTubeShortEligibility {
+  eligible: boolean;
+  isVerticalOrSquare: boolean;
+  durationWithinLimit: boolean;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
 }
 
 export function buildProjectYouTubeUploadRecord(input: {
   projectId: string;
   sourceMode: YouTubePublishSourceMode;
+  publishIntent: YouTubePublishIntent;
   sourceAssetId?: string;
   sourceExportId?: string;
   outputAssetId?: string;
@@ -67,6 +102,7 @@ export function buildProjectYouTubeUploadRecord(input: {
     outputAssetId: input.outputAssetId,
     sourceFilename: input.sourceFilename,
     draft: {
+      publishIntent: input.publishIntent,
       title: input.draft.title,
       description: input.draft.description,
       privacyStatus: input.draft.privacyStatus,
@@ -125,8 +161,44 @@ function uniqueStrings(values: string[]): string[] {
   return result;
 }
 
+function extractHashtagsFromText(value: string): string[] {
+  return Array.from(value.matchAll(/#([\p{L}\p{N}_]+)/gu), (match) => match[1] ?? "");
+}
+
 export function buildVideoInfoTagsInput(result: Pick<CreatorVideoInfoGenerateResponse, "youtube">): string {
   return uniqueStrings(result.youtube.hashtags.map(normalizeTag)).join(", ");
+}
+
+export function resolveYouTubeShortEligibility(input: YouTubePublishVideoTraits): YouTubeShortEligibility {
+  if (input.exportKind === "short") {
+    return {
+      eligible: true,
+      isVerticalOrSquare: true,
+      durationWithinLimit: true,
+      durationSeconds: input.durationSeconds,
+      width: input.width,
+      height: input.height,
+    };
+  }
+
+  const width = Number.isFinite(input.width) ? input.width : undefined;
+  const height = Number.isFinite(input.height) ? input.height : undefined;
+  const durationSeconds = Number.isFinite(input.durationSeconds) ? input.durationSeconds : undefined;
+  const isVerticalOrSquare = Boolean(width && height && height >= width);
+  const durationWithinLimit = typeof durationSeconds === "number" && durationSeconds <= YOUTUBE_SHORTS_MAX_DURATION_SECONDS;
+
+  return {
+    eligible: isVerticalOrSquare && durationWithinLimit,
+    isVerticalOrSquare,
+    durationWithinLimit,
+    durationSeconds,
+    width,
+    height,
+  };
+}
+
+export function inferYouTubePublishIntent(input: YouTubePublishVideoTraits): YouTubePublishIntent {
+  return resolveYouTubeShortEligibility(input).eligible ? "short" : "standard";
 }
 
 export function applySuggestedTitle(draft: YouTubePublishDraft, title: string): YouTubePublishDraft {
@@ -147,6 +219,32 @@ export function applySuggestedTags(draft: YouTubePublishDraft, result: Pick<Crea
   return {
     ...draft,
     tagsInput: buildVideoInfoTagsInput(result),
+  };
+}
+
+export function buildVideoInfoPublishDraft(
+  result: Pick<CreatorVideoInfoGenerateResponse, "youtube">
+): YouTubePublishDraft {
+  return {
+    title: result.youtube.titleIdeas[0]?.trim() ?? "",
+    description: result.youtube.description.trim(),
+    tagsInput: buildVideoInfoTagsInput(result),
+  };
+}
+
+export function buildShortSuggestionPublishDraft(input: {
+  short?: CreatorSuggestedShort;
+  plan?: CreatorShortPlan;
+}): YouTubePublishDraft | null {
+  const title = input.short?.title?.trim() || input.plan?.title?.trim() || "";
+  const description = input.short?.caption?.trim() || input.plan?.caption?.trim() || "";
+
+  if (!title && !description) return null;
+
+  return {
+    title,
+    description,
+    tagsInput: uniqueStrings(extractHashtagsFromText(description).map(normalizeTag)).join(", "),
   };
 }
 
@@ -192,6 +290,9 @@ export function getEligibleYouTubeProjectAssets(
           projectId: asset.projectId,
           filename: asset.filename,
           createdAt: asset.createdAt,
+          durationSeconds: asset.durationSeconds,
+          width: asset.width,
+          height: asset.height,
           file: asset.fileBlob,
         },
       ];
@@ -216,9 +317,16 @@ export function getEligibleYouTubeProjectExports(
           exportId: record.id,
           projectId: record.projectId,
           outputAssetId: record.outputAssetId,
+          sourceAssetId: record.sourceAssetId,
+          shortProjectId: record.shortProjectId,
           filename: record.filename || asset.filename,
           createdAt: record.createdAt,
           kind: record.kind,
+          durationSeconds: record.durationSeconds ?? asset.durationSeconds,
+          width: record.width ?? asset.width,
+          height: record.height ?? asset.height,
+          short: record.short,
+          plan: record.plan,
           file: asset.fileBlob,
         },
       ];
@@ -264,4 +372,17 @@ export function resolveInitialYouTubePublishSelection(input: {
     exportId: hasRequestedAsset ? "" : hasRequestedExport ? normalizedExportId : "",
     sourceMode: hasRequestedAsset ? "project_asset" : hasRequestedExport ? "project_export" : "local_file",
   };
+}
+
+export function resolveMatchingVideoInfoRecord(input: {
+  history: CreatorVideoInfoProjectRecord[];
+  sourceAssetId?: string | null;
+}): CreatorVideoInfoProjectRecord | null {
+  const sourceAssetId = input.sourceAssetId?.trim();
+  if (!sourceAssetId) return null;
+
+  const matches = input.history.filter((record) => record.sourceAssetId === sourceAssetId);
+  if (matches.length === 0) return null;
+
+  return [...matches].sort((left, right) => right.generatedAt - left.generatedAt)[0] ?? null;
 }

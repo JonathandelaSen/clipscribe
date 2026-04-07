@@ -30,6 +30,10 @@ function sourceModeLabel(record: ProjectYouTubeUploadRecord) {
   return "Local file";
 }
 
+function publishIntentLabel(record: ProjectYouTubeUploadRecord) {
+  return record.draft.publishIntent === "short" ? "Short" : "Video";
+}
+
 function processingTone(status: string) {
   if (status === "succeeded") {
     return "border-emerald-400/25 bg-emerald-400/10 text-emerald-100";
@@ -128,6 +132,9 @@ export function ProjectYouTubeUploadList({
                                 Latest upload
                               </Badge>
                             ) : null}
+                            <Badge className="border-white/10 bg-white/5 text-white/75">
+                              {publishIntentLabel(upload)}
+                            </Badge>
                             <Badge className={processingTone(upload.result.processingStatus)}>
                               {upload.result.processingStatus}
                             </Badge>
