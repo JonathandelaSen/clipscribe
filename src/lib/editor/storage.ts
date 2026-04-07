@@ -8,6 +8,7 @@ import type {
   EditorAssetKind,
   EditorAssetRecord,
   EditorCanvasState,
+  EditorReactiveOverlayPresetId,
   EditorExportEngine,
   EditorExportRecord,
   EditorProjectRecord,
@@ -15,6 +16,7 @@ import type {
   EditorSubtitleTrackSettings,
   TimelineClipGroup,
   TimelineImageItem,
+  TimelineOverlayItem,
   TimelineSelection,
   TimelineAudioItem,
   TimelineVideoClipActions,
@@ -209,6 +211,31 @@ export function normalizeTimelineImageItem(
   };
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+export function normalizeTimelineOverlayItem(
+  item: TimelineOverlayItem | (Partial<TimelineOverlayItem> & Pick<TimelineOverlayItem, "id" | "presetId">)
+): TimelineOverlayItem {
+  return {
+    id: item.id,
+    presetId:
+      item.presetId === "equalizer_bars" || item.presetId === "pulse_ring" ? item.presetId : "waveform_line",
+    startOffsetSeconds: Number.isFinite(item.startOffsetSeconds) ? Math.max(0, Number(item.startOffsetSeconds)) : 0,
+    durationSeconds: Number.isFinite(item.durationSeconds) ? Math.max(0.25, Number(item.durationSeconds)) : 3,
+    positionXPercent: Number.isFinite(item.positionXPercent) ? clampNumber(Number(item.positionXPercent), 5, 95) : 50,
+    positionYPercent: Number.isFinite(item.positionYPercent) ? clampNumber(Number(item.positionYPercent), 5, 95) : 72,
+    widthPercent: Number.isFinite(item.widthPercent) ? clampNumber(Number(item.widthPercent), 8, 100) : 72,
+    heightPercent: Number.isFinite(item.heightPercent) ? clampNumber(Number(item.heightPercent), 6, 100) : 18,
+    scale: Number.isFinite(item.scale) ? clampNumber(Number(item.scale), 0.4, 3) : 1,
+    opacity: Number.isFinite(item.opacity) ? clampNumber(Number(item.opacity), 0.05, 1) : 0.95,
+    tintHex: typeof item.tintHex === "string" && /^#[0-9a-f]{6}$/i.test(item.tintHex.trim()) ? item.tintHex.trim() : "#7CE7FF",
+    sensitivity: Number.isFinite(item.sensitivity) ? clampNumber(Number(item.sensitivity), 0.2, 3) : 1,
+    smoothing: Number.isFinite(item.smoothing) ? clampNumber(Number(item.smoothing), 0, 0.98) : 0.62,
+  };
+}
+
 export function createDefaultVideoClip(input: {
   assetId: string;
   label: string;
@@ -254,6 +281,50 @@ export function createDefaultImageTrackItem(input: {
   };
 }
 
+export function createDefaultTimelineOverlayItem(input: {
+  presetId: EditorReactiveOverlayPresetId;
+  startOffsetSeconds?: number;
+  durationSeconds?: number;
+}): TimelineOverlayItem {
+  const base: TimelineOverlayItem = {
+    id: makeId("edoverlay"),
+    presetId: input.presetId,
+    startOffsetSeconds: Math.max(0, input.startOffsetSeconds ?? 0),
+    durationSeconds: Math.max(0.25, input.durationSeconds ?? 3),
+    positionXPercent: 50,
+    positionYPercent: 72,
+    widthPercent: 72,
+    heightPercent: 18,
+    scale: 1,
+    opacity: 0.95,
+    tintHex: "#7CE7FF",
+    sensitivity: 1,
+    smoothing: 0.62,
+  };
+
+  if (input.presetId === "equalizer_bars") {
+    return {
+      ...base,
+      widthPercent: 56,
+      heightPercent: 18,
+      tintHex: "#A5F3FC",
+    };
+  }
+
+  if (input.presetId === "pulse_ring") {
+    return {
+      ...base,
+      positionYPercent: 28,
+      widthPercent: 24,
+      heightPercent: 24,
+      tintHex: "#FDE68A",
+      smoothing: 0.72,
+    };
+  }
+
+  return base;
+}
+
 export function createEmptyEditorProject(input?: {
   id?: string;
   now?: number;
@@ -278,6 +349,7 @@ export function createEmptyEditorProject(input?: {
       zoomLevel: 1,
       selectedItem: undefined,
       imageItems: [],
+      overlayItems: [],
       videoClips: [],
       videoClipGroups: [],
       audioItems: [],
@@ -313,6 +385,9 @@ export function normalizeLegacyEditorProjectRecord(project: EditorProjectRecord 
       selectedItem,
       imageItems: Array.isArray(timeline.imageItems)
         ? timeline.imageItems.map((item) => normalizeTimelineImageItem(item))
+        : [],
+      overlayItems: Array.isArray((timeline as EditorProjectRecord["timeline"]).overlayItems)
+        ? (timeline as EditorProjectRecord["timeline"]).overlayItems.map((item) => normalizeTimelineOverlayItem(item))
         : [],
       videoClips: Array.isArray(timeline.videoClips)
         ? timeline.videoClips.map((clip) => normalizeTimelineVideoClip(clip))

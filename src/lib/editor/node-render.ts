@@ -16,9 +16,21 @@ export interface NodeEditorExportAsset {
   absolutePath: string;
 }
 
+export interface NodeEditorExportOverlay {
+  absolutePath: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  cropExpression?: string;
+}
+
 export interface NodeEditorExportInput {
   project: EditorProjectRecord;
   assets: readonly NodeEditorExportAsset[];
+  overlays?: readonly NodeEditorExportOverlay[];
   resolution: EditorResolution;
   outputPath: string;
   overwrite?: boolean;
@@ -189,9 +201,43 @@ function buildNodeEditorInputArgs(input: {
   });
 }
 
+function buildOverlayFilterGraph(input: {
+  baseVideoLabel: string;
+  overlays: readonly NodeEditorExportOverlay[];
+  overlayInputStartIndex: number;
+}): {
+  outputLabel: string;
+  filterParts: string[];
+} {
+  const filterParts: string[] = [];
+  let currentLabel = input.baseVideoLabel;
+
+  input.overlays.forEach((overlay, index) => {
+    const sourceInputLabel = `overlay_input_${index}`;
+    const croppedInputLabel = overlay.cropExpression ? `overlay_crop_${index}` : sourceInputLabel;
+    const outputLabel = `overlay_${index}`;
+    filterParts.push(`[${input.overlayInputStartIndex + index}:v]setpts=PTS-STARTPTS[${sourceInputLabel}]`);
+    if (overlay.cropExpression) {
+      filterParts.push(
+        `[${sourceInputLabel}]crop=${Math.max(1, Math.round(overlay.width))}:${Math.max(1, Math.round(overlay.height))}:0:'${overlay.cropExpression}'[${croppedInputLabel}]`
+      );
+    }
+    filterParts.push(
+      `[${currentLabel}][${croppedInputLabel}]overlay=x=${Math.max(0, Math.round(overlay.x))}:y=${Math.max(0, Math.round(overlay.y))}:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outputLabel}]`
+    );
+    currentLabel = outputLabel;
+  });
+
+  return {
+    filterParts,
+    outputLabel: currentLabel,
+  };
+}
+
 export function buildNodeEditorExportCommand(input: {
   project: EditorProjectRecord;
   assets: readonly NodeEditorExportAsset[];
+  overlays?: readonly NodeEditorExportOverlay[];
   resolution: EditorResolution;
   outputPath: string;
   overwrite?: boolean;
@@ -218,9 +264,19 @@ export function buildNodeEditorExportCommand(input: {
     resolution: input.resolution,
   });
   const useStillImageCompatibilityPreset = isStillImageCompatibilityExport(input.project);
+  const overlays = input.overlays ?? [];
 
   let filterComplex = exportPlan.filterComplex;
   let videoTrackLabel = exportPlan.videoTrackLabel;
+  if (overlays.length > 0) {
+    const overlayGraph = buildOverlayFilterGraph({
+      baseVideoLabel: videoTrackLabel,
+      overlays,
+      overlayInputStartIndex: exportPlan.inputs.length,
+    });
+    filterComplex = `${filterComplex};${overlayGraph.filterParts.join(";")}`;
+    videoTrackLabel = overlayGraph.outputLabel;
+  }
   if (input.subtitleTrackPath) {
     const subtitleVideoLabel = "video_track_subtitles";
     filterComplex = `${filterComplex};[${videoTrackLabel}]${buildEditorAssFilterExpression(input.subtitleTrackPath)}[${subtitleVideoLabel}]`;
@@ -238,6 +294,7 @@ export function buildNodeEditorExportCommand(input: {
       inputs: exportPlan.inputs,
       imageFramerate: useStillImageCompatibilityPreset ? STILL_IMAGE_EXPORT_FPS : null,
     }),
+    ...overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]),
     "-filter_complex",
     filterComplex,
     ...mapArgs,
@@ -285,11 +342,17 @@ export function buildNodeEditorExportCommand(input: {
       input.project.timeline.imageItems.length
         ? `${input.project.timeline.imageItems.length} image track item${input.project.timeline.imageItems.length === 1 ? "" : "s"} layered across the export.`
         : "No image overlay track.",
+      overlays.length
+        ? `${overlays.length} reactive overlay atlas input${overlays.length === 1 ? "" : "s"} composed before subtitles.`
+        : "No reactive overlay atlases.",
       input.project.timeline.audioItems.length
         ? `${input.project.timeline.audioItems.length} audio track item${input.project.timeline.audioItems.length === 1 ? "" : "s"} mixed with clip audio.`
         : exportPlan.mixedAudioLabel
           ? "Clip audio only."
           : "No audio track.",
+      input.project.timeline.overlayItems.length
+        ? `Reactive overlay items=${input.project.timeline.overlayItems.length}; presets=${[...new Set(input.project.timeline.overlayItems.map((item) => item.presetId))].join(", ")}; analysisSource=final_mix.`
+        : "Reactive overlay items=0.",
       useStillImageCompatibilityPreset
         ? `Still-image compatibility preset enabled: ${STILL_IMAGE_EXPORT_FPS}fps looped image inputs, CFR output, tune=stillimage, yuv420p, and explicit duration clamp.`
         : "Standard CLI export preset.",
@@ -326,6 +389,7 @@ export async function exportEditorProjectWithSystemFfmpeg(
   const command = buildNodeEditorExportCommand({
     project: input.project,
     assets: input.assets,
+    overlays: input.overlays,
     resolution: input.resolution,
     outputPath,
     overwrite: input.overwrite,

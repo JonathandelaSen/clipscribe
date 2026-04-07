@@ -84,6 +84,7 @@ test("parseEditorSystemExportFormData reads project metadata and uploaded files"
   assert.equal(parsed.assets.length, 1);
   assert.equal(parsed.assets[0]?.asset.id, asset.id);
   assert.equal(parsed.assets[0]?.file.name, "clip.mp4");
+  assert.equal(parsed.overlays.length, 0);
 });
 
 test("renderEditorSystemExport returns bytes and cleans up temp files on success", async () => {
@@ -95,6 +96,7 @@ test("renderEditorSystemExport returns bytes and cleans up temp files on success
       project,
       resolution: "1080p",
       assets: [{ asset, file }],
+      overlays: [],
     },
     {
       exportProject: async (input) => {
@@ -134,6 +136,7 @@ test("renderEditorSystemExport accepts history-backed assets when a source file 
       project,
       resolution: "1080p",
       assets: [{ asset, file }],
+      overlays: [],
     },
     {
       exportProject: async (input) => {
@@ -172,6 +175,7 @@ test("renderEditorSystemExport cleans up temp files when the export is aborted",
           project,
           resolution: "1080p",
           assets: [{ asset, file }],
+          overlays: [],
           signal: controller.signal,
         },
         {

@@ -6,6 +6,7 @@ export const EDITOR_SYSTEM_EXPORT_FORM_FIELDS = {
   resolution: "resolution",
   engine: "engine",
   assets: "assets",
+  overlays: "overlays",
 } as const;
 
 const EDITOR_SYSTEM_EXPORT_HEADER_NAMES = {
@@ -24,6 +25,18 @@ export type SystemEditorExportAssetRecord = Omit<EditorAssetRecord, "fileBlob">;
 export interface EditorSystemExportAssetDescriptor {
   asset: SystemEditorExportAssetRecord;
   fileField: string;
+}
+
+export interface EditorSystemExportOverlayDescriptor {
+  start: number;
+  end: number;
+  fileField: string;
+  filename: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  cropExpression?: string;
 }
 
 export interface EditorSystemExportResponseMetadata {

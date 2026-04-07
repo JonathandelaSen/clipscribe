@@ -68,6 +68,7 @@ export async function POST(request: Request) {
     const result = await renderEditorSystemExport({
       project: payload.project,
       assets: payload.assets,
+      overlays: payload.overlays,
       resolution: payload.resolution,
       signal: request.signal,
       onProgress: (progress) => {

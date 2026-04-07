@@ -105,7 +105,25 @@ export interface TimelineImageItem {
   canvas: EditorCanvasState;
 }
 
-export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image" | "subtitle";
+export type EditorReactiveOverlayPresetId = "waveform_line" | "equalizer_bars" | "pulse_ring";
+
+export interface TimelineOverlayItem {
+  id: string;
+  presetId: EditorReactiveOverlayPresetId;
+  startOffsetSeconds: number;
+  durationSeconds: number;
+  positionXPercent: number;
+  positionYPercent: number;
+  widthPercent: number;
+  heightPercent: number;
+  scale: number;
+  opacity: number;
+  tintHex: string;
+  sensitivity: number;
+  smoothing: number;
+}
+
+export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image" | "overlay" | "subtitle";
 
 export interface TimelineSelection {
   kind: TimelineSelectionKind;
@@ -134,6 +152,7 @@ export interface EditorProjectTimelineState {
   zoomLevel: number;
   selectedItem?: TimelineSelection;
   imageItems: TimelineImageItem[];
+  overlayItems: TimelineOverlayItem[];
   videoClips: TimelineVideoClip[];
   videoClipGroups: TimelineClipGroup[];
   audioItems: TimelineAudioItem[];
@@ -229,6 +248,14 @@ export interface TimelineAudioPlacement {
 
 export interface TimelineImagePlacement {
   item: TimelineImageItem;
+  startSeconds: number;
+  endSeconds: number;
+  durationSeconds: number;
+  index: number;
+}
+
+export interface TimelineOverlayPlacement {
+  item: TimelineOverlayItem;
   startSeconds: number;
   endSeconds: number;
   durationSeconds: number;

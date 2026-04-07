@@ -1,12 +1,19 @@
 import { buildEditorExportFilename } from "./export-output";
 import { filterEditorAssetsForExport } from "./export-capabilities";
 import {
+  buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets,
+  getReactiveOverlayRasterPixelArea,
+  renderReactiveOverlayAtlases,
+} from "./reactive-overlays";
+import {
   EDITOR_SYSTEM_EXPORT_FORM_FIELDS,
   parseEditorSystemExportResponseHeaders,
   type EditorSystemExportAssetDescriptor,
+  type EditorSystemExportOverlayDescriptor,
   type SystemEditorExportAssetRecord,
 } from "./system-export-contract";
 import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "./types";
+import { getEditorOutputDimensions } from "./core/aspect-ratio";
 
 export interface SystemEditorExportClientResult {
   file: File;
@@ -74,8 +81,10 @@ export async function requestSystemEditorExport(input: {
     (entry): entry is ResolvedEditorAsset & { file: File } => Boolean(entry.file)
   );
   const assetDescriptors: EditorSystemExportAssetDescriptor[] = [];
+  const overlayDescriptors: EditorSystemExportOverlayDescriptor[] = [];
   const formData = new FormData();
   const requestId = createRenderRequestId();
+  const localDebugNotes: string[] = [];
 
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.requestId, requestId);
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.project, JSON.stringify(input.project));
@@ -91,6 +100,48 @@ export async function requestSystemEditorExport(input: {
     formData.set(fileField, entry.file, entry.file.name);
   });
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.assets, JSON.stringify(assetDescriptors));
+  formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, "[]");
+
+  if (input.project.timeline.overlayItems.length > 0) {
+    const overlayStartedAt = performance.now();
+    const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
+    const analysis = await buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets({
+      project: input.project,
+      resolvedAssets: relevantAssets,
+      signal: input.signal,
+    });
+    const overlayAtlases = await renderReactiveOverlayAtlases({
+      project: input.project,
+      overlayItems: input.project.timeline.overlayItems,
+      analysis,
+      outputWidth: width,
+      outputHeight: height,
+      signal: input.signal,
+    });
+    let overlayRasterPixelArea = 0;
+    overlayAtlases.forEach((atlas, index) => {
+      const fileField = `overlay_${index}`;
+      const filename = `${String(index).padStart(3, "0")}.png`;
+      const pngBytes = new Uint8Array(atlas.pngBytes);
+      overlayRasterPixelArea += getReactiveOverlayRasterPixelArea(atlas);
+      overlayDescriptors.push({
+        start: atlas.start,
+        end: atlas.end,
+        fileField,
+        filename,
+        x: atlas.x,
+        y: atlas.y,
+        width: atlas.width,
+        height: atlas.height,
+        cropExpression: atlas.cropExpression,
+      });
+      formData.set(fileField, new File([pngBytes], filename, { type: "image/png" }), filename);
+    });
+    formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, JSON.stringify(overlayDescriptors));
+    localDebugNotes.push(
+      `Reactive overlays prepared in ${Math.round(performance.now() - overlayStartedAt)}ms: overlayCount=${input.project.timeline.overlayItems.length}, atlases=${overlayAtlases.length}, analysisSource=final_mix, overlayRasterPixelArea=${overlayRasterPixelArea}px.`
+    );
+  }
 
   let pollCursor = -1;
   let pollingActive = true;
@@ -175,7 +226,7 @@ export async function requestSystemEditorExport(input: {
     sizeBytes: metadata.sizeBytes || file.size,
     durationSeconds: metadata.durationSeconds,
     warnings: metadata.warnings,
-    debugNotes: metadata.debugNotes,
+    debugNotes: [...localDebugNotes, ...metadata.debugNotes],
     debugFfmpegCommand: metadata.debugFfmpegCommand,
   };
 }

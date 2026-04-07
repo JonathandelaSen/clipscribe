@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createDefaultVideoClip, createEditorAssetRecord, createEmptyEditorProject } from "../../../src/lib/editor/storage";
+import {
+  createDefaultTimelineOverlayItem,
+  createDefaultVideoClip,
+  createEditorAssetRecord,
+  createEmptyEditorProject,
+} from "../../../src/lib/editor/storage";
 import {
   createEditorProjectWorkspace,
   parseEditorProjectWorkspace,
@@ -98,6 +103,34 @@ test("parseEditorProjectWorkspace normalizes project selection and asset ids", (
 
   assert.deepEqual(workspace.project.assetIds, ["asset_2"]);
   assert.deepEqual(workspace.project.timeline.selectedItem, { kind: "video", id: clip.id });
+});
+
+test("parseEditorProjectWorkspace keeps reactive overlay items and overlay selection", () => {
+  const project = createEmptyEditorProject({
+    id: "project_overlay",
+    now: 320,
+    name: "Overlay Workspace",
+    aspectRatio: "9:16",
+  });
+  const overlayItem = createDefaultTimelineOverlayItem({
+    presetId: "equalizer_bars",
+    startOffsetSeconds: 1,
+    durationSeconds: 2.5,
+  });
+  project.timeline.overlayItems = [overlayItem];
+  project.timeline.selectedItem = { kind: "overlay", id: overlayItem.id };
+
+  const workspace = parseEditorProjectWorkspace(
+    JSON.stringify({
+      schemaVersion: 1,
+      createdAt: 321,
+      project,
+      assets: [],
+    })
+  );
+
+  assert.equal(workspace.project.timeline.overlayItems.length, 1);
+  assert.deepEqual(workspace.project.timeline.selectedItem, { kind: "overlay", id: overlayItem.id });
 });
 
 test("parseEditorProjectWorkspace rejects asset paths that escape the workspace root", () => {

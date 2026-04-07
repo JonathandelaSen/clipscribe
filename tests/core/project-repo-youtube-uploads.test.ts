@@ -94,6 +94,7 @@ function createProject(overrides: Partial<ContentProjectRecord> = {}): ContentPr
       zoomLevel: 1,
       selectedItem: undefined,
       imageItems: [],
+      overlayItems: [],
       videoClips: [],
       videoClipGroups: [],
       audioItems: [],

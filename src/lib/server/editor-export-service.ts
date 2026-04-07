@@ -7,12 +7,14 @@ import { buildEditorExportFilename } from "../editor/export-output";
 import {
   EDITOR_SYSTEM_EXPORT_FORM_FIELDS,
   type EditorSystemExportAssetDescriptor,
+  type EditorSystemExportOverlayDescriptor,
 } from "../editor/system-export-contract";
 import {
   exportEditorProjectWithSystemFfmpeg,
   isNodeEditorExportCanceledError,
   type NodeEditorExportProgress,
   type NodeEditorExportAsset,
+  type NodeEditorExportOverlay,
   type NodeEditorExportResult,
 } from "../editor/node-render";
 import type { EditorAssetRecord, EditorProjectRecord, EditorResolution } from "../editor/types";
@@ -29,6 +31,10 @@ export interface ParsedEditorSystemExportFormData {
   project: EditorProjectRecord;
   resolution: EditorResolution;
   assets: EditorSystemExportUpload[];
+  overlays: Array<{
+    descriptor: EditorSystemExportOverlayDescriptor;
+    file: File;
+  }>;
 }
 
 export interface RenderedEditorSystemExportResult {
@@ -94,6 +100,45 @@ function parseAssetDescriptor(value: unknown, index: number): EditorSystemExport
   };
 }
 
+function parseOverlayDescriptor(value: unknown, index: number): EditorSystemExportOverlayDescriptor {
+  if (!isRecord(value)) {
+    throw new Error(`overlays[${index}] is invalid.`);
+  }
+  if (typeof value.fileField !== "string" || !value.fileField.trim()) {
+    throw new Error(`overlays[${index}].fileField is required.`);
+  }
+  if (typeof value.filename !== "string" || !value.filename.trim()) {
+    throw new Error(`overlays[${index}].filename is required.`);
+  }
+  const start = Number(value.start);
+  const end = Number(value.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    throw new Error(`overlays[${index}] must include a valid time range.`);
+  }
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (![x, y, width, height].every(Number.isFinite)) {
+    throw new Error(`overlays[${index}] must include finite x, y, width, and height.`);
+  }
+  if (width <= 0 || height <= 0) {
+    throw new Error(`overlays[${index}] must include positive raster bounds.`);
+  }
+
+  return {
+    start,
+    end,
+    fileField: value.fileField,
+    filename: value.filename,
+    x,
+    y,
+    width,
+    height,
+    cropExpression: typeof value.cropExpression === "string" && value.cropExpression.trim() ? value.cropExpression.trim() : undefined,
+  };
+}
+
 export function parseEditorSystemExportFormData(formData: FormData): ParsedEditorSystemExportFormData {
   const project = parseJson<EditorProjectRecord>(
     formData.get(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.project),
@@ -124,12 +169,28 @@ export function parseEditorSystemExportFormData(formData: FormData): ParsedEdito
       file: fileValue,
     };
   });
+  const rawOverlayDescriptors = parseJson<unknown[]>(
+    formData.get(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlays) ?? "[]",
+    "overlays"
+  );
+  const overlayDescriptors = rawOverlayDescriptors.map((value, index) => parseOverlayDescriptor(value, index));
+  const overlays = overlayDescriptors.map((descriptor, index) => {
+    const fileValue = formData.get(descriptor.fileField);
+    if (!(fileValue instanceof File)) {
+      throw new Error(`overlays[${index}] file is required.`);
+    }
+    return {
+      descriptor,
+      file: fileValue,
+    };
+  });
 
   return {
     engine: "system",
     project,
     resolution: resolutionValue,
     assets,
+    overlays,
   };
 }
 
@@ -137,6 +198,7 @@ export async function renderEditorSystemExport(
   input: {
     project: EditorProjectRecord;
     assets: readonly EditorSystemExportUpload[];
+    overlays: ParsedEditorSystemExportFormData["overlays"];
     resolution: EditorResolution;
     signal?: AbortSignal;
     onProgress?: (progress: NodeEditorExportProgress) => void;
@@ -156,6 +218,7 @@ export async function renderEditorSystemExport(
 
   try {
     const preparedAssets: NodeEditorExportAsset[] = [];
+    const preparedOverlays: NodeEditorExportOverlay[] = [];
 
     for (const [index, entry] of input.assets.entries()) {
       const bytes = new Uint8Array(await entry.file.arrayBuffer());
@@ -169,6 +232,18 @@ export async function renderEditorSystemExport(
       });
     }
 
+    for (const [index, entry] of input.overlays.entries()) {
+      const bytes = new Uint8Array(await entry.file.arrayBuffer());
+      const filename = sanitizeFilenameSegment(entry.descriptor.filename, `overlay_${index}.png`);
+      const absolutePath = path.join(tempRoot, "overlays", `${String(index).padStart(3, "0")}_${filename}`);
+      await mkdir(path.dirname(absolutePath), { recursive: true });
+      await writeFile(absolutePath, bytes);
+      preparedOverlays.push({
+        absolutePath,
+        ...entry.descriptor,
+      });
+    }
+
     const outputPath = path.join(
       tempRoot,
       "output",
@@ -177,6 +252,7 @@ export async function renderEditorSystemExport(
     const result = await exportProject({
       project: input.project,
       assets: preparedAssets,
+      overlays: preparedOverlays,
       resolution: input.resolution,
       outputPath,
       overwrite: true,

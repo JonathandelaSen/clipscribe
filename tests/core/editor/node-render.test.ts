@@ -236,6 +236,60 @@ test("buildNodeEditorExportCommand uses the still-image compatibility preset for
   assert.match(command.notes.join("\n"), /Still-image compatibility preset enabled/);
 });
 
+test("buildNodeEditorExportCommand composes reactive overlays before subtitle burn-in", () => {
+  const { project, asset } = createRenderableProject();
+
+  const command = buildNodeEditorExportCommand({
+    project: {
+      ...project,
+      timeline: {
+        ...project.timeline,
+        overlayItems: [
+          {
+            id: "overlay_1",
+            presetId: "waveform_line",
+            startOffsetSeconds: 0,
+            durationSeconds: 3,
+            positionXPercent: 50,
+            positionYPercent: 72,
+            widthPercent: 72,
+            heightPercent: 18,
+            scale: 1,
+            opacity: 0.9,
+            tintHex: "#7CE7FF",
+            sensitivity: 1,
+            smoothing: 0.6,
+          },
+        ],
+      },
+    },
+    assets: [{ asset, absolutePath: "/media/clip.mp4" }],
+    overlays: [
+      {
+        absolutePath: "/media/overlay_atlas.png",
+        start: 0,
+        end: 3,
+        x: 120,
+        y: 980,
+        width: 800,
+        height: 240,
+        cropExpression: "between(t,0.000,0.033)*240",
+      },
+    ],
+    resolution: "1080p",
+    outputPath: "/tmp/render.mp4",
+    subtitleTrackPath: "/tmp/render.ass",
+  });
+
+  const filterIndex = command.ffmpegArgs.indexOf("-filter_complex");
+  assert.ok(filterIndex >= 0);
+  const filterGraph = command.ffmpegArgs[filterIndex + 1] ?? "";
+  assert.match(filterGraph, /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+  assert.match(filterGraph, /\[video_track\]\[overlay_crop_0\]overlay=/);
+  assert.match(filterGraph, /\[overlay_0\]ass='/);
+  assert.ok(command.notes.some((note) => note.includes("Reactive overlay items=1")));
+});
+
 test("buildNodeEditorExportCommand keeps the still-image compatibility preset for image-only timelines without audio", () => {
   const { project, assets } = createImageOnlyRenderableProject({ withAudio: false });
 

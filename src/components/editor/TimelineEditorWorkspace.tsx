@@ -32,6 +32,7 @@ import {
   Music4,
   Pause,
   Play,
+  Plus,
   RotateCcw,
   Scissors,
   Search,
@@ -57,6 +58,7 @@ import { getLatestSubtitleForLanguage, getLatestTranscript, type HistoryItem } f
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useEditorProject } from "@/hooks/useEditorLibrary";
 import { useHistoryLibrary } from "@/hooks/useHistoryLibrary";
+import { decodeAudio } from "@/lib/audio";
 import { downloadBlob, readMediaMetadata } from "@/lib/editor/media";
 import {
   buildProjectCaptionTimeline,
@@ -88,6 +90,7 @@ import {
   cloneTimelineClipGroupToFill,
   cloneTimelineClipToFill,
   createClonedTimelineImageItem,
+  createClonedTimelineOverlayItem,
   createJoinedTimelineClipGroup,
   createClonedTimelineAudioItem,
   createClonedTimelineClip,
@@ -100,6 +103,7 @@ import {
   getTimelineAudioPlacements,
   getTimelineClipPlacements,
   getTimelineImagePlacements,
+  getTimelineOverlayPlacements,
   getTimelineSelectionForVideoBlock,
   getTimelineVideoBlockPlacements,
   insertTimelineAudioItemAfter,
@@ -108,11 +112,13 @@ import {
   removeTimelineClip,
   removeTimelineClipGroup,
   removeTimelineImageItem,
+  removeTimelineOverlayItem,
   reorderTimelineVideoBlock,
   replaceTimelineAudioItem,
   replaceTimelineClip,
   replaceTimelineClipGroupWithClip,
   replaceTimelineImageItem,
+  replaceTimelineOverlayItem,
   resetTimelineAudioItemTrack,
   resetTimelineAudioItemTrim,
   resetTimelineVideoClipAudio,
@@ -150,10 +156,20 @@ import {
   resolveEditorSubtitleTextLayout,
 } from "@/lib/editor/subtitle-canvas";
 import {
+  buildProjectReactiveOverlayAudioAnalysis,
+  EDITOR_REACTIVE_OVERLAY_PRESETS,
+  getReactiveOverlayPresetLabel,
+  resolveReactiveOverlayFrame,
+  resolveReactiveOverlayRect,
+  type EditorReactiveAudioAnalysisTrack,
+  type ResolvedReactiveOverlayFrame,
+} from "@/lib/editor/reactive-overlays";
+import {
   applyResolvedSubtitleStyle,
   buildEditorExportRecord,
   createDefaultAudioTrack,
   createDefaultImageTrackItem,
+  createDefaultTimelineOverlayItem,
   createDefaultVideoClip,
   createEditorAssetRecord,
   getDefaultEditorSubtitleStyle,
@@ -177,6 +193,8 @@ import type {
   TimelineAudioItem,
   TimelineClipGroup,
   TimelineImageItem,
+  TimelineOverlayItem,
+  TimelineOverlayPlacement,
   TimelineSelection,
   TimelineVideoClip,
 } from "@/lib/editor/types";
@@ -326,6 +344,10 @@ type TimelineClipboardItem =
   | {
       kind: "audio";
       item: TimelineAudioItem;
+    }
+  | {
+      kind: "overlay";
+      item: TimelineOverlayItem;
     };
 
 type ExportDestination = {
@@ -571,6 +593,71 @@ function ProjectAssetThumbnail({
   );
 }
 
+function ReactiveOverlayPreviewFrame({
+  frame,
+}: {
+  frame: ResolvedReactiveOverlayFrame;
+}) {
+  if (frame.kind === "pulse_ring") {
+    return (
+      <svg viewBox={`0 0 ${frame.width} ${frame.height}`} className="h-full w-full overflow-visible">
+        <circle cx={frame.centerX} cy={frame.centerY} r={frame.glowRadius} fill={frame.glowFill} />
+        <circle
+          cx={frame.centerX}
+          cy={frame.centerY}
+          r={frame.radius}
+          fill="none"
+          stroke={frame.stroke}
+          strokeWidth={frame.strokeWidth}
+        />
+        <circle cx={frame.centerX} cy={frame.centerY} r={frame.innerRadius} fill={frame.stroke} />
+      </svg>
+    );
+  }
+
+  if (frame.kind === "equalizer_bars") {
+    return (
+      <svg viewBox={`0 0 ${frame.width} ${frame.height}`} className="h-full w-full overflow-visible">
+        {frame.bars.map((bar, index) => (
+          <g key={`${bar.x}-${index}`}>
+            <rect
+              x={bar.x}
+              y={Math.max(0, bar.y - 6)}
+              width={bar.width}
+              height={Math.min(frame.height, bar.height + 6)}
+              rx={bar.radius}
+              fill={frame.glowFill}
+            />
+            <rect x={bar.x} y={bar.y} width={bar.width} height={bar.height} rx={bar.radius} fill={frame.fill} />
+          </g>
+        ))}
+      </svg>
+    );
+  }
+
+  return (
+    <svg viewBox={`0 0 ${frame.width} ${frame.height}`} className="h-full w-full overflow-visible">
+      <path
+        d={frame.glowPath}
+        fill="none"
+        stroke={frame.stroke}
+        strokeOpacity={0.26}
+        strokeWidth={frame.strokeWidth * 2.25}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d={frame.path}
+        fill="none"
+        stroke={frame.stroke}
+        strokeWidth={frame.strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 const TimelineWorkspaceHeader = memo(function TimelineWorkspaceHeader({
   projectName,
   projectAspectRatio,
@@ -765,6 +852,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const mountedRef = useRef(false);
   const projectStateRef = useRef<EditorProjectRecord | null>(null);
   const editorRepositoryRef = useRef(createDexieEditorRepository());
+  const reactiveOverlayDecodedAudioCacheRef = useRef(new Map<string, Float32Array>());
 
   const {
     project: loadedProject,
@@ -807,6 +895,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const [focusedJoinedClipId, setFocusedJoinedClipId] = useState<string | null>(null);
   const [timelinePreviewFrameSize, setTimelinePreviewFrameSize] = useState({ width: 0, height: 0 });
   const [currentCaptionPreviewBlob, setCurrentCaptionPreviewBlob] = useState<Blob | null>(null);
+  const [reactiveOverlayAnalysis, setReactiveOverlayAnalysis] = useState<EditorReactiveAudioAnalysisTrack | null>(null);
   const [panelVisibility, setPanelVisibility] = useState<PanelVisibilityState>({
     left: true,
     center: true,
@@ -1138,6 +1227,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         : undefined,
     [project, selectedItem]
   );
+  const selectedOverlayItem = useMemo(
+    () =>
+      selectedItem?.kind === "overlay"
+        ? project?.timeline.overlayItems.find((item) => item.id === selectedItem.id)
+        : undefined,
+    [project, selectedItem]
+  );
   const subtitleTrackAvailable = useMemo(() => (project ? hasProjectSubtitleTrack(project) : false), [project]);
   const selectedSubtitleTrack = useMemo(
     () =>
@@ -1191,6 +1287,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       }
 
       if (selection.kind === "image") {
+        return {
+          canCloneToFill: false,
+          canTrimToMatch: false,
+        };
+      }
+
+      if (selection.kind === "overlay") {
         return {
           canCloneToFill: false,
           canTrimToMatch: false,
@@ -1311,6 +1414,19 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ) ?? imagePlacements[0]
     );
   }, [imagePlacements, playheadSeconds]);
+  const overlayPlacements = useMemo(
+    () => (project ? getTimelineOverlayPlacements(project.timeline.overlayItems, getProjectDuration(project)) : []),
+    [project]
+  );
+  const activeOverlayPlacements = useMemo(
+    () =>
+      overlayPlacements.filter(
+        (placement) =>
+          playheadSeconds >= placement.startSeconds &&
+          playheadSeconds < placement.endSeconds
+      ),
+    [overlayPlacements, playheadSeconds]
+  );
   const activeResolvedAsset = activePlacement ? resolvedAssetsMap.get(activePlacement.clip.assetId) : undefined;
   const activeResolvedImageAsset = activeImagePlacement ? resolvedAssetsMap.get(activeImagePlacement.item.assetId) : undefined;
   const activeResolvedAudioAsset = activeAudioPlacement ? resolvedAssetsMap.get(activeAudioPlacement.item.assetId) : undefined;
@@ -1380,10 +1496,96 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const previewVideoUrl = useObjectUrl(previewVideoAsset?.file);
   const previewImageUrl = useObjectUrl(previewImageAsset?.file);
   const previewAudioUrl = useObjectUrl(previewAudioAsset?.file);
+  const reactiveOverlayAnalysisFingerprint = useMemo(() => {
+    if (!project || project.timeline.overlayItems.length === 0) return "";
+    return JSON.stringify({
+      overlays: project.timeline.overlayItems.map((item) => ({
+        id: item.id,
+      })),
+      video: project.timeline.videoClips.map((clip) => ({
+        id: clip.id,
+        assetId: clip.assetId,
+        trimStartSeconds: clip.trimStartSeconds,
+        trimEndSeconds: clip.trimEndSeconds,
+        volume: clip.volume,
+        muted: clip.muted,
+        reverse: clip.actions.reverse,
+      })),
+      audio: project.timeline.audioItems.map((item) => ({
+        id: item.id,
+        assetId: item.assetId,
+        startOffsetSeconds: item.startOffsetSeconds,
+        trimStartSeconds: item.trimStartSeconds,
+        trimEndSeconds: item.trimEndSeconds,
+        volume: item.volume,
+        muted: item.muted,
+      })),
+      assets: resolvedAssets
+        .filter(
+          (entry) =>
+            Boolean(entry.file) &&
+            (entry.asset.kind === "audio" || (entry.asset.kind === "video" && entry.asset.hasAudio))
+        )
+        .map((entry) => ({
+          id: entry.asset.id,
+          updatedAt: entry.asset.updatedAt,
+          size: entry.asset.sizeBytes,
+        })),
+    });
+  }, [project, resolvedAssets]);
   const subtitlePreviewRenderSize = useMemo(
     () => (project ? getEditorOutputDimensions(project.aspectRatio, "1080p") : null),
     [project]
   );
+
+  useEffect(() => {
+    if (!project || project.timeline.overlayItems.length === 0) {
+      setReactiveOverlayAnalysis(null);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    void (async () => {
+      const decodedSamplesByAssetId = new Map<string, Float32Array>();
+      const relevantAssets = resolvedAssets.filter(
+        (entry) =>
+          Boolean(entry.file) &&
+          (entry.asset.kind === "audio" || (entry.asset.kind === "video" && entry.asset.hasAudio))
+      );
+
+      for (const entry of relevantAssets) {
+        if (controller.signal.aborted || !entry.file) return;
+        const cacheKey = `${entry.asset.id}:${entry.asset.updatedAt}:${entry.asset.sizeBytes}`;
+        const cached = reactiveOverlayDecodedAudioCacheRef.current.get(cacheKey);
+        if (cached) {
+          decodedSamplesByAssetId.set(entry.asset.id, cached);
+          continue;
+        }
+
+        const decoded = await decodeAudio(entry.file);
+        if (controller.signal.aborted) return;
+        reactiveOverlayDecodedAudioCacheRef.current.set(cacheKey, decoded);
+        decodedSamplesByAssetId.set(entry.asset.id, decoded);
+      }
+
+      const analysis = buildProjectReactiveOverlayAudioAnalysis({
+        project,
+        decodedSamplesByAssetId,
+      });
+      if (controller.signal.aborted) return;
+      startTransition(() => {
+        setReactiveOverlayAnalysis(analysis);
+      });
+    })().catch(() => {
+      if (controller.signal.aborted) return;
+      setReactiveOverlayAnalysis(null);
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [project, reactiveOverlayAnalysisFingerprint, resolvedAssets]);
   const currentCaptionStyle = useMemo(
     () => (project ? resolveCreatorSubtitleStyle(project.subtitles.preset, project.subtitles.style) : null),
     [project]
@@ -1433,6 +1635,42 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     isTimelinePreview,
     previewImageAsset?.asset.height,
     previewImageAsset?.asset.width,
+    timelinePreviewFrameSize.height,
+    timelinePreviewFrameSize.width,
+  ]);
+  const activeReactiveOverlayPreviewItems = useMemo(() => {
+    if (
+      !isTimelinePreview ||
+      !reactiveOverlayAnalysis ||
+      timelinePreviewFrameSize.width <= 0 ||
+      timelinePreviewFrameSize.height <= 0
+    ) {
+      return [];
+    }
+
+    return activeOverlayPlacements.map((placement) => {
+      const rect = resolveReactiveOverlayRect({
+        overlay: placement.item,
+        frameWidth: timelinePreviewFrameSize.width,
+        frameHeight: timelinePreviewFrameSize.height,
+      });
+      return {
+        placement,
+        rect,
+        frame: resolveReactiveOverlayFrame({
+          overlay: placement.item,
+          rect,
+          analysis: reactiveOverlayAnalysis,
+          projectTimeSeconds: playheadSeconds,
+          localTimeSeconds: Math.max(0, playheadSeconds - placement.startSeconds),
+        }),
+      };
+    });
+  }, [
+    activeOverlayPlacements,
+    isTimelinePreview,
+    playheadSeconds,
+    reactiveOverlayAnalysis,
     timelinePreviewFrameSize.height,
     timelinePreviewFrameSize.width,
   ]);
@@ -1542,6 +1780,20 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ];
     });
   }, [imagePlacements, visibleDuration, visibleEnd, visibleStart]);
+  const visibleOverlayPlacements = useMemo(() => {
+    return overlayPlacements.flatMap((placement) => {
+      const overlapStart = Math.max(placement.startSeconds, visibleStart);
+      const overlapEnd = Math.min(placement.endSeconds, visibleEnd);
+      if (overlapEnd <= overlapStart) return [];
+      return [
+        {
+          ...placement,
+          leftPct: ((overlapStart - visibleStart) / visibleDuration) * 100,
+          widthPct: ((overlapEnd - overlapStart) / visibleDuration) * 100,
+        },
+      ];
+    });
+  }, [overlayPlacements, visibleDuration, visibleEnd, visibleStart]);
   const visibleAudioPlacements = useMemo(() => {
     return audioPlacements.flatMap((placement) => {
       const overlapStart = Math.max(placement.startSeconds, visibleStart);
@@ -1973,7 +2225,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       setFocusedJoinedClipId(null);
     }
 
-    if (selectedItem?.kind === "audio" || selectedItem?.kind === "image") {
+    if (selectedItem?.kind === "audio" || selectedItem?.kind === "image" || selectedItem?.kind === "overlay") {
       setInspectorVideoTab((prev) => (prev === "edit" ? prev : "edit"));
     }
   }, [focusedJoinedClipId, project?.timeline.videoClips, selectedItem, selectedVideoGroup]);
@@ -2234,6 +2486,17 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     }));
   };
 
+  const updateSelectedOverlayItem = (updater: (item: TimelineOverlayItem) => TimelineOverlayItem) => {
+    if (!selectedOverlayItem) return;
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        overlayItems: replaceTimelineOverlayItem(current.timeline.overlayItems, updater(selectedOverlayItem)),
+      },
+    }));
+  };
+
   const updateSubtitleTrack = (updater: (subtitles: EditorProjectRecord["subtitles"]) => EditorProjectRecord["subtitles"]) => {
     updateProject((current) => ({
       ...current,
@@ -2314,6 +2577,18 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         panX: 0,
         panY: 0,
       },
+    }));
+  };
+
+  const resetSelectedOverlayItem = () => {
+    if (!selectedOverlayItem) return;
+    updateSelectedOverlayItem((item) => ({
+      ...createDefaultTimelineOverlayItem({
+        presetId: item.presetId,
+        startOffsetSeconds: item.startOffsetSeconds,
+        durationSeconds: item.durationSeconds,
+      }),
+      id: item.id,
     }));
   };
 
@@ -2419,6 +2694,25 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     } else {
       toast.success(`Added ${asset.filename} across the full image track`);
     }
+  };
+
+  const addReactiveOverlayToTimeline = (presetId: TimelineOverlayItem["presetId"]) => {
+    if (!project) return;
+    const overlayItem = createDefaultTimelineOverlayItem({
+      presetId,
+      startOffsetSeconds: playheadRef.current,
+      durationSeconds: Math.min(4, Math.max(1.5, projectDuration || 3)),
+    });
+    updateProject((current) => ({
+      ...current,
+      timeline: {
+        ...current.timeline,
+        overlayItems: [...current.timeline.overlayItems, overlayItem],
+        selectedItem: { kind: "overlay", id: overlayItem.id },
+      },
+    }));
+    setPreviewMode({ kind: "timeline" });
+    toast.success(`${getReactiveOverlayPresetLabel(presetId)} added`);
   };
 
   const joinSelectedTimelineClips = () => {
@@ -2678,6 +2972,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   };
 
   const copySelectedTimelineItem = () => {
+    if (selectedOverlayItem) {
+      clipboardRef.current = {
+        kind: "overlay",
+        item: { ...selectedOverlayItem },
+      };
+      return true;
+    }
     if (selectedImageItem) {
       clipboardRef.current = {
         kind: "image",
@@ -2822,6 +3123,20 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       return true;
     }
 
+    if (clipboardItem.kind === "overlay") {
+      const nextItem = createClonedTimelineOverlayItem(clipboardItem.item);
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          overlayItems: [...current.timeline.overlayItems, nextItem],
+          selectedItem: { kind: "overlay", id: nextItem.id },
+        },
+      }));
+      setTimelinePlayhead(nextItem.startOffsetSeconds);
+      return true;
+    }
+
     const nextItem = createClonedTimelineAudioItem(clipboardItem.item);
     const afterItemId = project.timeline.selectedItem?.kind === "audio" ? project.timeline.selectedItem.id : undefined;
     const nextAudioItems = insertTimelineAudioItemAfter(project.timeline.audioItems, nextItem, afterItemId);
@@ -2842,6 +3157,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   const duplicateSelectedTimelineItem = () => {
     if (!project) return false;
+
+    if (selectedOverlayItem) {
+      const nextItem = createClonedTimelineOverlayItem(selectedOverlayItem);
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => ({
+        ...current,
+        timeline: {
+          ...current.timeline,
+          overlayItems: [...current.timeline.overlayItems, nextItem],
+          selectedItem: { kind: "overlay", id: nextItem.id },
+        },
+      }));
+      setTimelinePlayhead(nextItem.startOffsetSeconds);
+      return true;
+    }
 
     if (selectedImageItem) {
       const nextItem = createClonedTimelineImageItem(selectedImageItem);
@@ -3109,6 +3439,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                   current.timeline.audioItems,
                   nextTimeline.videoClipGroups,
                   current.timeline.imageItems,
+                  current.timeline.overlayItems,
                   hasProjectSubtitleTrack(current)
                 ),
           },
@@ -3136,6 +3467,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               current.timeline.audioItems,
               current.timeline.videoClipGroups,
               current.timeline.imageItems,
+              current.timeline.overlayItems,
+              hasProjectSubtitleTrack(current)
+            ),
+          },
+        };
+      });
+      return true;
+    }
+
+    if (project.timeline.selectedItem.kind === "overlay") {
+      const removedIndex = project.timeline.overlayItems.findIndex((item) => item.id === project.timeline.selectedItem?.id);
+      if (removedIndex < 0) return false;
+      setPreviewMode({ kind: "timeline" });
+      updateProject((current) => {
+        const nextOverlayItems = removeTimelineOverlayItem(current.timeline.overlayItems, current.timeline.selectedItem?.id ?? "");
+        return {
+          ...current,
+          timeline: {
+            ...current.timeline,
+            overlayItems: nextOverlayItems,
+            selectedItem: getSelectionForLaneIndex(
+              "overlay",
+              removedIndex,
+              current.timeline.videoClips,
+              current.timeline.audioItems,
+              current.timeline.videoClipGroups,
+              current.timeline.imageItems,
+              nextOverlayItems,
               hasProjectSubtitleTrack(current)
             ),
           },
@@ -3162,6 +3521,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               current.timeline.audioItems,
               current.timeline.videoClipGroups,
               nextImageItems,
+              current.timeline.overlayItems,
               hasProjectSubtitleTrack(current)
             ),
           },
@@ -3192,6 +3552,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             nextAudioItems,
             current.timeline.videoClipGroups,
             current.timeline.imageItems,
+            current.timeline.overlayItems,
             hasProjectSubtitleTrack(current)
           ),
         },
@@ -3336,6 +3697,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                 current.timeline.audioItems,
                 current.timeline.videoClipGroups,
                 current.timeline.imageItems,
+                current.timeline.overlayItems,
                 false
               )
             : current.timeline.selectedItem,
@@ -3844,6 +4206,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       ? selectedVideoGroup?.label
       : selectedItem?.kind === "video"
         ? selectedClip?.label
+      : selectedItem?.kind === "overlay"
+        ? selectedOverlayItem
+          ? `${getReactiveOverlayPresetLabel(selectedOverlayItem.presetId)}`
+          : "Reactive overlay"
       : selectedItem?.kind === "image"
         ? selectedImageItem?.label ?? selectedImageAsset?.filename
       : selectedItem?.kind === "subtitle"
@@ -4248,6 +4614,21 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       </div>
                                     )
                                   ) : null}
+                                  {activeReactiveOverlayPreviewItems.map(({ placement, rect, frame }) => (
+                                    <div
+                                      key={placement.item.id}
+                                      className="pointer-events-none absolute"
+                                      style={{
+                                        left: rect.x,
+                                        top: rect.y,
+                                        width: rect.width,
+                                        height: rect.height,
+                                        opacity: placement.item.opacity,
+                                      }}
+                                    >
+                                      <ReactiveOverlayPreviewFrame frame={frame} />
+                                    </div>
+                                  ))}
                                   {project.subtitles.enabled && currentCaptionPreviewUrl ? (
                                     // eslint-disable-next-line @next/next/no-img-element
                                     <img
@@ -5303,6 +5684,235 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                               </Select>
                             </div>
                           </div>
+                        ) : selectedOverlayItem ? (
+                          <div className="space-y-2.5">
+                            <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <div className={EDITOR_LABEL_CLASS}>Reactive Overlay</div>
+                                  <div className="mt-2 text-lg font-semibold text-white">
+                                    {getReactiveOverlayPresetLabel(selectedOverlayItem.presetId)}
+                                  </div>
+                                  <div className="mt-1 text-sm text-white/50">
+                                    Starts at {secondsToClock(selectedOverlayItem.startOffsetSeconds)} · lasts {secondsToClock(selectedOverlayItem.durationSeconds)}
+                                  </div>
+                                </div>
+                                <div className="rounded-full border border-violet-300/20 bg-violet-300/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-violet-100">
+                                  O1
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className={EDITOR_LABEL_CLASS}>Preset</div>
+                                <SectionResetButton onClick={resetSelectedOverlayItem} />
+                              </div>
+                              <Select
+                                value={selectedOverlayItem.presetId}
+                                onValueChange={(value) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    presetId: value as TimelineOverlayItem["presetId"],
+                                  }))
+                                }
+                              >
+                                <SelectTrigger className="h-10 rounded-xl border-white/10 bg-white/[0.04] text-white">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent className="border-white/10 bg-slate-950 text-white">
+                                  {EDITOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                                    <SelectItem key={preset.id} value={preset.id}>
+                                      {preset.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <div className="rounded-[0.9rem] border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/55">
+                                {EDITOR_REACTIVE_OVERLAY_PRESETS.find((preset) => preset.id === selectedOverlayItem.presetId)?.description}
+                              </div>
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className={EDITOR_LABEL_CLASS}>Timing</div>
+                              <label className="text-xs text-white/55">
+                                Start · {secondsToClock(selectedOverlayItem.startOffsetSeconds)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={Math.max(projectDuration, selectedOverlayItem.startOffsetSeconds + 8)}
+                                step={0.01}
+                                value={selectedOverlayItem.startOffsetSeconds}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    startOffsetSeconds: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">
+                                Duration · {secondsToClock(selectedOverlayItem.durationSeconds)}
+                              </label>
+                              <input
+                                type="range"
+                                min={0.25}
+                                max={Math.max(projectDuration, selectedOverlayItem.durationSeconds + 8)}
+                                step={0.01}
+                                value={selectedOverlayItem.durationSeconds}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    durationSeconds: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className={EDITOR_LABEL_CLASS}>Placement</div>
+                              <label className="text-xs text-white/55">Position X · {Math.round(selectedOverlayItem.positionXPercent)}%</label>
+                              <input
+                                type="range"
+                                min={5}
+                                max={95}
+                                step={1}
+                                value={selectedOverlayItem.positionXPercent}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    positionXPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Position Y · {Math.round(selectedOverlayItem.positionYPercent)}%</label>
+                              <input
+                                type="range"
+                                min={5}
+                                max={95}
+                                step={1}
+                                value={selectedOverlayItem.positionYPercent}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    positionYPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Width · {Math.round(selectedOverlayItem.widthPercent)}%</label>
+                              <input
+                                type="range"
+                                min={8}
+                                max={100}
+                                step={1}
+                                value={selectedOverlayItem.widthPercent}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    widthPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Height · {Math.round(selectedOverlayItem.heightPercent)}%</label>
+                              <input
+                                type="range"
+                                min={6}
+                                max={100}
+                                step={1}
+                                value={selectedOverlayItem.heightPercent}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    heightPercent: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Scale · {selectedOverlayItem.scale.toFixed(2)}x</label>
+                              <input
+                                type="range"
+                                min={0.4}
+                                max={3}
+                                step={0.01}
+                                value={selectedOverlayItem.scale}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    scale: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+
+                            <div className={cn(EDITOR_SECTION_CLASS, "space-y-3 p-3")}>
+                              <div className={EDITOR_LABEL_CLASS}>Motion</div>
+                              <label className="text-xs text-white/55">Opacity · {Math.round(selectedOverlayItem.opacity * 100)}%</label>
+                              <input
+                                type="range"
+                                min={0.05}
+                                max={1}
+                                step={0.01}
+                                value={selectedOverlayItem.opacity}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    opacity: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="space-y-1 text-xs text-white/55">
+                                <span>Tint</span>
+                                <input
+                                  type="color"
+                                  value={selectedOverlayItem.tintHex}
+                                  onChange={(event) =>
+                                    updateSelectedOverlayItem((item) => ({
+                                      ...item,
+                                      tintHex: event.target.value,
+                                    }))
+                                  }
+                                  className="h-10 w-full rounded-lg border border-white/10 bg-transparent"
+                                />
+                              </label>
+                              <label className="text-xs text-white/55">Sensitivity · {selectedOverlayItem.sensitivity.toFixed(2)}x</label>
+                              <input
+                                type="range"
+                                min={0.2}
+                                max={3}
+                                step={0.01}
+                                value={selectedOverlayItem.sensitivity}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    sensitivity: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                              <label className="text-xs text-white/55">Smoothing · {selectedOverlayItem.smoothing.toFixed(2)}</label>
+                              <input
+                                type="range"
+                                min={0}
+                                max={0.98}
+                                step={0.01}
+                                value={selectedOverlayItem.smoothing}
+                                onChange={(event) =>
+                                  updateSelectedOverlayItem((item) => ({
+                                    ...item,
+                                    smoothing: Number(event.target.value),
+                                  }))
+                                }
+                                className="w-full"
+                              />
+                            </div>
+                          </div>
                         ) : selectedImageItem && selectedImageAsset ? (
                           <div className="space-y-2.5">
                             <div className={cn(EDITOR_SECTION_CLASS, "p-3")}>
@@ -5574,6 +6184,8 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         "rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.22em]",
                         selectedItem?.kind === "audio"
                           ? "border border-amber-300/16 bg-amber-300/8 text-amber-100/80"
+                          : selectedItem?.kind === "overlay"
+                            ? "border border-violet-300/18 bg-violet-300/10 text-violet-100/80"
                           : selectedItem?.kind === "image"
                             ? "border border-emerald-300/18 bg-emerald-300/10 text-emerald-100/80"
                           : selectedItem?.kind === "subtitle"
@@ -5623,6 +6235,30 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                     </Button>
                   </div>
                   <div className="flex items-center gap-1 rounded-[0.8rem] border border-white/8 bg-black/22 p-1">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          className="h-7 rounded-[0.65rem] px-2.5 text-[11px] text-white/72 hover:bg-white/[0.08] hover:text-white"
+                        >
+                          <Plus className="mr-2 h-4 w-4" />
+                          Add Overlay
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent>
+                        {EDITOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                          <DropdownMenuItem
+                            key={preset.id}
+                            onSelect={() => {
+                              addReactiveOverlayToTimeline(preset.id);
+                            }}
+                          >
+                            <Plus className="h-4 w-4" />
+                            {preset.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                     <Button
                       variant="ghost"
                       className="h-7 rounded-[0.65rem] px-2.5 text-[11px] text-white/72 hover:bg-white/[0.08] hover:text-white"
@@ -5646,7 +6282,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
               </div>
 
               <div className="grid min-h-0 flex-1 grid-cols-[84px_minmax(0,1fr)] overflow-hidden bg-[linear-gradient(180deg,rgba(8,11,16,0.98),rgba(4,7,12,0.98))]">
-                <div className="grid min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_84px_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
+                <div className="grid min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_78px_84px_96px] border-r border-white/6 bg-[linear-gradient(180deg,rgba(11,14,19,0.98),rgba(7,10,14,0.98))]">
                   <div className={cn(EDITOR_LABEL_CLASS, "flex items-center px-3")}>Time</div>
                   <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
                     <div className="font-mono text-sm font-semibold text-emerald-100">I1</div>
@@ -5691,6 +6327,34 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         }
                       >
                         {selectedClip?.muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col justify-center gap-2 border-b border-white/6 px-3">
+                    <div className="font-mono text-sm font-semibold text-violet-100">O1</div>
+                    <div className="text-[11px] text-white/38">{project.timeline.overlayItems.length} reactive</div>
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!project.timeline.overlayItems.length}
+                        className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
+                        onClick={() => {
+                          const firstOverlay = project.timeline.overlayItems[0];
+                          if (!firstOverlay) return;
+                          focusTimelineSelection({ kind: "overlay", id: firstOverlay.id }, firstOverlay.startOffsetSeconds);
+                        }}
+                      >
+                        <FolderOpen className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        disabled={!selectedOverlayItem}
+                        className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
+                        onClick={removeSelectedTimelineItem}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   </div>
@@ -5761,7 +6425,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                     <div className="pointer-events-none absolute left-1/2 top-0 h-4 w-[10px] -translate-x-1/2 rounded-b-full border border-red-300/40 bg-red-400/90 shadow-[0_4px_12px_rgba(248,113,113,0.4)]" />
                   </div>
 
-                  <div className="grid h-full min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_84px_96px]">
+                  <div className="grid h-full min-h-0 grid-rows-[38px_88px_minmax(0,1fr)_78px_84px_96px]">
                     <div
                       className="relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.028),rgba(255,255,255,0.01))]"
                       onClick={seekVisibleTimeline}
@@ -6189,6 +6853,75 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           </ContextMenu>
                         );
                       })}
+                    </div>
+
+                    <div
+                      className="relative overflow-hidden border-b border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.018),rgba(255,255,255,0.008))]"
+                      onClick={seekVisibleTimeline}
+                    >
+                      {timelineMinorTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`overlay-minor-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.03]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+                      {timelineTicks.map((second) => {
+                        const tickLeft = ((second - visibleStart) / visibleDuration) * 100;
+                        return (
+                          <div
+                            key={`overlay-grid-${second}`}
+                            className="pointer-events-none absolute inset-y-0 w-px bg-white/[0.05]"
+                            style={{ left: `${tickLeft}%` }}
+                          />
+                        );
+                      })}
+
+                      {visibleOverlayPlacements.length > 0 ? (
+                        visibleOverlayPlacements.map((placement) => {
+                          const isSelected = selectedItem?.kind === "overlay" && selectedItem.id === placement.item.id;
+                          return (
+                            <button
+                              key={placement.item.id}
+                              type="button"
+                              className={cn(
+                                "absolute top-1/2 h-[64%] -translate-y-1/2 overflow-hidden rounded-[0.9rem] border px-3 py-2 text-left transition-all duration-150",
+                                isSelected
+                                  ? "border-white/80 bg-[linear-gradient(180deg,rgba(76,29,149,0.88),rgba(49,18,107,0.96))] shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_0_1px_rgba(255,255,255,0.22),0_0_20px_rgba(196,181,253,0.08)]"
+                                  : "border-violet-300/24 bg-[linear-gradient(180deg,rgba(91,33,182,0.78),rgba(59,16,110,0.92))] hover:border-violet-200/40 hover:bg-[linear-gradient(180deg,rgba(109,40,217,0.84),rgba(67,19,124,0.94))]"
+                              )}
+                              style={{
+                                left: `${placement.leftPct}%`,
+                                width: `${Math.max(placement.widthPct, 1.2)}%`,
+                              }}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                focusTimelineSelection({ kind: "overlay", id: placement.item.id }, placement.startSeconds);
+                              }}
+                            >
+                              <div className="pointer-events-none flex h-full items-center justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium text-violet-50">
+                                    {getReactiveOverlayPresetLabel(placement.item.presetId)}
+                                  </div>
+                                  <div className="mt-1 truncate text-[11px] text-violet-100/65">
+                                    {secondsToClock(placement.durationSeconds)} · {Math.round(placement.item.opacity * 100)}% opacity
+                                  </div>
+                                </div>
+                                <div className="h-6 w-16 rounded-[0.6rem] bg-[repeating-linear-gradient(90deg,rgba(255,255,255,0.3)_0,rgba(255,255,255,0.3)_4px,transparent_4px,transparent_9px)] opacity-80" />
+                              </div>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <div className="absolute left-[4%] top-1/2 w-[30%] min-w-[240px] -translate-y-1/2 rounded-[0.95rem] border border-dashed border-violet-300/16 bg-violet-300/[0.035] px-4 py-3 text-left">
+                          <div className={EDITOR_LABEL_CLASS}>Reactive overlay lane</div>
+                          <div className="mt-2 text-sm text-white/56">Use “Add Overlay” to place animated presets above the visuals.</div>
+                        </div>
+                      )}
                     </div>
 
                     <div
