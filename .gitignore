@@ -55,3 +55,4 @@ skills-lock.json
 # project exports and local test projects
 /exports/
 smoke-interactive*/
+.playwright-cli/

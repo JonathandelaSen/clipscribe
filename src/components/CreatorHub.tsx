@@ -1895,15 +1895,26 @@ export function CreatorHub({
     setActiveSuggestionPreviewProjectId("");
   }, [selectedProject?.id]);
 
+  const selectedVisualAssetFile = selectedVisualAsset?.fileBlob ?? null;
+  const selectedVisualAssetFilename = selectedVisualAsset?.filename || selectedVisualAssetFile?.name || null;
+  const selectedVisualAssetKind = selectedVisualAsset
+    ? selectedVisualAsset.kind === "image"
+      ? "image"
+      : "video"
+    : null;
+  const selectedVisualOverrideFile = selectedVisualAssetFile ?? visualMediaFile;
+  const selectedVisualOverrideFilename = selectedVisualAssetFilename ?? visualMediaFilename;
+  const selectedVisualOverrideKind = selectedVisualAssetKind ?? visualMediaKind;
   const hasVisualOverride =
-    visualSourceMode === "asset" && !!selectedVisualAsset && !!visualMediaFile && !!visualMediaUrl && !!visualMediaKind;
+    visualSourceMode === "asset" && !!visualSourceAssetId && !!selectedVisualOverrideFile && !!selectedVisualOverrideKind;
   const resolvedVisualSourceUrl = hasVisualOverride ? visualMediaUrl : isVideoMedia ? mediaUrl : null;
-  const resolvedVisualSourceFilename = hasVisualOverride ? visualMediaFilename : mediaFilename;
-  const resolvedVisualSourceFile = hasVisualOverride ? visualMediaFile : isVideoMedia ? mediaFile : null;
-  const resolvedVisualSourceKind = hasVisualOverride ? visualMediaKind : isVideoMedia ? "video" : null;
+  const resolvedVisualSourceFilename = hasVisualOverride ? selectedVisualOverrideFilename : mediaFilename;
+  const resolvedVisualSourceFile = hasVisualOverride ? selectedVisualOverrideFile : isVideoMedia ? mediaFile : null;
+  const resolvedVisualSourceKind = hasVisualOverride ? selectedVisualOverrideKind : isVideoMedia ? "video" : null;
   const isResolvedVisualVideo = resolvedVisualSourceKind === "video";
   const isResolvedVisualImage = resolvedVisualSourceKind === "image";
-  const isResolvedVisualPreviewLoading = hasVisualOverride ? isVisualMediaPreviewLoading : isMediaPreviewLoading;
+  const isResolvedVisualPreviewLoading =
+    visualSourceMode === "asset" ? isVisualMediaPreviewLoading || (hasVisualOverride && !visualMediaUrl) : isMediaPreviewLoading;
 
   useEffect(() => {
     if (hubView !== "start" && hubView !== "ai_lab") {
@@ -2161,11 +2172,11 @@ export function CreatorHub({
       introOverlay,
       outroOverlay,
       visualSource:
-        hasVisualOverride && visualMediaKind && visualSourceAssetId
+        hasVisualOverride && selectedVisualOverrideKind && visualSourceAssetId
           ? {
               mode: "asset",
               assetId: visualSourceAssetId,
-              kind: visualMediaKind,
+              kind: selectedVisualOverrideKind,
             }
           : {
               mode: "original",
@@ -2183,7 +2194,7 @@ export function CreatorHub({
       subtitleTimingMode,
       subtitleXPositionPct,
       subtitleYOffsetPct,
-      visualMediaKind,
+      selectedVisualOverrideKind,
       visualSourceAssetId,
       zoom,
     ]

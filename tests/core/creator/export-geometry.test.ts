@@ -127,7 +127,7 @@ test("buildShortExportGeometryFromLayout produces the expected FFmpeg filter seq
   assert.equal(geometry.layoutMode, "zoom_out_pad");
   assert.match(
     geometry.filter,
-    /^scale=1708:960,pad=1708:1920:0:480:black,crop=1080:1920:314:0,format=yuv420p$/
+    /^scale=1708:960,pad=1708:1920:0:480:black,crop=1080:1920:314:0,setsar=1,format=yuv420p$/
   );
 });
 

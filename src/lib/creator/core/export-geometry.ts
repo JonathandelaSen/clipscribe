@@ -119,6 +119,7 @@ export function buildShortExportGeometry(input: ShortExportGeometryInput): Short
     filters.push(`pad=${canvasWidth}:${canvasHeight}:${padX}:${padY}:black`);
   }
   filters.push(`crop=${outputWidth}:${outputHeight}:${cropX}:${cropY}`);
+  filters.push("setsar=1");
   filters.push("format=yuv420p");
 
   return {
@@ -156,6 +157,7 @@ export function buildShortExportGeometryFromLayout(
     filters.push(`pad=${canvasWidth}:${canvasHeight}:${padX}:${padY}:black`);
   }
   filters.push(`crop=${cropWidth}:${cropHeight}:${cropX}:${cropY}`);
+  filters.push("setsar=1");
   filters.push("format=yuv420p");
 
   return {

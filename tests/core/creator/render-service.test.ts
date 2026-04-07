@@ -336,6 +336,56 @@ test("renderCreatorShortSystemExport forwards replacement visual metadata to the
   assert.equal(receivedVisualKind, "video");
 });
 
+test("renderCreatorShortSystemExport infers visual kind from the uploaded file when payload metadata is missing", async () => {
+  const { payload, sourceFile } = createFormData();
+  const visualSourceFile = new File(["image"], "replacement.png", { type: "image/png" });
+  let receivedVisualKind = "";
+
+  await renderCreatorShortSystemExport(
+    {
+      payload: {
+        ...payload,
+        visualSource: null,
+      },
+      sourceFile,
+      visualSourceFile,
+      overlays: [],
+    },
+    {
+      exportShort: async (input) => {
+        receivedVisualKind = input.visualSourceKind ?? "";
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(256, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 256,
+          durationSeconds: 20,
+          subtitleBurnedIn: false,
+          renderModeUsed: "png_parity",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 12,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 20,
+        audioDurationSeconds: 20,
+        videoFrameCount: 600,
+      }),
+    }
+  );
+
+  assert.equal(receivedVisualKind, "image");
+});
+
 test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed uploads", async () => {
   const { sourceFile } = createFormData();
   const payload: CreatorShortSystemExportPayload = {
@@ -710,4 +760,353 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for sti
   assert.equal(receivedOverlayEnd, 3);
   assert.match(assPayload, /"start":0/);
   assert.match(assPayload, /"end":3/);
+});
+
+test("renderCreatorShortSystemExport rebases overlay and subtitle timing for static image visual overrides", async () => {
+  const payload = {
+    ...createPayload(),
+    short: {
+      ...createPayload().short,
+      startSeconds: 44,
+      endSeconds: 65,
+      durationSeconds: 21,
+    },
+    visualSource: {
+      kind: "image" as const,
+      filename: "replacement.png",
+    },
+    subtitleRenderMode: "fast_ass" as const,
+    semanticSubtitles: {
+      canvasWidth: 1080,
+      canvasHeight: 1920,
+      anchorX: 540,
+      anchorY: 1500,
+      fontSize: 56,
+      maxCharsPerLine: 24,
+      style: {
+        preset: "clean_caption" as const,
+        textColor: "#FFFFFF",
+        letterWidth: 1.04,
+        borderColor: "#2A2A2A",
+        borderWidth: 3,
+        shadowColor: "#000000",
+        shadowOpacity: 0.32,
+        shadowDistance: 2.2,
+        textCase: "original" as const,
+        backgroundEnabled: false,
+        backgroundColor: "#111111",
+        backgroundOpacity: 0.72,
+        backgroundRadius: 22,
+        backgroundPaddingX: 22,
+        backgroundPaddingY: 11,
+      },
+      chunks: [{ text: "Hello world", start: 3, end: 6 }],
+    },
+    overlaySummary: {
+      subtitleFrameCount: 0,
+      introOverlayFrameCount: 1,
+      outroOverlayFrameCount: 0,
+    },
+  };
+  const sourceFile = new File(["video"], "source.mp4", { type: "video/mp4" });
+  const visualSourceFile = new File(["image"], "replacement.png", { type: "image/png" });
+  const overlayFile = new File(["png"], "overlay.png", { type: "image/png" });
+  let receivedOverlayStart = -1;
+  let receivedOverlayEnd = -1;
+  let receivedSourcePlaybackMode = "";
+  let receivedVisualKind = "";
+  let assPayload = "";
+
+  await renderCreatorShortSystemExport(
+    {
+      payload,
+      sourceFile,
+      visualSourceFile,
+      overlays: [
+        {
+          descriptor: {
+            start: 3,
+            end: 6,
+            fileField: "overlay_0",
+            filename: "overlay.png",
+            kind: "intro_overlay",
+            x: 144,
+            y: 308,
+            width: 792,
+            height: 244,
+          },
+          file: overlayFile,
+        },
+      ],
+    },
+    {
+      buildAssDocument: (input) => {
+        assPayload = JSON.stringify(input.chunks);
+        return "[Script Info]\n";
+      },
+      exportShort: async (input) => {
+        receivedOverlayStart = input.overlays[0]?.start ?? -1;
+        receivedOverlayEnd = input.overlays[0]?.end ?? -1;
+        receivedSourcePlaybackMode = input.sourcePlaybackMode ?? "";
+        receivedVisualKind = input.visualSourceKind ?? "";
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 2048,
+          durationSeconds: 21,
+          subtitleBurnedIn: true,
+          renderModeUsed: "fast_ass",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 25,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 900,
+        audioDurationSeconds: 900,
+        videoFrameCount: 27000,
+      }),
+    }
+  );
+
+  assert.equal(receivedSourcePlaybackMode, "normal");
+  assert.equal(receivedVisualKind, "image");
+  assert.equal(receivedOverlayStart, 0);
+  assert.equal(receivedOverlayEnd, 3);
+  assert.match(assPayload, /"start":0/);
+  assert.match(assPayload, /"end":3/);
+});
+
+test("renderCreatorShortSystemExport rebases overlay and subtitle timing for replacement video visual overrides", async () => {
+  const payload = {
+    ...createPayload(),
+    short: {
+      ...createPayload().short,
+      startSeconds: 44,
+      endSeconds: 65,
+      durationSeconds: 21,
+    },
+    visualSource: {
+      kind: "video" as const,
+      filename: "replacement.mp4",
+    },
+    subtitleRenderMode: "fast_ass" as const,
+    semanticSubtitles: {
+      canvasWidth: 1080,
+      canvasHeight: 1920,
+      anchorX: 540,
+      anchorY: 1500,
+      fontSize: 56,
+      maxCharsPerLine: 24,
+      style: {
+        preset: "clean_caption" as const,
+        textColor: "#FFFFFF",
+        letterWidth: 1.04,
+        borderColor: "#2A2A2A",
+        borderWidth: 3,
+        shadowColor: "#000000",
+        shadowOpacity: 0.32,
+        shadowDistance: 2.2,
+        textCase: "original" as const,
+        backgroundEnabled: false,
+        backgroundColor: "#111111",
+        backgroundOpacity: 0.72,
+        backgroundRadius: 22,
+        backgroundPaddingX: 22,
+        backgroundPaddingY: 11,
+      },
+      chunks: [{ text: "Hello world", start: 3, end: 6 }],
+    },
+    overlaySummary: {
+      subtitleFrameCount: 0,
+      introOverlayFrameCount: 1,
+      outroOverlayFrameCount: 0,
+    },
+  };
+  const sourceFile = new File(["video"], "source.mp4", { type: "video/mp4" });
+  const visualSourceFile = new File(["video"], "replacement.mp4", { type: "video/mp4" });
+  const overlayFile = new File(["png"], "overlay.png", { type: "image/png" });
+  let receivedOverlayStart = -1;
+  let receivedOverlayEnd = -1;
+  let receivedSourcePlaybackMode = "";
+  let receivedVisualKind = "";
+  let assPayload = "";
+
+  await renderCreatorShortSystemExport(
+    {
+      payload,
+      sourceFile,
+      visualSourceFile,
+      overlays: [
+        {
+          descriptor: {
+            start: 3,
+            end: 6,
+            fileField: "overlay_0",
+            filename: "overlay.png",
+            kind: "intro_overlay",
+            x: 144,
+            y: 308,
+            width: 792,
+            height: 244,
+          },
+          file: overlayFile,
+        },
+      ],
+    },
+    {
+      buildAssDocument: (input) => {
+        assPayload = JSON.stringify(input.chunks);
+        return "[Script Info]\n";
+      },
+      exportShort: async (input) => {
+        receivedOverlayStart = input.overlays[0]?.start ?? -1;
+        receivedOverlayEnd = input.overlays[0]?.end ?? -1;
+        receivedSourcePlaybackMode = input.sourcePlaybackMode ?? "";
+        receivedVisualKind = input.visualSourceKind ?? "";
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 2048,
+          durationSeconds: 21,
+          subtitleBurnedIn: true,
+          renderModeUsed: "fast_ass",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 25,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 900,
+        audioDurationSeconds: 900,
+        videoFrameCount: 27000,
+      }),
+    }
+  );
+
+  assert.equal(receivedSourcePlaybackMode, "normal");
+  assert.equal(receivedVisualKind, "video");
+  assert.equal(receivedOverlayStart, 0);
+  assert.equal(receivedOverlayEnd, 3);
+  assert.match(assPayload, /"start":0/);
+  assert.match(assPayload, /"end":3/);
+});
+
+test("renderCreatorShortSystemExport keeps lead-in compensation active for image visual overrides", async () => {
+  const { sourceFile } = createFormData();
+  const visualSourceFile = new File(["image"], "replacement.png", { type: "image/png" });
+  const payload: CreatorShortSystemExportPayload = {
+    ...createPayload(),
+    short: {
+      ...createPayload().short,
+      startSeconds: 10,
+      endSeconds: 30,
+      durationSeconds: 20,
+    },
+    visualSource: {
+      kind: "image",
+      filename: visualSourceFile.name,
+    },
+    sourceTrim: {
+      requestedOffsetSeconds: 34,
+      requestedDurationSeconds: 35,
+    },
+    subtitleRenderMode: "fast_ass",
+    semanticSubtitles: {
+      canvasWidth: 1080,
+      canvasHeight: 1920,
+      anchorX: 540,
+      anchorY: 1500,
+      fontSize: 56,
+      maxCharsPerLine: 24,
+      style: {
+        preset: "clean_caption",
+        textColor: "#FFFFFF",
+        letterWidth: 1.04,
+        borderColor: "#2A2A2A",
+        borderWidth: 3,
+        shadowColor: "#000000",
+        shadowOpacity: 0.32,
+        shadowDistance: 2.2,
+        backgroundColor: "#000000",
+        backgroundOpacity: 0,
+        backgroundEnabled: false,
+        backgroundPaddingX: 28,
+        backgroundPaddingY: 16,
+        backgroundRadius: 22,
+        textCase: "uppercase",
+      },
+      chunks: [{ text: "HELLO", start: 3, end: 5 }],
+    },
+    subtitleBurnedIn: true,
+    overlaySummary: {
+      subtitleFrameCount: 0,
+      introOverlayFrameCount: 1,
+      outroOverlayFrameCount: 0,
+    },
+  };
+
+  let exportedShortStart = 0;
+  let exportedShortEnd = 0;
+
+  await renderCreatorShortSystemExport(
+    {
+      payload,
+      sourceFile,
+      visualSourceFile,
+      overlays: [],
+    },
+    {
+      exportShort: async (input) => {
+        exportedShortStart = input.short.startSeconds;
+        exportedShortEnd = input.short.endSeconds;
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(512, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 512,
+          durationSeconds: 20,
+          subtitleBurnedIn: true,
+          renderModeUsed: "fast_ass",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 12,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "normal",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 39,
+        audioDurationSeconds: 39,
+        videoFrameCount: 1170,
+      }),
+    }
+  );
+
+  assert.equal(exportedShortStart, 14);
+  assert.equal(exportedShortEnd, 34);
 });

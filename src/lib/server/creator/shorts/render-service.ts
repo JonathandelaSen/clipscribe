@@ -218,6 +218,24 @@ function parsePayload(value: unknown): CreatorShortSystemExportPayload {
   };
 }
 
+function inferVisualSourceKind(input: {
+  payloadVisualSource?: CreatorShortSystemExportPayload["visualSource"];
+  visualSourceFile?: File;
+}): "video" | "image" | null {
+  if (input.payloadVisualSource?.kind === "video" || input.payloadVisualSource?.kind === "image") {
+    return input.payloadVisualSource.kind;
+  }
+  if (!input.visualSourceFile) return null;
+
+  const mime = input.visualSourceFile.type.toLowerCase();
+  const filename = input.visualSourceFile.name.toLowerCase();
+  if (mime.startsWith("image/")) return "image";
+  if (mime.startsWith("video/")) return "video";
+  if (/\.(png|jpe?g|webp|gif|avif)$/i.test(filename)) return "image";
+  if (/\.(mp4|mov|webm|mkv)$/i.test(filename)) return "video";
+  return null;
+}
+
 function getOverlayRasterPixelArea(input: Pick<CreatorSystemRenderOverlayInput, "width" | "height">): number {
   return Math.max(1, input.width ?? 1080) * Math.max(1, input.height ?? 1920);
 }
@@ -417,6 +435,11 @@ export async function renderCreatorShortSystemExport(
       });
     }
     tempFileWriteMs = performance.now() - writeStartedAt;
+    const resolvedVisualSourceKind = inferVisualSourceKind({
+      payloadVisualSource: input.payload.visualSource,
+      visualSourceFile: input.visualSourceFile,
+    });
+
     let sourcePlaybackProfile: CreatorShortSourcePlaybackProfile = {
       mode: "normal",
       hasVideo: true,
@@ -424,39 +447,43 @@ export async function renderCreatorShortSystemExport(
       videoDurationSeconds: 0,
       audioDurationSeconds: 0,
     };
-    if (input.payload.visualSource?.kind === "image") {
-      sourcePlaybackProfile = {
-        mode: "still",
-        hasVideo: true,
-        hasAudio: true,
-        videoDurationSeconds: 0,
-        audioDurationSeconds: 0,
-      };
+    try {
+      sourcePlaybackProfile = await detectSourcePlaybackProfile(sourcePath);
       input.onProgressEvent?.({
         stage: "setup",
-        message: "Using static image visual override; original source audio remains authoritative for the short.",
+        message:
+          sourcePlaybackProfile.mode === "still"
+            ? `Detected still-video source profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}).`
+            : `Detected normal source playback profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}).`,
       });
-    } else if (visualSourcePath) {
+    } catch (error) {
       input.onProgressEvent?.({
         stage: "setup",
-        message: "Using replacement video visual override; original source audio remains authoritative for the short.",
+        message: `Source playback profiling unavailable: ${error instanceof Error ? error.message : "unknown error"}; continuing with normal render path.`,
       });
-    } else {
-      try {
-        sourcePlaybackProfile = await detectSourcePlaybackProfile(sourcePath);
-        input.onProgressEvent?.({
-          stage: "setup",
-          message:
-            sourcePlaybackProfile.mode === "still"
-              ? `Detected still-video source profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}); using static-video render path.`
-              : `Detected normal source playback profile (videoDuration=${sourcePlaybackProfile.videoDurationSeconds.toFixed(2)}s, frameCount=${sourcePlaybackProfile.videoFrameCount ?? 0}).`,
-        });
-      } catch (error) {
-        input.onProgressEvent?.({
-          stage: "setup",
-          message: `Source playback profiling unavailable: ${error instanceof Error ? error.message : "unknown error"}; continuing with normal render path.`,
-        });
-      }
+    }
+
+    const hasVisualOverride = Boolean(visualSourcePath) && !!resolvedVisualSourceKind;
+    const shouldUseClipRelativeTimeline =
+      hasVisualOverride || sourcePlaybackProfile.mode === "still";
+
+    if (resolvedVisualSourceKind === "image") {
+      input.onProgressEvent?.({
+        stage: "setup",
+        message:
+          "Using static image visual override; original source audio remains authoritative and overlay/subtitle timing is rebased to the clip timeline.",
+      });
+    } else if (resolvedVisualSourceKind === "video") {
+      input.onProgressEvent?.({
+        stage: "setup",
+        message:
+          "Using replacement video visual override; original source audio remains authoritative and overlay/subtitle timing is rebased to the clip timeline.",
+      });
+    } else if (sourcePlaybackProfile.mode === "still") {
+      input.onProgressEvent?.({
+        stage: "setup",
+        message: "Using static-video render path for a still source while keeping overlay/subtitle timing on the clip timeline.",
+      });
     }
 
     const trimLeadInCompensationSeconds = resolveTrimLeadInCompensationSeconds({
@@ -486,18 +513,18 @@ export async function renderCreatorShortSystemExport(
       getHybridTimelineOffsetSeconds(effectiveShort.startSeconds) -
       getHybridTimelineOffsetSeconds(input.payload.short.startSeconds)
     );
-    const stillModeTimelineOffsetSeconds =
-      sourcePlaybackProfile.mode === "still"
+    const clipRelativeTimelineOffsetSeconds =
+      shouldUseClipRelativeTimeline
         ? getHybridSeekTimelineOffsetSeconds(effectiveShort.startSeconds)
         : 0;
     const leadInAdjustedOverlays = shiftOverlayTimeline(preparedOverlays, leadInTimelineOffsetDelta);
     const effectiveOverlays =
-      stillModeTimelineOffsetSeconds > 0
+      clipRelativeTimelineOffsetSeconds > 0
         ? leadInAdjustedOverlays.flatMap((overlay) => {
             const shiftedRange = shiftTimedRangeToClipTimeline(
               overlay.start,
               overlay.end,
-              stillModeTimelineOffsetSeconds,
+              clipRelativeTimelineOffsetSeconds,
               clipDurationSeconds
             );
             if (!shiftedRange) return [];
@@ -519,14 +546,14 @@ export async function renderCreatorShortSystemExport(
         : null;
     const effectiveSemanticSubtitles =
       leadInAdjustedSemanticSubtitles &&
-      stillModeTimelineOffsetSeconds > 0
+      clipRelativeTimelineOffsetSeconds > 0
         ? {
             ...leadInAdjustedSemanticSubtitles,
             chunks: leadInAdjustedSemanticSubtitles.chunks.flatMap((chunk) => {
               const shiftedRange = shiftTimedRangeToClipTimeline(
                 chunk.start,
                 chunk.end,
-                stillModeTimelineOffsetSeconds,
+                clipRelativeTimelineOffsetSeconds,
                 clipDurationSeconds
               );
               if (!shiftedRange) return [];
@@ -541,10 +568,10 @@ export async function renderCreatorShortSystemExport(
           }
         : leadInAdjustedSemanticSubtitles;
 
-    if (stillModeTimelineOffsetSeconds > 0) {
+    if (clipRelativeTimelineOffsetSeconds > 0) {
       input.onProgressEvent?.({
         stage: "setup",
-        message: `Static-video timeline rebased by ${stillModeTimelineOffsetSeconds.toFixed(2)}s for overlays and subtitles.`,
+        message: `Clip timeline rebased by ${clipRelativeTimelineOffsetSeconds.toFixed(2)}s for overlays and subtitles.`,
       });
     }
 
@@ -579,7 +606,7 @@ export async function renderCreatorShortSystemExport(
     const result = await exportShort({
       sourceFilePath: sourcePath,
       visualSourceFilePath: visualSourcePath,
-      visualSourceKind: input.payload.visualSource?.kind ?? null,
+      visualSourceKind: resolvedVisualSourceKind,
       sourceFilename: input.payload.sourceFilename,
       shortName: input.payload.shortName,
       short: effectiveShort,
@@ -589,7 +616,7 @@ export async function renderCreatorShortSystemExport(
       overlays: effectiveOverlays,
       subtitleBurnedIn: input.payload.subtitleBurnedIn,
       subtitleTrackPath,
-      sourcePlaybackMode: sourcePlaybackProfile.mode,
+      sourcePlaybackMode: !hasVisualOverride && sourcePlaybackProfile.mode === "still" ? "still" : "normal",
       renderModeUsed: input.payload.subtitleRenderMode,
       overlaySummary: input.payload.overlaySummary,
       outputPath,
