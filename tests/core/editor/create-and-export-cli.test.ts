@@ -402,10 +402,11 @@ test("exportTimelineProjectWorkspace appends default filename when outputPath is
 
   // Mock exportProject to capture the resolved output path
   let capturedOutputPath = "";
-  const mockExportProject = async (input: any) => {
-    capturedOutputPath = input.outputPath;
+  const mockExportProject = async (input: unknown) => {
+    const typedInput = input as { outputPath: string };
+    capturedOutputPath = typedInput.outputPath;
     return {
-      outputPath: input.outputPath,
+      outputPath: typedInput.outputPath,
       filename: "test.mp4",
       width: 1920,
       height: 1080,
@@ -430,6 +431,7 @@ test("exportTimelineProjectWorkspace appends default filename when outputPath is
       json: true,
     },
     {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       exportProject: mockExportProject as any,
     }
   );

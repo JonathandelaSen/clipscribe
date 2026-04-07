@@ -13,6 +13,7 @@ export async function decodeAudio(file: File): Promise<Float32Array> {
         }
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({
       sampleRate: 16000,
     });
