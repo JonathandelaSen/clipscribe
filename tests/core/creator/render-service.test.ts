@@ -425,7 +425,7 @@ test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed 
         backgroundRadius: 22,
         textCase: "uppercase",
       },
-      chunks: [{ text: "HELLO", start: 3, end: 5 }],
+      chunks: [{ text: "HELLO", start: 0, end: 2 }],
     },
     subtitleBurnedIn: true,
     overlaySummary: {
@@ -449,8 +449,8 @@ test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed 
       overlays: [
         {
           descriptor: {
-            start: 3,
-            end: 5,
+            start: 0,
+            end: 2,
             fileField: "overlay_0",
             filename: "overlay.png",
             kind: "intro_overlay",
@@ -508,10 +508,10 @@ test("renderCreatorShortSystemExport compensates lead-in drift from pre-trimmed 
   assert.equal(result.filename, "short.mp4");
   assert.equal(exportedShortStart, 14);
   assert.equal(exportedShortEnd, 34);
-  assert.equal(overlayStart, 3);
-  assert.equal(overlayEnd, 5);
-  assert.match(builtAss, /"start":3/);
-  assert.match(builtAss, /"end":5/);
+  assert.equal(overlayStart, 0);
+  assert.equal(overlayEnd, 2);
+  assert.match(builtAss, /"start":0/);
+  assert.match(builtAss, /"end":2/);
   assert.equal(progressEvents.some((message) => /keyframe lead-in/.test(message)), true);
 });
 
@@ -681,7 +681,7 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for sti
         backgroundPaddingX: 22,
         backgroundPaddingY: 11,
       },
-      chunks: [{ text: "Hello world", start: 3, end: 6 }],
+      chunks: [{ text: "Hello world", start: 0, end: 3 }],
     },
     overlaySummary: {
       subtitleFrameCount: 0,
@@ -703,8 +703,8 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for sti
       overlays: [
         {
           descriptor: {
-            start: 3,
-            end: 6,
+            start: 0,
+            end: 3,
             fileField: "overlay_0",
             filename: "overlay.png",
             kind: "intro_overlay",
@@ -800,7 +800,7 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for sta
         backgroundPaddingX: 22,
         backgroundPaddingY: 11,
       },
-      chunks: [{ text: "Hello world", start: 3, end: 6 }],
+      chunks: [{ text: "Hello world", start: 0, end: 3 }],
     },
     overlaySummary: {
       subtitleFrameCount: 0,
@@ -825,8 +825,8 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for sta
       overlays: [
         {
           descriptor: {
-            start: 3,
-            end: 6,
+            start: 0,
+            end: 3,
             fileField: "overlay_0",
             filename: "overlay.png",
             kind: "intro_overlay",
@@ -924,7 +924,7 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for rep
         backgroundPaddingX: 22,
         backgroundPaddingY: 11,
       },
-      chunks: [{ text: "Hello world", start: 3, end: 6 }],
+      chunks: [{ text: "Hello world", start: 0, end: 3 }],
     },
     overlaySummary: {
       subtitleFrameCount: 0,
@@ -949,8 +949,8 @@ test("renderCreatorShortSystemExport rebases overlay and subtitle timing for rep
       overlays: [
         {
           descriptor: {
-            start: 3,
-            end: 6,
+            start: 0,
+            end: 3,
             fileField: "overlay_0",
             filename: "overlay.png",
             kind: "intro_overlay",
@@ -1054,7 +1054,7 @@ test("renderCreatorShortSystemExport keeps lead-in compensation active for image
         backgroundRadius: 22,
         textCase: "uppercase",
       },
-      chunks: [{ text: "HELLO", start: 3, end: 5 }],
+      chunks: [{ text: "HELLO", start: 0, end: 2 }],
     },
     subtitleBurnedIn: true,
     overlaySummary: {
@@ -1066,6 +1066,7 @@ test("renderCreatorShortSystemExport keeps lead-in compensation active for image
 
   let exportedShortStart = 0;
   let exportedShortEnd = 0;
+  let assPayload = "";
 
   await renderCreatorShortSystemExport(
     {
@@ -1075,6 +1076,10 @@ test("renderCreatorShortSystemExport keeps lead-in compensation active for image
       overlays: [],
     },
     {
+      buildAssDocument: (input) => {
+        assPayload = JSON.stringify(input.chunks);
+        return "[Script Info]\n";
+      },
       exportShort: async (input) => {
         exportedShortStart = input.short.startSeconds;
         exportedShortEnd = input.short.endSeconds;
@@ -1109,4 +1114,108 @@ test("renderCreatorShortSystemExport keeps lead-in compensation active for image
 
   assert.equal(exportedShortStart, 14);
   assert.equal(exportedShortEnd, 34);
+  assert.match(assPayload, /"start":0/);
+  assert.match(assPayload, /"end":2/);
+});
+
+test("renderCreatorShortSystemExport keeps lead-in compensation from delaying still-source subtitles", async () => {
+  const { sourceFile } = createFormData();
+  const payload: CreatorShortSystemExportPayload = {
+    ...createPayload(),
+    short: {
+      ...createPayload().short,
+      startSeconds: 10,
+      endSeconds: 30,
+      durationSeconds: 20,
+    },
+    sourceTrim: {
+      requestedOffsetSeconds: 34,
+      requestedDurationSeconds: 35,
+    },
+    subtitleRenderMode: "fast_ass",
+    semanticSubtitles: {
+      canvasWidth: 1080,
+      canvasHeight: 1920,
+      anchorX: 540,
+      anchorY: 1500,
+      fontSize: 56,
+      maxCharsPerLine: 24,
+      style: {
+        preset: "clean_caption",
+        textColor: "#FFFFFF",
+        letterWidth: 1.04,
+        borderColor: "#2A2A2A",
+        borderWidth: 3,
+        shadowColor: "#000000",
+        shadowOpacity: 0.32,
+        shadowDistance: 2.2,
+        backgroundColor: "#000000",
+        backgroundOpacity: 0,
+        backgroundEnabled: false,
+        backgroundPaddingX: 28,
+        backgroundPaddingY: 16,
+        backgroundRadius: 22,
+        textCase: "uppercase",
+      },
+      chunks: [{ text: "HELLO", start: 0, end: 2 }],
+    },
+    subtitleBurnedIn: true,
+    overlaySummary: {
+      subtitleFrameCount: 0,
+      introOverlayFrameCount: 0,
+      outroOverlayFrameCount: 0,
+    },
+  };
+
+  let exportedShortStart = 0;
+  let exportedShortEnd = 0;
+  let assPayload = "";
+
+  await renderCreatorShortSystemExport(
+    {
+      payload,
+      sourceFile,
+      overlays: [],
+    },
+    {
+      buildAssDocument: (input) => {
+        assPayload = JSON.stringify(input.chunks);
+        return "[Script Info]\n";
+      },
+      exportShort: async (input) => {
+        exportedShortStart = input.short.startSeconds;
+        exportedShortEnd = input.short.endSeconds;
+        await mkdir(path.dirname(input.outputPath), { recursive: true });
+        await writeFile(input.outputPath, Buffer.alloc(512, 1));
+        return {
+          outputPath: input.outputPath,
+          filename: "short.mp4",
+          width: 1080,
+          height: 1920,
+          sizeBytes: 512,
+          durationSeconds: 20,
+          subtitleBurnedIn: true,
+          renderModeUsed: "fast_ass",
+          encoderUsed: "libx264",
+          ffmpegDurationMs: 12,
+          ffmpegCommandPreview: ["ffmpeg"],
+          notes: ["rendered"],
+          dryRun: false,
+        };
+      },
+      detectSourcePlaybackProfile: async () => ({
+        mode: "still",
+        hasVideo: true,
+        hasAudio: true,
+        videoDurationSeconds: 39,
+        audioDurationSeconds: 39,
+        videoFrameCount: 1,
+      }),
+    }
+  );
+
+  assert.equal(exportedShortStart, 14);
+  assert.equal(exportedShortEnd, 34);
+  assert.match(assPayload, /"start":0/);
+  assert.match(assPayload, /"end":2/);
 });

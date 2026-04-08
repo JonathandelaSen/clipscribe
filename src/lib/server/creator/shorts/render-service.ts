@@ -22,8 +22,6 @@ import {
   type CreatorShortSourcePlaybackProfile,
 } from "./source-playback-profile";
 
-const FAST_SEEK_CUSHION_SECONDS = 3;
-
 type LooseRecord = Record<string, unknown>;
 
 export interface ParsedCreatorShortSystemExportFormData {
@@ -264,58 +262,6 @@ function resolveTrimLeadInCompensationSeconds(input: {
   return boundedLeadInSeconds >= 0.25 ? round3(boundedLeadInSeconds) : 0;
 }
 
-function getHybridTimelineOffsetSeconds(startSeconds: number) {
-  return round3(Math.min(FAST_SEEK_CUSHION_SECONDS, Math.max(0, startSeconds)));
-}
-
-function shiftOverlayTimeline(
-  overlays: readonly CreatorSystemRenderOverlayInput[],
-  offsetSeconds: number
-): CreatorSystemRenderOverlayInput[] {
-  if (!(offsetSeconds > 0)) return [...overlays];
-  return overlays.map((overlay) => ({
-    ...overlay,
-    start: round3(overlay.start + offsetSeconds),
-    end: round3(overlay.end + offsetSeconds),
-  }));
-}
-
-function shiftSemanticSubtitleTimeline(
-  semanticSubtitles: NonNullable<CreatorShortSystemExportPayload["semanticSubtitles"]>,
-  offsetSeconds: number
-): NonNullable<CreatorShortSystemExportPayload["semanticSubtitles"]> {
-  if (Math.abs(offsetSeconds) < 0.001) return semanticSubtitles;
-  return {
-    ...semanticSubtitles,
-    chunks: semanticSubtitles.chunks.map((chunk) => ({
-      ...chunk,
-      start: round3(chunk.start + offsetSeconds),
-      end: round3(chunk.end + offsetSeconds),
-    })),
-  };
-}
-
-function getHybridSeekTimelineOffsetSeconds(startSeconds: number) {
-  return getHybridTimelineOffsetSeconds(startSeconds);
-}
-
-function shiftTimedRangeToClipTimeline(
-  start: number,
-  end: number,
-  offsetSeconds: number,
-  clipDurationSeconds: number
-) {
-  const shiftedStart = round3(Math.max(0, start - offsetSeconds));
-  const shiftedEnd = round3(Math.min(clipDurationSeconds, Math.max(0, end - offsetSeconds)));
-  if (!(shiftedEnd > shiftedStart)) {
-    return null;
-  }
-  return {
-    start: shiftedStart,
-    end: shiftedEnd,
-  };
-}
-
 export function parseCreatorShortSystemExportFormData(formData: FormData): ParsedCreatorShortSystemExportFormData {
   const engine = formData.get(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.engine);
   if (engine !== "system") {
@@ -464,25 +410,23 @@ export async function renderCreatorShortSystemExport(
     }
 
     const hasVisualOverride = Boolean(visualSourcePath) && !!resolvedVisualSourceKind;
-    const shouldUseClipRelativeTimeline =
-      hasVisualOverride || sourcePlaybackProfile.mode === "still";
 
     if (resolvedVisualSourceKind === "image") {
       input.onProgressEvent?.({
         stage: "setup",
         message:
-          "Using static image visual override; original source audio remains authoritative and overlay/subtitle timing is rebased to the clip timeline.",
+          "Using static image visual override; original source audio remains authoritative while overlay/subtitle timing stays clip-relative.",
       });
     } else if (resolvedVisualSourceKind === "video") {
       input.onProgressEvent?.({
         stage: "setup",
         message:
-          "Using replacement video visual override; original source audio remains authoritative and overlay/subtitle timing is rebased to the clip timeline.",
+          "Using replacement video visual override; original source audio remains authoritative while overlay/subtitle timing stays clip-relative.",
       });
     } else if (sourcePlaybackProfile.mode === "still") {
       input.onProgressEvent?.({
         stage: "setup",
-        message: "Using static-video render path for a still source while keeping overlay/subtitle timing on the clip timeline.",
+        message: "Using static-video render path for a still source while keeping overlay/subtitle timing clip-relative.",
       });
     }
 
@@ -508,72 +452,14 @@ export async function renderCreatorShortSystemExport(
       });
     }
 
-    const clipDurationSeconds = Math.max(0.5, effectiveShort.durationSeconds);
-    const leadInTimelineOffsetDelta = round3(
-      getHybridTimelineOffsetSeconds(effectiveShort.startSeconds) -
-      getHybridTimelineOffsetSeconds(input.payload.short.startSeconds)
-    );
-    const clipRelativeTimelineOffsetSeconds =
-      shouldUseClipRelativeTimeline
-        ? getHybridSeekTimelineOffsetSeconds(effectiveShort.startSeconds)
-        : 0;
-    const leadInAdjustedOverlays = shiftOverlayTimeline(preparedOverlays, leadInTimelineOffsetDelta);
-    const effectiveOverlays =
-      clipRelativeTimelineOffsetSeconds > 0
-        ? leadInAdjustedOverlays.flatMap((overlay) => {
-            const shiftedRange = shiftTimedRangeToClipTimeline(
-              overlay.start,
-              overlay.end,
-              clipRelativeTimelineOffsetSeconds,
-              clipDurationSeconds
-            );
-            if (!shiftedRange) return [];
-            return [
-              {
-                ...overlay,
-                start: shiftedRange.start,
-                end: shiftedRange.end,
-              },
-            ];
-          })
-        : leadInAdjustedOverlays;
+    const effectiveOverlays = [...preparedOverlays];
 
-    const leadInAdjustedSemanticSubtitles =
+    const effectiveSemanticSubtitles =
       input.payload.subtitleRenderMode === "fast_ass" &&
       input.payload.semanticSubtitles &&
       input.payload.semanticSubtitles.chunks.length > 0
-        ? shiftSemanticSubtitleTimeline(input.payload.semanticSubtitles, leadInTimelineOffsetDelta)
+        ? input.payload.semanticSubtitles
         : null;
-    const effectiveSemanticSubtitles =
-      leadInAdjustedSemanticSubtitles &&
-      clipRelativeTimelineOffsetSeconds > 0
-        ? {
-            ...leadInAdjustedSemanticSubtitles,
-            chunks: leadInAdjustedSemanticSubtitles.chunks.flatMap((chunk) => {
-              const shiftedRange = shiftTimedRangeToClipTimeline(
-                chunk.start,
-                chunk.end,
-                clipRelativeTimelineOffsetSeconds,
-                clipDurationSeconds
-              );
-              if (!shiftedRange) return [];
-              return [
-                {
-                  ...chunk,
-                  start: shiftedRange.start,
-                  end: shiftedRange.end,
-                },
-              ];
-            }),
-          }
-        : leadInAdjustedSemanticSubtitles;
-
-    if (clipRelativeTimelineOffsetSeconds > 0) {
-      input.onProgressEvent?.({
-        stage: "setup",
-        message: `Clip timeline rebased by ${clipRelativeTimelineOffsetSeconds.toFixed(2)}s for overlays and subtitles.`,
-      });
-    }
 
     let subtitleTrackPath: string | null = null;
     if (effectiveSemanticSubtitles && effectiveSemanticSubtitles.chunks.length > 0) {

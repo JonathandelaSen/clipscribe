@@ -7,7 +7,6 @@ import {
 import { buildCreatorShortExportFilename } from "@/lib/creator/export-output";
 import {
   buildCreatorSemanticSubtitlePayload,
-  shouldUseCreatorPngSubtitleFallback,
 } from "@/lib/creator/semantic-subtitles";
 import {
   buildCompletedCreatorShortRenderResponse,
@@ -22,6 +21,7 @@ import { resolveCreatorSuggestedShort } from "@/lib/creator/shorts-compat";
 import { renderSubtitleAtlases } from "@/lib/creator/subtitle-canvas";
 import { trimSourceForExport } from "@/lib/creator/source-trim";
 import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
+import { prepareSystemExportTimelineArtifacts } from "./system-export-timeline";
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
@@ -35,7 +35,6 @@ import { shiftSubtitleChunks, type SubtitleChunk } from "@/lib/history";
 
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
-const FAST_SEEK_CUSHION_SECONDS = 3;
 const SERVER_PROGRESS_POLL_INTERVAL_MS = 1_200;
 const PROGRESS = {
   init: 2,
@@ -254,10 +253,26 @@ export interface RequestSystemCreatorShortExportResult {
   renderResponse: CreatorShortRenderResponse;
 }
 
+export interface RequestSystemCreatorShortExportDependencies {
+  trimSourceForExportFn?: typeof trimSourceForExport;
+  renderTextOverlayToPngFramesFn?: typeof renderTextOverlayToPngFrames;
+  buildCreatorSemanticSubtitlePayloadFn?: typeof buildCreatorSemanticSubtitlePayload;
+  renderSubtitleAtlasesFn?: typeof renderSubtitleAtlases;
+  fetchFn?: typeof fetch;
+}
+
 export async function requestSystemCreatorShortExport(
-  input: RequestSystemCreatorShortExportInput
+  input: RequestSystemCreatorShortExportInput,
+  dependencies: RequestSystemCreatorShortExportDependencies = {}
 ): Promise<RequestSystemCreatorShortExportResult> {
   const requestStartedAt = nowMs();
+  const trimSourceForExportFn = dependencies.trimSourceForExportFn ?? trimSourceForExport;
+  const renderTextOverlayToPngFramesFn =
+    dependencies.renderTextOverlayToPngFramesFn ?? renderTextOverlayToPngFrames;
+  const buildCreatorSemanticSubtitlePayloadFn =
+    dependencies.buildCreatorSemanticSubtitlePayloadFn ?? buildCreatorSemanticSubtitlePayload;
+  const renderSubtitleAtlasesFn = dependencies.renderSubtitleAtlasesFn ?? renderSubtitleAtlases;
+  const fetchFn = dependencies.fetchFn ?? fetch;
   const logDebug = (message: string) => {
     input.onDebugLog?.(message);
   };
@@ -303,7 +318,7 @@ export async function requestSystemCreatorShortExport(
     `Geometry ready: mode=${geometry.layoutMode ?? "legacy"}, ${geometry.scaledWidth}x${geometry.scaledHeight} -> ${geometry.outputWidth}x${geometry.outputHeight}.`
   );
 
-  const trimResult = await trimSourceForExport({
+  const trimResult = await trimSourceForExportFn({
     sourceFile: input.sourceFile,
     clipStartSeconds: short.startSeconds,
     clipEndSeconds: short.endSeconds,
@@ -329,27 +344,22 @@ export async function requestSystemCreatorShortExport(
       }
     : short;
 
-  const adjustedInputSeekSeconds = Math.max(0, adjustedShort.startSeconds - FAST_SEEK_CUSHION_SECONDS);
-  const adjustedExactTrimAfterSeekSeconds = Math.max(0, adjustedShort.startSeconds - adjustedInputSeekSeconds);
-
-  const introStartedAt = nowMs();
-  const introOverlayFrames = await renderTextOverlayToPngFrames({
-    overlay: input.editor.introOverlay ?? {
-      enabled: false,
-      text: "",
-      startOffsetSeconds: 0,
-      durationSeconds: 0,
-      positionXPercent: 50,
-      positionYPercent: 24,
-      scale: 1,
-      maxWidthPct: 78,
+  const timelineArtifacts = await prepareSystemExportTimelineArtifacts(
+    {
+      short,
+      adjustedShort,
+      editor: input.editor,
+      subtitleChunks: exportSubtitleChunks,
+      signal: input.renderLifecycle?.signal,
     },
-    slot: "intro",
-    clipDurationSeconds: short.durationSeconds,
-    timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
-    signal: input.renderLifecycle?.signal,
-  });
-  const introOverlayRenderMs = roundMs(nowMs() - introStartedAt);
+    {
+      renderTextOverlayToPngFramesFn,
+      buildCreatorSemanticSubtitlePayloadFn,
+      renderSubtitleAtlasesFn,
+    }
+  );
+  const introOverlayFrames = timelineArtifacts.introOverlayFrames;
+  const introOverlayRenderMs = timelineArtifacts.timingsMs.introOverlayRender;
   emitProgress(PROGRESS.introReady);
   if (introOverlayFrames[0]) {
     const frame = introOverlayFrames[0];
@@ -360,24 +370,8 @@ export async function requestSystemCreatorShortExport(
     logDebug(`Intro overlay prepared: 0 frame(s) in ${introOverlayRenderMs}ms.`);
   }
 
-  const outroStartedAt = nowMs();
-  const outroOverlayFrames = await renderTextOverlayToPngFrames({
-    overlay: input.editor.outroOverlay ?? {
-      enabled: false,
-      text: "",
-      startOffsetSeconds: 0,
-      durationSeconds: 0,
-      positionXPercent: 50,
-      positionYPercent: 34,
-      scale: 0.9,
-      maxWidthPct: 72,
-    },
-    slot: "outro",
-    clipDurationSeconds: short.durationSeconds,
-    timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
-    signal: input.renderLifecycle?.signal,
-  });
-  const outroOverlayRenderMs = roundMs(nowMs() - outroStartedAt);
+  const outroOverlayFrames = timelineArtifacts.outroOverlayFrames;
+  const outroOverlayRenderMs = timelineArtifacts.timingsMs.outroOverlayRender;
   emitProgress(PROGRESS.outroReady);
   if (outroOverlayFrames[0]) {
     const frame = outroOverlayFrames[0];
@@ -388,27 +382,10 @@ export async function requestSystemCreatorShortExport(
     logDebug(`Outro overlay prepared: 0 frame(s) in ${outroOverlayRenderMs}ms.`);
   }
 
-  const subtitleStartedAt = nowMs();
-  const semanticSubtitles = buildCreatorSemanticSubtitlePayload({
-    subtitleChunks: exportSubtitleChunks,
-    short: adjustedShort,
-    editor: input.editor,
-    timeOffsetSeconds: adjustedExactTrimAfterSeekSeconds,
-  });
-  const usePngSubtitleFallback =
-    semanticSubtitles != null && shouldUseCreatorPngSubtitleFallback(semanticSubtitles.style);
-  const subtitleRenderMode = usePngSubtitleFallback ? "png_parity" : "fast_ass";
-  const subtitleAtlases =
-    subtitleRenderMode === "png_parity"
-      ? await renderSubtitleAtlases(
-          exportSubtitleChunks,
-          adjustedShort,
-          input.editor,
-          adjustedExactTrimAfterSeekSeconds,
-          input.renderLifecycle?.signal
-        )
-      : [];
-  const subtitlePreparationMs = roundMs(nowMs() - subtitleStartedAt);
+  const semanticSubtitles = timelineArtifacts.semanticSubtitles;
+  const subtitleRenderMode = timelineArtifacts.subtitleRenderMode;
+  const subtitleAtlases = timelineArtifacts.subtitleAtlases;
+  const subtitlePreparationMs = timelineArtifacts.timingsMs.subtitlePreparation;
   emitProgress(PROGRESS.subtitlesReady);
   throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
   if (trimOffset > 0 && exportSubtitleChunks.length > 0) {
@@ -568,7 +545,7 @@ export async function requestSystemCreatorShortExport(
       params.set("cursor", String(serverProgressCursor));
     }
 
-    const response = await fetch(`/api/creator/shorts/render?${params.toString()}`, {
+    const response = await fetchFn(`/api/creator/shorts/render?${params.toString()}`, {
       method: "GET",
       cache: "no-store",
       headers: {
@@ -638,7 +615,7 @@ export async function requestSystemCreatorShortExport(
   try {
     const postStartedAt = nowMs();
     logDebug("POST /api/creator/shorts/render started.");
-    const response = await fetch("/api/creator/shorts/render", {
+    const response = await fetchFn("/api/creator/shorts/render", {
       method: "POST",
       body: formData,
       signal: input.renderLifecycle?.signal,
