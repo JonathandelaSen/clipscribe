@@ -4380,6 +4380,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           size="icon"
                           className="h-7 w-7 rounded-md text-white/38 hover:bg-white/[0.06] hover:text-white"
                           onClick={() => togglePanel("left")}
+                          aria-label="Toggle left panel"
                         >
                           <X className="h-4 w-4" />
                         </Button>
@@ -4538,6 +4539,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           size="icon"
                           className="h-7 w-7 rounded-md text-white/38 hover:bg-white/[0.06] hover:text-white"
                           onClick={() => togglePanel("center")}
+                          aria-label="Toggle center panel"
                         >
                           <X className="h-4 w-4" />
                         </Button>
@@ -4865,6 +4867,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         size="icon"
                         className="h-7 w-7 rounded-md text-white/38 hover:bg-white/[0.06] hover:text-white"
                         onClick={() => togglePanel("right")}
+                        aria-label="Toggle right panel"
                         >
                           <X className="h-4 w-4" />
                         </Button>
@@ -5087,6 +5090,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                           muted: !clip.muted,
                                         }))
                                       }
+                                      aria-label={inspectorClip.muted ? "Unmute clip" : "Mute clip"}
                                     >
                                       {inspectorClip.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                                     </Button>
@@ -6120,6 +6124,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                                       muted: !item.muted,
                                     }))
                                   }
+                                  aria-label={selectedAudioItem.muted ? "Unmute audio item" : "Mute audio item"}
                                 >
                                   {selectedAudioItem.muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
                                 </Button>
@@ -6296,6 +6301,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!selectedImageItem}
                         className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
                         onClick={resetSelectedImageFrame}
+                        aria-label="Reset image frame"
                       >
                         <RotateCcw className="h-3.5 w-3.5" />
                       </Button>
@@ -6305,6 +6311,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!selectedImageItem}
                         className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
                         onClick={removeSelectedTimelineItem}
+                        aria-label="Remove image item"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -6325,6 +6332,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             muted: !clip.muted,
                           }))
                         }
+                        aria-label={selectedClip?.muted ? "Unmute video clip" : "Mute video clip"}
                       >
                         {selectedClip?.muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
                       </Button>
@@ -6344,6 +6352,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                           if (!firstOverlay) return;
                           focusTimelineSelection({ kind: "overlay", id: firstOverlay.id }, firstOverlay.startOffsetSeconds);
                         }}
+                        aria-label="Focus first overlay"
                       >
                         <FolderOpen className="h-3.5 w-3.5" />
                       </Button>
@@ -6353,6 +6362,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!selectedOverlayItem}
                         className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
                         onClick={removeSelectedTimelineItem}
+                        aria-label="Remove overlay item"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -6370,6 +6380,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!subtitleTrackAvailable}
                         className="h-6 w-6 rounded-md text-white/34 hover:bg-white/[0.06] hover:text-white disabled:opacity-20"
                         onClick={() => focusTimelineSelection({ kind: "subtitle", id: EDITOR_SUBTITLE_TRACK_ID })}
+                        aria-label="Focus subtitle track"
                       >
                         <FolderOpen className="h-3.5 w-3.5" />
                       </Button>
@@ -6379,6 +6390,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!subtitleTrackAvailable}
                         className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
                         onClick={clearProjectSubtitleTrack}
+                        aria-label="Clear subtitle track"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -6399,6 +6411,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                             muted: !item.muted,
                           }))
                         }
+                        aria-label={selectedAudioItem?.muted ? "Unmute audio track" : "Mute audio track"}
                       >
                         {selectedAudioItem?.muted ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
                       </Button>
@@ -6408,6 +6421,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
                         disabled={!selectedAudioItem}
                         className="h-6 w-6 rounded-md text-white/30 hover:bg-red-500/10 hover:text-red-100 disabled:opacity-20"
                         onClick={removeSelectedTimelineItem}
+                        aria-label="Remove audio item"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

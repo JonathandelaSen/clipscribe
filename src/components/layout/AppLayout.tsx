@@ -156,6 +156,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
             onClick={() => setIsCollapsed(!isCollapsed)}
             className="w-full h-10 rounded-xl text-white/50 hover:bg-white/5 hover:text-white justify-center"
             title={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
           >
             {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
           </Button>
