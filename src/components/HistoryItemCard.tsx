@@ -490,10 +490,20 @@ export function HistoryItemCard({
             />
           ) : (
             <h3
-              className="text-2xl font-semibold text-white/90 break-all cursor-pointer hover:text-white transition-colors"
+              role="button"
+              tabIndex={0}
+              aria-label={`Rename ${item.filename}`}
+              className="text-2xl font-semibold text-white/90 break-all cursor-pointer hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50 rounded-md"
               onClick={() => {
                 setEditTitleValue(item.filename);
                 setIsEditingTitle(true);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  setEditTitleValue(item.filename);
+                  setIsEditingTitle(true);
+                }
               }}
               title="Click to rename"
             >
@@ -582,6 +592,7 @@ export function HistoryItemCard({
                 onClick={() => onDelete(item.id)}
                 className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                 title="Delete project (all transcript and subtitle versions)"
+                aria-label="Delete project"
               >
                 <Trash2 className="w-5 h-5" />
               </Button>
@@ -626,6 +637,7 @@ export function HistoryItemCard({
                   size="icon"
                   className="rounded-xl text-white/60 hover:bg-red-500/10 hover:text-red-100 flex-shrink-0"
                   title="Delete transcript version"
+                  aria-label="Delete transcript version"
                   onClick={() => {
                     if (window.confirm("Delete this transcript version?")) {
                       onDeleteTranscriptVersion(item.id, effectiveSelectedTranscriptId);
@@ -665,6 +677,7 @@ export function HistoryItemCard({
                   onClick={copyText}
                   disabled={!selectedTranscriptText}
                   title="Copy transcript text"
+                  aria-label="Copy transcript text"
                 >
                   {copiedTxt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                 </Button>
@@ -809,6 +822,7 @@ export function HistoryItemCard({
                   onClick={copySrt}
                   disabled={!selectedSubtitle}
                   title="Copy subtitles"
+                  aria-label="Copy subtitles"
                 >
                   {copiedSrt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                 </Button>
