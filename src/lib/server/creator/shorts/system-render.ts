@@ -679,11 +679,25 @@ export function buildCreatorSystemRenderCommand(input: {
   const isReplacementVideo = hasVisualOverride && input.visualSourceKind === "video";
   const isReplacementImage = hasVisualOverride && input.visualSourceKind === "image";
   const isStillSourcePlayback = input.sourcePlaybackMode === "still";
-  const inputSeekSeconds = Math.max(0, input.short.startSeconds - FAST_SEEK_CUSHION_SECONDS);
-  const exactTrimAfterSeekSeconds = Math.max(0, input.short.startSeconds - inputSeekSeconds);
-  const preInputSeek = input.seekMode === "hybrid" ? ["-ss", String(inputSeekSeconds)] : [];
-  const postInputSeekSeconds =
-    input.seekMode === "hybrid" ? exactTrimAfterSeekSeconds : input.short.startSeconds;
+  const hasTimelineFilters =
+    input.overlays.length > 0 ||
+    (input.overlaySequences?.length ?? 0) > 0 ||
+    Boolean(input.subtitleTrackPath);
+  const shouldSeekBeforeTimelineFilters = !hasVisualOverride && !isStillSourcePlayback && hasTimelineFilters;
+  const hybridInputSeekSeconds = Math.max(0, input.short.startSeconds - FAST_SEEK_CUSHION_SECONDS);
+  const exactTrimAfterSeekSeconds = Math.max(0, input.short.startSeconds - hybridInputSeekSeconds);
+  const preInputSeekSeconds = shouldSeekBeforeTimelineFilters
+    ? input.short.startSeconds
+    : input.seekMode === "hybrid"
+      ? hybridInputSeekSeconds
+      : 0;
+  const postInputSeekSeconds = shouldSeekBeforeTimelineFilters
+    ? 0
+    : input.seekMode === "hybrid"
+      ? exactTrimAfterSeekSeconds
+      : input.short.startSeconds;
+  const preInputSeek = preInputSeekSeconds > 0 ? ["-ss", String(preInputSeekSeconds)] : [];
+  const postInputSeek = postInputSeekSeconds > 0 ? ["-ss", String(postInputSeekSeconds)] : [];
   const overlayInputArgs = [
     ...input.overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]),
     ...(input.overlaySequences ?? []).flatMap((seq) => [
@@ -867,8 +881,7 @@ export function buildCreatorSystemRenderCommand(input: {
             "-i",
             input.sourceFilePath,
             ...overlayInputArgs,
-            "-ss",
-            String(postInputSeekSeconds),
+            ...postInputSeek,
             "-t",
             String(clipDuration),
             ...filterArgs,
@@ -924,9 +937,11 @@ export function buildCreatorSystemRenderCommand(input: {
         ? `Original source audio seeked from ${input.short.startSeconds.toFixed(2)}s while replacement visuals render for ${clipDuration.toFixed(2)}s.`
         : input.seekMode === "still_static"
           ? `Static-video mode enabled: reused the first video frame for ${clipDuration.toFixed(2)}s and seeked audio from ${input.short.startSeconds.toFixed(2)}s.`
+          : shouldSeekBeforeTimelineFilters
+            ? `Timeline filter seek normalized before input at ${input.short.startSeconds.toFixed(2)}s so overlays and subtitles stay clip-relative.`
           : input.seekMode === "hybrid"
-            ? inputSeekSeconds > 0
-              ? `Hybrid trim seek enabled: fast pre-seek ${inputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
+            ? hybridInputSeekSeconds > 0
+              ? `Hybrid trim seek enabled: fast pre-seek ${hybridInputSeekSeconds.toFixed(2)}s, exact post-seek ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
               : `Exact trim seek from start: ${exactTrimAfterSeekSeconds.toFixed(2)}s.`
             : `Fallback exact-seek mode used from ${input.short.startSeconds.toFixed(2)}s for container compatibility.`,
       input.geometry.canvasWidth !== input.geometry.scaledWidth || input.geometry.canvasHeight !== input.geometry.scaledHeight

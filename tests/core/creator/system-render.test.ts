@@ -166,6 +166,12 @@ test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG
     commandRunner: async (_, args) => {
       const filterIndex = args.indexOf("-filter_complex");
       assert.notEqual(filterIndex, -1);
+      const sourceInputIndex = args.indexOf(input.sourceFilePath);
+      const firstSeekIndex = args.indexOf("-ss");
+      assert.notEqual(firstSeekIndex, -1);
+      assert.ok(firstSeekIndex < sourceInputIndex);
+      assert.equal(args[firstSeekIndex + 1], String(input.short.startSeconds));
+      assert.equal(args.slice(sourceInputIndex + 1, filterIndex).includes("-ss"), false);
       assert.match(args[filterIndex + 1] ?? "", /\[0:v\]setpts=PTS-STARTPTS,/);
       assert.match(args[filterIndex + 1] ?? "", /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
       assert.match(args[filterIndex + 1] ?? "", /overlay=x=148:y=320:enable='between/);
