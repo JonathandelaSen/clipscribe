@@ -1,5 +1,11 @@
 import type { HistoryItem, TranscriptVersion } from "@/lib/history";
-import type { EditorAssetRecord, EditorExportEngine, EditorProjectRecord } from "@/lib/editor/types";
+import type {
+  EditorAssetRecord,
+  EditorExportCounts,
+  EditorExportEngine,
+  EditorExportTimingsMs,
+  EditorProjectRecord,
+} from "@/lib/editor/types";
 import type {
   CreatorShortEditorState,
   CreatorShortPlan,
@@ -58,6 +64,15 @@ export interface ProjectYouTubeUploadDraftSnapshot {
     title: string;
     description: string;
   }>;
+  relatedVideo?: {
+    videoId: string;
+    title: string;
+    watchUrl: string;
+    studioUrl: string;
+    privacyStatus?: "private" | "unlisted" | "public";
+    publishedAt?: string;
+    thumbnailUrl?: string;
+  };
 }
 
 export interface ProjectYouTubeUploadResultSnapshot {
@@ -112,8 +127,8 @@ export interface ProjectExportRecord {
   debugNotes?: string[];
   renderModeUsed?: "fast_ass" | "png_parity";
   encoderUsed?: string;
-  timingsMs?: CreatorShortSystemExportTimingsMs;
-  counts?: CreatorShortSystemExportCounts;
+  timingsMs?: CreatorShortSystemExportTimingsMs | EditorExportTimingsMs;
+  counts?: CreatorShortSystemExportCounts | EditorExportCounts;
   clip?: CreatorViralClip;
   plan?: CreatorShortPlan;
   short?: CreatorSuggestedShort;

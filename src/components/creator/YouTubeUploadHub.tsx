@@ -64,6 +64,7 @@ import type {
   YouTubeOptionCatalog,
   YouTubePrivacyStatus,
   YouTubePublishResult,
+  YouTubeRelatedVideoOption,
   YouTubePublishStepResult,
   YouTubeSessionStatus,
   YouTubeThumbnailUpload,
@@ -113,6 +114,11 @@ type OptionsPayload = {
   regionCode: string;
   categories: YouTubeOptionCatalog["categories"];
   languages: YouTubeOptionCatalog["languages"];
+};
+
+type RelatedVideosPayload = {
+  ok: true;
+  videos: YouTubeRelatedVideoOption[];
 };
 
 function makeRowId() {
@@ -194,6 +200,15 @@ function formatVideoShape(width?: number, height?: number) {
   return `${width}x${height}`;
 }
 
+function formatPublishedDate(value: string | undefined) {
+  if (!value) return "Unknown publish date";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(undefined, {
+    dateStyle: "medium",
+  });
+}
+
 function resultTone(state: YouTubePublishStepResult["state"]) {
   if (state === "applied") {
     return "border-emerald-400/25 bg-emerald-400/8 text-emerald-200";
@@ -273,6 +288,7 @@ function buildDraft(input: {
   containsSyntheticMedia: boolean | undefined;
   recordingDate: string;
   localizations: LocalizationRow[];
+  relatedVideo: YouTubeRelatedVideoOption | null;
 }): YouTubeUploadDraft {
   return {
     title: input.title,
@@ -290,6 +306,7 @@ function buildDraft(input: {
     containsSyntheticMedia: input.containsSyntheticMedia,
     recordingDate: input.recordingDate || undefined,
     localizations: input.localizations,
+    relatedVideo: input.relatedVideo ?? undefined,
   };
 }
 
@@ -354,6 +371,7 @@ export function YouTubeUploadHub({
   const [session, setSession] = useState<SessionPayload | null>(null);
   const [channels, setChannels] = useState<YouTubeChannelSummary[]>([]);
   const [catalog, setCatalog] = useState<YouTubeOptionCatalog | null>(null);
+  const [relatedVideos, setRelatedVideos] = useState<YouTubeRelatedVideoOption[]>([]);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [isLoadingRemoteData, setIsLoadingRemoteData] = useState(false);
   const [remoteError, setRemoteError] = useState<string | null>(null);
@@ -389,6 +407,7 @@ export function YouTubeUploadHub({
   const [selfDeclaredMadeForKids, setSelfDeclaredMadeForKids] = useState<boolean | undefined>(undefined);
   const [containsSyntheticMedia, setContainsSyntheticMedia] = useState<boolean | undefined>(undefined);
   const [recordingDate, setRecordingDate] = useState("");
+  const [relatedVideoSelection, setRelatedVideoSelection] = useState<YouTubeRelatedVideoOption | null>(null);
   const [localizations, setLocalizations] = useState<LocalizationRow[]>([]);
   const [captionLanguage, setCaptionLanguage] = useState("");
   const [captionName, setCaptionName] = useState("");
@@ -698,14 +717,16 @@ export function YouTubeUploadHub({
         startTransition(() => {
           setChannels([]);
           setCatalog(null);
+          setRelatedVideos([]);
         });
         return;
       }
 
       setIsLoadingRemoteData(true);
-      const [channelsPayload, optionsPayload] = await Promise.all([
+      const [channelsPayload, optionsPayload, videosPayload] = await Promise.all([
         fetchJson<{ ok: true; channels: YouTubeChannelSummary[] }>("/api/youtube/channels"),
         fetchJson<OptionsPayload>(`/api/youtube/options?regionCode=${encodeURIComponent(regionCode)}`),
+        fetchJson<RelatedVideosPayload>("/api/youtube/videos"),
       ]);
       startTransition(() => {
         setChannels(channelsPayload.channels);
@@ -714,6 +735,10 @@ export function YouTubeUploadHub({
           categories: optionsPayload.categories,
           languages: optionsPayload.languages,
         });
+        setRelatedVideos(videosPayload.videos);
+        setRelatedVideoSelection((prev) =>
+          prev ? videosPayload.videos.find((video) => video.videoId === prev.videoId) ?? prev : null
+        );
       });
     } catch (error) {
       setRemoteError(error instanceof Error ? error.message : "Failed to load YouTube remote state.");
@@ -745,6 +770,7 @@ export function YouTubeUploadHub({
         containsSyntheticMedia,
         recordingDate,
         localizations,
+        relatedVideo: relatedVideoSelection,
       }),
     [
       categoryId,
@@ -760,10 +786,18 @@ export function YouTubeUploadHub({
       publishDraft.description,
       publishDraft.tagsInput,
       publishDraft.title,
+      relatedVideoSelection,
       recordingDate,
       selfDeclaredMadeForKids,
     ]
   );
+
+  const relatedVideoOptions = useMemo(() => {
+    if (!relatedVideoSelection) return relatedVideos;
+    return relatedVideos.some((video) => video.videoId === relatedVideoSelection.videoId)
+      ? relatedVideos
+      : [relatedVideoSelection, ...relatedVideos];
+  }, [relatedVideoSelection, relatedVideos]);
 
   const shortEligibilityMessage = useMemo(() => {
     const shapeLabel = formatVideoShape(shortEligibility.width, shortEligibility.height);
@@ -898,6 +932,7 @@ export function YouTubeUploadHub({
         }));
         setChannels([]);
         setCatalog(null);
+        setRelatedVideos([]);
       });
       toast.success("YouTube disconnected");
     } catch (error) {
@@ -1858,6 +1893,92 @@ export function YouTubeUploadHub({
                           className="border-white/10 bg-black/25 text-white"
                         />
                       </div>
+                      <div className="grid gap-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/8 p-4">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <Label className="text-zinc-100">Related video for this Short</Label>
+                            <div className="mt-1 text-xs leading-relaxed text-cyan-50/75">
+                              ClipScribe can store the target video and let you choose it from your channel library. The final Shorts related-video link still needs to be confirmed in YouTube Studio because the public upload API does not expose that field.
+                            </div>
+                          </div>
+                          {relatedVideoSelection ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="text-cyan-100 hover:bg-white/10 hover:text-white"
+                              onClick={() => setRelatedVideoSelection(null)}
+                            >
+                              Clear
+                            </Button>
+                          ) : null}
+                        </div>
+                        <Select
+                          value={relatedVideoSelection?.videoId ?? "__none__"}
+                          onValueChange={(value) =>
+                            setRelatedVideoSelection(
+                              value === "__none__"
+                                ? null
+                                : relatedVideoOptions.find((video) => video.videoId === value) ?? null
+                            )
+                          }
+                          disabled={!session?.connected || relatedVideoOptions.length === 0}
+                        >
+                          <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                            <SelectValue
+                              placeholder={
+                                session?.connected
+                                  ? "Choose a public or unlisted channel video"
+                                  : "Connect YouTube first"
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">No related video</SelectItem>
+                            {relatedVideoOptions.map((video) => (
+                              <SelectItem key={video.videoId} value={video.videoId}>
+                                {video.title}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {relatedVideoSelection ? (
+                          <div className="rounded-2xl border border-white/8 bg-black/20 p-4">
+                            <div className="text-sm font-medium text-white">{relatedVideoSelection.title}</div>
+                            <div className="mt-1 flex flex-wrap gap-2 text-xs text-zinc-400">
+                              <span>{relatedVideoSelection.privacyStatus || "unknown visibility"}</span>
+                              <span>{formatPublishedDate(relatedVideoSelection.publishedAt)}</span>
+                              <span className="font-mono text-zinc-500">{relatedVideoSelection.videoId}</span>
+                            </div>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              <a
+                                href={relatedVideoSelection.watchUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white transition-colors hover:bg-white/10"
+                              >
+                                Open video
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              </a>
+                              <a
+                                href={relatedVideoSelection.studioUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white transition-colors hover:bg-white/10"
+                              >
+                                Open in Studio
+                                <ChevronRight className="h-3.5 w-3.5" />
+                              </a>
+                            </div>
+                          </div>
+                        ) : session?.connected ? (
+                          <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-zinc-400">
+                            {relatedVideoOptions.length > 0
+                              ? "Pick a target video if you want to continue the viewer journey from the Short into a longer video, another Short, or a live replay."
+                              : "No public or unlisted channel videos were returned for this account yet."}
+                          </div>
+                        ) : null}
+                      </div>
                     </AccordionContent>
                   </AccordionItem>
 
@@ -2322,6 +2443,16 @@ export function YouTubeUploadHub({
                         </AlertDescription>
                       </Alert>
                     ) : null}
+
+                    {currentDraft.relatedVideo ? (
+                      <Alert className="border-cyan-400/25 bg-cyan-400/10 text-cyan-50">
+                        <Link2 className="h-4 w-4" />
+                        <AlertTitle>Finish the related-video link in Studio</AlertTitle>
+                        <AlertDescription className="text-cyan-50/80">
+                          The Short is uploaded. To match YouTube Studio behavior, open the new upload in Studio and choose <strong>{currentDraft.relatedVideo.title}</strong> as the related video.
+                        </AlertDescription>
+                      </Alert>
+                    ) : null}
                   </div>
                 ) : (
                   <div className="rounded-[26px] border border-dashed border-white/10 bg-black/20 p-6 text-sm text-zinc-500">
@@ -2459,6 +2590,41 @@ export function YouTubeUploadHub({
                         )}
                       </div>
                     </div>
+                    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                      <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Related video</div>
+                      {currentDraft.relatedVideo ? (
+                        <div className="mt-3 space-y-3">
+                          <div>
+                            <div className="text-sm font-medium text-white">{currentDraft.relatedVideo.title}</div>
+                            <div className="mt-1 text-xs text-zinc-500">
+                              {(currentDraft.relatedVideo.privacyStatus || "unknown visibility")} • {formatPublishedDate(currentDraft.relatedVideo.publishedAt)}
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <a
+                              href={currentDraft.relatedVideo.watchUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-white transition-colors hover:bg-black/35"
+                            >
+                              Open video
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </a>
+                            <a
+                              href={currentDraft.relatedVideo.studioUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-1.5 text-xs text-white transition-colors hover:bg-black/35"
+                            >
+                              Open in Studio
+                              <ChevronRight className="h-3.5 w-3.5" />
+                            </a>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="mt-2 text-sm text-zinc-500">No related video selected</div>
+                      )}
+                    </div>
                   </div>
                 </section>
               </div>
@@ -2477,6 +2643,7 @@ export function YouTubeUploadHub({
                       { label: "Default language", value: defaultLanguageLabel },
                       { label: "Recording date", value: formatDateInput(recordingDate) },
                       { label: "Publish at", value: formatDateTimeInput(publishAt) },
+                      { label: "Related video", value: currentDraft.relatedVideo?.title || "Not set" },
                     ].map((item) => (
                       <div
                         key={item.label}
@@ -2549,6 +2716,16 @@ export function YouTubeUploadHub({
                     </div>
                   </div>
                 </section>
+
+                {currentDraft.relatedVideo ? (
+                  <Alert className="border-cyan-400/25 bg-cyan-400/10 text-cyan-50">
+                    <Link2 className="h-4 w-4" />
+                    <AlertTitle>Related video prepared for Studio</AlertTitle>
+                    <AlertDescription className="text-cyan-50/80">
+                      After the Short finishes uploading, open it in YouTube Studio and set the related video to <strong>{currentDraft.relatedVideo.title}</strong>. ClipScribe stores the selection, but the public upload API still does not expose this Shorts-specific field.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
               </div>
             </div>
           </div>

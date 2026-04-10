@@ -549,6 +549,10 @@ export function buildEditorExportRecord(input: {
   error?: string;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: EditorExportRecord["timingsMs"];
+  counts?: EditorExportRecord["counts"];
   createdAt?: number;
   status?: EditorExportRecord["status"];
 }): EditorExportRecord {
@@ -572,6 +576,10 @@ export function buildEditorExportRecord(input: {
     error: input.error,
     debugFfmpegCommand: input.debugFfmpegCommand,
     debugNotes: input.debugNotes,
+    encoderUsed: input.encoderUsed,
+    hardwareAccelerated: input.hardwareAccelerated,
+    timingsMs: input.timingsMs,
+    counts: input.counts,
   };
 }
 

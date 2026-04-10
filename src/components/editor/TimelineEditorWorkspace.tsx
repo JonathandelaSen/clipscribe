@@ -162,6 +162,7 @@ import {
   resolveReactiveOverlayFrame,
   resolveReactiveOverlayRect,
   type EditorReactiveAudioAnalysisTrack,
+  type ReactiveOverlayFrameSequence,
   type ResolvedReactiveOverlayFrame,
 } from "@/lib/editor/reactive-overlays";
 import {
@@ -254,6 +255,7 @@ const EDITOR_TOOLBAR_BUTTON_CLASS =
 const EDITOR_TIMECODE_CLASS = "font-mono text-[11px] tracking-[0.18em] text-white/46";
 const IMAGE_TRACK_MIN_ZOOM = 0.6;
 const IMAGE_TRACK_MAX_ZOOM = 6;
+const EDITOR_TASK_LOG_LIMIT = 250;
 const EDITOR_SUBTITLE_TIMING_MODE_LABELS: Record<CreatorSubtitleTimingMode, string> = {
   segment: "Normal subtitles",
   word: "1 word",
@@ -273,6 +275,11 @@ function getBakeTaskMessage(stage: BrowserRenderStage) {
   if (stage === "rendering") return "Baking joined clip";
   if (stage === "handoff") return "Applying baked clip to the timeline";
   return "Wrapping up bake";
+}
+
+function formatEditorTaskLogLine(message: string, startedAt: number, now: number) {
+  const elapsedSeconds = ((now - startedAt) / 1000).toFixed(2);
+  return `[${new Date(now).toISOString()} | +${elapsedSeconds}s] ${message}`;
 }
 
 function getTimelinePlaybackTimeFromVideo(input: {
@@ -853,6 +860,18 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const projectStateRef = useRef<EditorProjectRecord | null>(null);
   const editorRepositoryRef = useRef(createDexieEditorRepository());
   const reactiveOverlayDecodedAudioCacheRef = useRef(new Map<string, Float32Array>());
+  const reactiveOverlayAnalysisStateRef = useRef<{
+    fingerprint: string;
+    analysis: EditorReactiveAudioAnalysisTrack | null;
+  }>({
+    fingerprint: "",
+    analysis: null,
+  });
+  const reactiveOverlayAnalysisRequestRef = useRef<{
+    fingerprint: string;
+    promise: Promise<EditorReactiveAudioAnalysisTrack | null>;
+  } | null>(null);
+  const reactiveOverlaySequenceCacheRef = useRef(new Map<string, ReactiveOverlayFrameSequence[]>());
 
   const {
     project: loadedProject,
@@ -915,6 +934,38 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
   const beginRenderSession = useCallback(() => {
     return createActiveBrowserRenderSession(++renderSessionCounterRef.current);
   }, []);
+
+  const createTaskLogSync = useCallback(
+    (task: { update: (patch: { logLines?: string[] }) => void }) => {
+      let startedAt = 0;
+      let lines: string[] = [];
+
+      const pushLine = (message: string, reset = false) => {
+        const now = Date.now();
+        if (reset || startedAt <= 0) {
+          startedAt = now;
+          lines = [];
+        }
+        const line = formatEditorTaskLogLine(message, startedAt, now);
+        if (lines[lines.length - 1] === line) return;
+        lines =
+          lines.length >= EDITOR_TASK_LOG_LIMIT
+            ? [...lines.slice(lines.length - (EDITOR_TASK_LOG_LIMIT - 1)), line]
+            : [...lines, line];
+        task.update({ logLines: lines });
+      };
+
+      return {
+        begin(message: string) {
+          pushLine(message, true);
+        },
+        append(message: string) {
+          pushLine(message);
+        },
+      };
+    },
+    []
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1530,9 +1581,37 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
           id: entry.asset.id,
           updatedAt: entry.asset.updatedAt,
           size: entry.asset.sizeBytes,
-        })),
+      })),
     });
   }, [project, resolvedAssets]);
+  const buildReactiveOverlaySequenceCacheKey = useCallback(
+    (projectRecord: EditorProjectRecord, resolution: EditorResolution) => {
+      const { width, height } = getEditorOutputDimensions(projectRecord.aspectRatio, resolution);
+      return JSON.stringify({
+        analysisFingerprint: reactiveOverlayAnalysisFingerprint,
+        aspectRatio: projectRecord.aspectRatio,
+        resolution,
+        width,
+        height,
+        overlays: projectRecord.timeline.overlayItems.map((item) => ({
+          id: item.id,
+          presetId: item.presetId,
+          startOffsetSeconds: item.startOffsetSeconds,
+          durationSeconds: item.durationSeconds,
+          positionXPercent: item.positionXPercent,
+          positionYPercent: item.positionYPercent,
+          widthPercent: item.widthPercent,
+          heightPercent: item.heightPercent,
+          scale: item.scale,
+          opacity: item.opacity,
+          tintHex: item.tintHex,
+          sensitivity: item.sensitivity,
+          smoothing: item.smoothing,
+        })),
+      });
+    },
+    [reactiveOverlayAnalysisFingerprint]
+  );
   const subtitlePreviewRenderSize = useMemo(
     () => (project ? getEditorOutputDimensions(project.aspectRatio, "1080p") : null),
     [project]
@@ -1540,13 +1619,18 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (!project || project.timeline.overlayItems.length === 0) {
+      reactiveOverlayAnalysisStateRef.current = {
+        fingerprint: "",
+        analysis: null,
+      };
+      reactiveOverlayAnalysisRequestRef.current = null;
       setReactiveOverlayAnalysis(null);
       return;
     }
 
     const controller = new AbortController();
-
-    void (async () => {
+    const fingerprint = reactiveOverlayAnalysisFingerprint;
+    const analysisPromise = (async () => {
       const decodedSamplesByAssetId = new Map<string, Float32Array>();
       const relevantAssets = resolvedAssets.filter(
         (entry) =>
@@ -1555,7 +1639,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       );
 
       for (const entry of relevantAssets) {
-        if (controller.signal.aborted || !entry.file) return;
+        if (controller.signal.aborted || !entry.file) return null;
         const cacheKey = `${entry.asset.id}:${entry.asset.updatedAt}:${entry.asset.sizeBytes}`;
         const cached = reactiveOverlayDecodedAudioCacheRef.current.get(cacheKey);
         if (cached) {
@@ -1564,7 +1648,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         }
 
         const decoded = await decodeAudio(entry.file);
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted) return null;
         reactiveOverlayDecodedAudioCacheRef.current.set(cacheKey, decoded);
         decodedSamplesByAssetId.set(entry.asset.id, decoded);
       }
@@ -1573,17 +1657,37 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         project,
         decodedSamplesByAssetId,
       });
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted) return null;
+      return analysis;
+    })();
+    reactiveOverlayAnalysisRequestRef.current = {
+      fingerprint,
+      promise: analysisPromise,
+    };
+
+    void analysisPromise.then((analysis) => {
+      if (controller.signal.aborted || !analysis) return;
+      reactiveOverlayAnalysisStateRef.current = {
+        fingerprint,
+        analysis,
+      };
       startTransition(() => {
         setReactiveOverlayAnalysis(analysis);
       });
-    })().catch(() => {
+    }).catch(() => {
       if (controller.signal.aborted) return;
+      reactiveOverlayAnalysisStateRef.current = {
+        fingerprint: "",
+        analysis: null,
+      };
       setReactiveOverlayAnalysis(null);
     });
 
     return () => {
       controller.abort();
+      if (reactiveOverlayAnalysisRequestRef.current?.fingerprint === fingerprint) {
+        reactiveOverlayAnalysisRequestRef.current = null;
+      }
     };
   }, [project, reactiveOverlayAnalysisFingerprint, resolvedAssets]);
   const currentCaptionStyle = useMemo(
@@ -2800,9 +2904,13 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       title: `Baking ${selectedVideoGroup.label}`,
       message: `Rendering a reusable baked clip from ${selectedVideoGroup.label}`,
       run: async (task) => {
+        const taskLog = createTaskLogSync(task);
         const session = beginRenderSession();
         bakeSessionRef.current = session;
         setIsPlaying(false);
+        taskLog.begin(
+          `Bake started for ${selectedVideoGroup.label}: resolution=${exportResolution}, assets=${bakeResolvedAssets.length}.`
+        );
         task.update({
           status: "preparing",
           progress: 1,
@@ -2810,6 +2918,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         });
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
+          taskLog.append("Cancel requested by user.");
           session.controller.abort();
           bakeSessionRef.current = null;
           toast("Bake canceled");
@@ -2817,6 +2926,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
         try {
           session.stage = "rendering";
+          taskLog.append("Stage -> rendering.");
           task.update({
             status: "running",
             progress: 18,
@@ -2827,6 +2937,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             resolvedAssets: bakeResolvedAssets,
             resolution: exportResolution,
             signal: session.controller.signal,
+            onDebugLog: taskLog.append,
             onServerProgress: (progressPct) => {
               task.update({
                 status: "running",
@@ -2836,6 +2947,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             },
           });
           session.stage = "handoff";
+          taskLog.append("Stage -> handoff.");
           const result = {
             file: systemResult.file,
             width: systemResult.width,
@@ -2848,6 +2960,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             progress: 96,
             message: "Applying baked clip to the timeline",
           });
+          taskLog.append("Applying baked clip to the timeline.");
 
           const metadata = await readMediaMetadata(result.file);
           if (bakeSessionRef.current?.id !== session.id || task.isCanceled()) return;
@@ -2923,6 +3036,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             setInspectorVideoTab("edit");
           }
 
+          taskLog.append(`Bake complete: ${bakedAsset.filename}.`);
           toast.success(`Baked ${selectedVideoGroup.label} into one rendered clip`);
         } catch (error) {
           if (
@@ -2934,6 +3048,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             return;
           }
           const message = error instanceof Error ? error.message : "Failed to bake the joined clip.";
+          taskLog.append(`Bake failed: ${message.split("\n")[0] || "Failed to bake the joined clip."}.`);
           console.error("Failed to bake joined clip", error);
           toast.error(message.split("\n")[0] || "Failed to bake the joined clip.");
           throw error;
@@ -3834,8 +3949,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
       title: `Exporting ${project.name}`,
       message: `${selectedResolution} · ${EDITOR_EXPORT_ENGINE_LABEL}`,
       run: async (task) => {
+        const taskLog = createTaskLogSync(task);
         const session = beginRenderSession();
         exportSessionRef.current = session;
+        taskLog.begin(`Export started for ${project.name}: resolution=${selectedResolution}.`);
         task.update({
           status: "preparing",
           progress: 1,
@@ -3843,6 +3960,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
         });
         task.setCancel(() => {
           if (!isBrowserRenderCancelableStage(session.stage)) return;
+          taskLog.append("Cancel requested by user.");
           session.controller.abort();
           exportSessionRef.current = null;
           toast("Export canceled");
@@ -3850,16 +3968,54 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
         try {
           session.stage = "rendering";
+          taskLog.append("Stage -> rendering.");
           task.update({
             status: "running",
             progress: 18,
             message: "Rendering timeline export",
           });
+          let exportReactiveOverlayAnalysis: EditorReactiveAudioAnalysisTrack | null = null;
+          let analysisReuseWaitMs = 0;
+          let cachedReactiveOverlaySequences: ReactiveOverlayFrameSequence[] | null = null;
+          let reactiveOverlaySequenceCacheKey = "";
+
+          if (exportSnapshot.timeline.overlayItems.length > 0 && reactiveOverlayAnalysisFingerprint) {
+            if (reactiveOverlayAnalysisStateRef.current.fingerprint === reactiveOverlayAnalysisFingerprint) {
+              exportReactiveOverlayAnalysis = reactiveOverlayAnalysisStateRef.current.analysis;
+            } else if (reactiveOverlayAnalysisRequestRef.current?.fingerprint === reactiveOverlayAnalysisFingerprint) {
+              const analysisWaitStartedAt = performance.now();
+              exportReactiveOverlayAnalysis = await reactiveOverlayAnalysisRequestRef.current.promise;
+              analysisReuseWaitMs = performance.now() - analysisWaitStartedAt;
+              if (analysisReuseWaitMs >= 1) {
+                taskLog.append(
+                  `Waited ${Math.round(analysisReuseWaitMs)}ms for reactive overlay analysis already in progress.`
+                );
+              }
+            }
+
+            reactiveOverlaySequenceCacheKey = buildReactiveOverlaySequenceCacheKey(exportSnapshot, selectedResolution);
+            const cachedSequences = reactiveOverlaySequenceCacheRef.current.get(reactiveOverlaySequenceCacheKey);
+            if (cachedSequences) {
+              cachedReactiveOverlaySequences = cachedSequences;
+              taskLog.append(`Reusing ${cachedSequences.length} cached reactive overlay sequence input(s).`);
+            }
+          }
+
           const systemResult = await requestSystemEditorExport({
             project: exportSnapshot,
             resolvedAssets,
             resolution: selectedResolution,
+            reactiveOverlayAnalysis: exportReactiveOverlayAnalysis,
+            reactiveOverlaySequences: cachedReactiveOverlaySequences,
+            analysisReuseWaitMs,
+            onReactiveOverlaySequencesPrepared:
+              reactiveOverlaySequenceCacheKey && !cachedReactiveOverlaySequences
+                ? (sequences) => {
+                    reactiveOverlaySequenceCacheRef.current.set(reactiveOverlaySequenceCacheKey, sequences);
+                  }
+                : undefined,
             signal: session.controller.signal,
+            onDebugLog: taskLog.append,
             onServerProgress: (progressPct) => {
               task.update({
                 status: "running",
@@ -3869,6 +4025,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             },
           });
           session.stage = "handoff";
+          taskLog.append("Stage -> handoff.");
           const result = {
             file: systemResult.file,
             width: systemResult.width,
@@ -3876,6 +4033,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             warnings: systemResult.warnings,
             ffmpegCommandPreview: systemResult.debugFfmpegCommand,
             notes: systemResult.debugNotes,
+            encoderUsed: systemResult.encoderUsed,
+            hardwareAccelerated: systemResult.hardwareAccelerated,
+            timingsMs: systemResult.timingsMs,
+            counts: systemResult.counts,
           };
           if (exportSessionRef.current?.id !== session.id || task.isCanceled()) return;
 
@@ -3884,6 +4045,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             progress: 96,
             message: "Saving export output",
           });
+          taskLog.append("Saving export output.");
 
           if (usesSavePicker && destination) {
             await writeBlobToEditorSaveFileHandle(destination.handle, result.file);
@@ -3891,6 +4053,24 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             downloadBlob(result.file);
           }
           if (exportSessionRef.current?.id !== session.id || task.isCanceled()) return;
+
+          if (result.encoderUsed) {
+            taskLog.append(
+              `Export diagnostics: encoder=${result.encoderUsed}${result.hardwareAccelerated ? " (hardware)" : " (software)"}.`
+            );
+          }
+          if (result.timingsMs) {
+            const timingParts = [
+              result.timingsMs.analysisReuseWait ? `analysisReuseWait=${Math.round(result.timingsMs.analysisReuseWait)}ms` : null,
+              result.timingsMs.overlayPreparation ? `overlayPreparation=${Math.round(result.timingsMs.overlayPreparation)}ms` : null,
+              result.timingsMs.upload ? `upload=${Math.round(result.timingsMs.upload)}ms` : null,
+              result.timingsMs.serverFfmpeg ? `serverFfmpeg=${Math.round(result.timingsMs.serverFfmpeg)}ms` : null,
+              result.timingsMs.total ? `total=${Math.round(result.timingsMs.total)}ms` : null,
+            ].filter(Boolean);
+            if (timingParts.length > 0) {
+              taskLog.append(`Export timings: ${timingParts.join(", ")}.`);
+            }
+          }
 
           const recordedFilename = usesSavePicker && destination ? destination.name : result.file.name;
           const now = Date.now();
@@ -3928,6 +4108,10 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             warnings: result.warnings,
             debugFfmpegCommand: result.ffmpegCommandPreview,
             debugNotes: result.notes,
+            encoderUsed: result.encoderUsed,
+            hardwareAccelerated: result.hardwareAccelerated,
+            timingsMs: result.timingsMs,
+            counts: result.counts,
           });
           await editorRepositoryRef.current.putExport(exportRecord);
           if (task.isCanceled()) return;
@@ -3964,6 +4148,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             setExportDestination(null);
           }
 
+          taskLog.append(`Export complete: ${recordedFilename}.`);
           toast.success(`Exported ${recordedFilename}`);
         } catch (err) {
           if (isBrowserRenderCanceledError(err) || session.controller.signal.aborted || task.isCanceled()) {
@@ -3975,6 +4160,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
 
           const message = err instanceof Error ? err.message : "Export failed";
           const toastMessage = message.split("\n")[0] || "Export failed";
+          taskLog.append(`Export failed: ${toastMessage}.`);
           try {
             const failedRecord = buildEditorExportRecord({
               projectId: exportSnapshot.id,
@@ -4018,12 +4204,15 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
     });
   }, [
     beginRenderSession,
+    buildReactiveOverlaySequenceCacheKey,
+    createTaskLogSync,
     exportBlockingReasons,
     exportDestination,
     exportResolution,
     isSavePickerSupported,
     project,
     projectDuration,
+    reactiveOverlayAnalysisFingerprint,
     resolvedAssets,
     projectId,
     startTimelineExport,

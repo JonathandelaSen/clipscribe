@@ -7,6 +7,7 @@ import type {
   CreatorTextOverlayState,
 } from "@/lib/creator/types";
 import type { CreatorShortProjectOrigin } from "@/lib/creator/storage";
+import { normalizeCreatorReactiveOverlayItem } from "../reactive-overlays";
 
 export type CreatorTextOverlaySlot = "intro" | "outro";
 
@@ -191,6 +192,11 @@ export function hydrateCreatorShortEditorState(
       input?.subtitleStyle && typeof input.subtitleStyle === "object" ? input.subtitleStyle : {},
     introOverlay: hydrateCreatorTextOverlayState("intro", input?.introOverlay, options),
     outroOverlay: hydrateCreatorTextOverlayState("outro", input?.outroOverlay, options),
+    reactiveOverlays: Array.isArray(input?.reactiveOverlays)
+      ? input.reactiveOverlays
+          .map((overlay) => normalizeCreatorReactiveOverlayItem(overlay))
+          .filter((overlay): overlay is NonNullable<typeof overlay> => overlay != null)
+      : [],
     visualSource:
       input?.visualSource?.mode === "asset" && typeof input.visualSource.assetId === "string" && input.visualSource.assetId.trim()
         ? {

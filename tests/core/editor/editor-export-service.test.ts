@@ -97,6 +97,7 @@ test("renderEditorSystemExport returns bytes and cleans up temp files on success
       resolution: "1080p",
       assets: [{ asset, file }],
       overlays: [],
+      overlaySequences: [],
     },
     {
       exportProject: async (input) => {
@@ -113,6 +114,11 @@ test("renderEditorSystemExport returns bytes and cleans up temp files on success
           warnings: ["warning"],
           ffmpegCommandPreview: ["ffmpeg", "-i", "clip.mp4"],
           notes: ["rendered"],
+          encoderUsed: "h264_videotoolbox",
+          hardwareAccelerated: true,
+          timingsMs: {
+            serverFfmpeg: 321,
+          },
           dryRun: false,
         };
       },
@@ -124,6 +130,10 @@ test("renderEditorSystemExport returns bytes and cleans up temp files on success
   assert.equal(result.height, 1080);
   assert.equal(result.sizeBytes, 2048);
   assert.equal(result.bytes.byteLength, 2048);
+  assert.equal(result.encoderUsed, "h264_videotoolbox");
+  assert.equal(result.hardwareAccelerated, true);
+  assert.equal(result.timingsMs?.serverFfmpeg, 321);
+  assert.equal(result.counts?.overlayCount, 0);
   await assert.rejects(() => access(tempRoot));
 });
 
@@ -137,6 +147,7 @@ test("renderEditorSystemExport accepts history-backed assets when a source file 
       resolution: "1080p",
       assets: [{ asset, file }],
       overlays: [],
+      overlaySequences: [],
     },
     {
       exportProject: async (input) => {
@@ -152,6 +163,8 @@ test("renderEditorSystemExport accepts history-backed assets when a source file 
           warnings: [],
           ffmpegCommandPreview: ["ffmpeg", "-i", "clip.mp4"],
           notes: ["rendered"],
+          encoderUsed: "libx264",
+          hardwareAccelerated: false,
           dryRun: false,
         };
       },
@@ -176,6 +189,7 @@ test("renderEditorSystemExport cleans up temp files when the export is aborted",
           resolution: "1080p",
           assets: [{ asset, file }],
           overlays: [],
+          overlaySequences: [],
           signal: controller.signal,
         },
         {

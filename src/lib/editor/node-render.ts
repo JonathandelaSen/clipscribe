@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 
@@ -7,9 +7,19 @@ import { buildEditorAssFilterExpression, buildEditorAssSubtitleDocument } from "
 import { buildProjectSubtitleTimeline } from "./core/captions";
 import { getEditorExportCapability } from "./export-capabilities";
 import { buildEditorExportPlan, type ResolvedExportInput } from "./core/export-plan";
+import {
+  getEditorSoftwareFallbackEncoder,
+  selectEditorVideoEncoderFromFfmpegOutput,
+  type EditorVideoEncoderSelection,
+} from "./encoder-policy";
 import type { CommandRunResult, CommandRunner } from "./node-media";
 import { buildMissingBinaryMessage, getBundledBinaryPath, isEnoentError } from "./node-binaries";
 import type { EditorAssetRecord, EditorProjectRecord, EditorResolution } from "./types";
+
+const FILTER_COMPLEX_INLINE_ARG_LIMIT = 24_000;
+const HARDWARE_ENCODER_STARTUP_STALL_MS = 12_000;
+const HARDWARE_ENCODER_STARTUP_CHECK_INTERVAL_MS = 1_000;
+const ENCODER_CACHE = new Map<string, Promise<EditorVideoEncoderSelection>>();
 
 export interface NodeEditorExportAsset {
   asset: EditorAssetRecord;
@@ -27,10 +37,23 @@ export interface NodeEditorExportOverlay {
   cropExpression?: string;
 }
 
+export interface NodeEditorExportOverlaySequence {
+  directoryPath: string;
+  filenamePattern: string;
+  fps: number;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface NodeEditorExportInput {
   project: EditorProjectRecord;
   assets: readonly NodeEditorExportAsset[];
   overlays?: readonly NodeEditorExportOverlay[];
+  overlaySequences?: readonly NodeEditorExportOverlaySequence[];
   resolution: EditorResolution;
   outputPath: string;
   overwrite?: boolean;
@@ -47,6 +70,33 @@ export interface NodeEditorExportProgress {
   durationSeconds: number;
 }
 
+async function materializeFilterComplexArgs(input: {
+  ffmpegArgs: readonly string[];
+  scriptPath: string;
+}) {
+  const filterIndex = input.ffmpegArgs.indexOf("-filter_complex");
+  if (filterIndex < 0) {
+    return {
+      ffmpegArgs: [...input.ffmpegArgs],
+      usedScript: false,
+    };
+  }
+  const filterGraph = input.ffmpegArgs[filterIndex + 1] ?? "";
+  if (filterGraph.length < FILTER_COMPLEX_INLINE_ARG_LIMIT) {
+    return {
+      ffmpegArgs: [...input.ffmpegArgs],
+      usedScript: false,
+    };
+  }
+  await writeFile(input.scriptPath, filterGraph, "utf8");
+  const ffmpegArgs = [...input.ffmpegArgs];
+  ffmpegArgs.splice(filterIndex, 2, "-filter_complex_script", input.scriptPath);
+  return {
+    ffmpegArgs,
+    usedScript: true,
+  };
+}
+
 export interface NodeEditorExportResult {
   outputPath: string;
   filename: string;
@@ -57,6 +107,11 @@ export interface NodeEditorExportResult {
   warnings: string[];
   ffmpegCommandPreview: string[];
   notes: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: {
+    serverFfmpeg?: number;
+  };
   dryRun: boolean;
 }
 
@@ -92,6 +147,50 @@ function createAbortError() {
 
 export function isNodeEditorExportCanceledError(error: unknown) {
   return error instanceof Error && error.name === "AbortError";
+}
+
+function createHardwareEncoderStartupStallError(encoderUsed: string, elapsedMs: number) {
+  const error = new Error(
+    `Hardware encoder ${encoderUsed} produced no output during startup after ${Math.round(elapsedMs)}ms.`
+  );
+  error.name = "EditorHardwareEncoderStartupStallError";
+  return error;
+}
+
+function isEditorHardwareEncoderStartupStallError(error: unknown) {
+  return error instanceof Error && error.name === "EditorHardwareEncoderStartupStallError";
+}
+
+function createCombinedAbortSignal(signals: Array<AbortSignal | undefined>) {
+  const controller = new AbortController();
+  const cleanups: Array<() => void> = [];
+
+  const abort = () => {
+    if (!controller.signal.aborted) {
+      controller.abort();
+    }
+    while (cleanups.length > 0) {
+      cleanups.pop()?.();
+    }
+  };
+
+  for (const signal of signals) {
+    if (!signal) continue;
+    if (signal.aborted) {
+      abort();
+      break;
+    }
+    const handleAbort = () => {
+      abort();
+    };
+    signal.addEventListener("abort", handleAbort, { once: true });
+    cleanups.push(() => signal.removeEventListener("abort", handleAbort));
+  }
+
+  return {
+    signal: controller.signal,
+    dispose: abort,
+  };
 }
 
 async function runCommand(
@@ -158,12 +257,78 @@ async function runCommand(
   });
 }
 
+const STDERR_NOISE_PATTERN =
+  /^(frame=|fps=|stream_|bitrate=|total_size=|out_time|dup_frames=|drop_frames=|speed=|progress=|bench:)/;
+const STDERR_ERROR_PATTERN =
+  /\b(error|invalid|failed|unable|cannot|conversion failed|permission denied|no such file|not found|out of memory)\b/i;
+
 function getStderrTail(stderr: string): string {
   const lines = stderr
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
-  return lines.slice(-8).join("\n");
+  const filtered = lines.filter((line) => !STDERR_NOISE_PATTERN.test(line));
+  const source = filtered.length > 0 ? filtered : lines;
+  if (source.length === 0) return "";
+
+  let relevantIndex = -1;
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    if (STDERR_ERROR_PATTERN.test(source[index] ?? "")) {
+      relevantIndex = index;
+      break;
+    }
+  }
+
+  if (relevantIndex >= 0) {
+    return source.slice(Math.max(0, relevantIndex - 4), Math.min(source.length, relevantIndex + 8)).join("\n");
+  }
+
+  return source.slice(-20).join("\n");
+}
+
+async function detectVideoEncoder(input: {
+  command: string;
+  resolution: EditorResolution;
+  commandRunner?: CommandRunner;
+}): Promise<EditorVideoEncoderSelection> {
+  if (input.commandRunner) {
+    try {
+      const result = await input.commandRunner(input.command, ["-hide_banner", "-encoders"]);
+      if (result.code !== 0) {
+        return getEditorSoftwareFallbackEncoder(input.resolution);
+      }
+      return selectEditorVideoEncoderFromFfmpegOutput(`${result.stdout}\n${result.stderr}`, input.resolution);
+    } catch (error) {
+      if (isEnoentError(error)) {
+        throw error;
+      }
+      return getEditorSoftwareFallbackEncoder(input.resolution);
+    }
+  }
+
+  const cacheKey = `${input.command}:${input.resolution}`;
+  const cached = ENCODER_CACHE.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const detectionPromise = (async () => {
+    try {
+      const result = await runCommand(input.command, ["-hide_banner", "-encoders"]);
+      if (result.code !== 0) {
+        return getEditorSoftwareFallbackEncoder(input.resolution);
+      }
+      return selectEditorVideoEncoderFromFfmpegOutput(`${result.stdout}\n${result.stderr}`, input.resolution);
+    } catch (error) {
+      if (isEnoentError(error)) {
+        throw error;
+      }
+      return getEditorSoftwareFallbackEncoder(input.resolution);
+    }
+  })();
+
+  ENCODER_CACHE.set(cacheKey, detectionPromise);
+  return detectionPromise;
 }
 
 function assertCliExportSupported(
@@ -204,6 +369,7 @@ function buildNodeEditorInputArgs(input: {
 function buildOverlayFilterGraph(input: {
   baseVideoLabel: string;
   overlays: readonly NodeEditorExportOverlay[];
+  overlaySequences?: readonly NodeEditorExportOverlaySequence[];
   overlayInputStartIndex: number;
 }): {
   outputLabel: string;
@@ -211,12 +377,14 @@ function buildOverlayFilterGraph(input: {
 } {
   const filterParts: string[] = [];
   let currentLabel = input.baseVideoLabel;
+  let currentIndexOffset = 0;
 
   input.overlays.forEach((overlay, index) => {
-    const sourceInputLabel = `overlay_input_${index}`;
-    const croppedInputLabel = overlay.cropExpression ? `overlay_crop_${index}` : sourceInputLabel;
-    const outputLabel = `overlay_${index}`;
-    filterParts.push(`[${input.overlayInputStartIndex + index}:v]setpts=PTS-STARTPTS[${sourceInputLabel}]`);
+    const inputIndex = input.overlayInputStartIndex + currentIndexOffset;
+    const sourceInputLabel = `overlay_input_${currentIndexOffset}`;
+    const croppedInputLabel = overlay.cropExpression ? `overlay_crop_${currentIndexOffset}` : sourceInputLabel;
+    const outputLabel = `overlay_${currentIndexOffset}`;
+    filterParts.push(`[${inputIndex}:v]setpts=PTS-STARTPTS[${sourceInputLabel}]`);
     if (overlay.cropExpression) {
       filterParts.push(
         `[${sourceInputLabel}]crop=${Math.max(1, Math.round(overlay.width))}:${Math.max(1, Math.round(overlay.height))}:0:'${overlay.cropExpression}'[${croppedInputLabel}]`
@@ -226,7 +394,22 @@ function buildOverlayFilterGraph(input: {
       `[${currentLabel}][${croppedInputLabel}]overlay=x=${Math.max(0, Math.round(overlay.x))}:y=${Math.max(0, Math.round(overlay.y))}:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outputLabel}]`
     );
     currentLabel = outputLabel;
+    currentIndexOffset += 1;
   });
+
+  if (input.overlaySequences) {
+    input.overlaySequences.forEach((sequence, index) => {
+      const inputIndex = input.overlayInputStartIndex + currentIndexOffset;
+      const sourceInputLabel = `overlay_seq_input_${index}`;
+      const outputLabel = `overlay_seq_${index}`;
+      filterParts.push(`[${inputIndex}:v]setpts=PTS-STARTPTS[${sourceInputLabel}]`);
+      filterParts.push(
+        `[${currentLabel}][${sourceInputLabel}]overlay=x=${Math.max(0, Math.round(sequence.x))}:y=${Math.max(0, Math.round(sequence.y))}:enable='between(t,${sequence.start.toFixed(3)},${sequence.end.toFixed(3)})'[${outputLabel}]`
+      );
+      currentLabel = outputLabel;
+      currentIndexOffset += 1;
+    });
+  }
 
   return {
     filterParts,
@@ -238,10 +421,12 @@ export function buildNodeEditorExportCommand(input: {
   project: EditorProjectRecord;
   assets: readonly NodeEditorExportAsset[];
   overlays?: readonly NodeEditorExportOverlay[];
+  overlaySequences?: readonly NodeEditorExportOverlaySequence[];
   resolution: EditorResolution;
   outputPath: string;
   overwrite?: boolean;
   subtitleTrackPath?: string | null;
+  videoEncoder?: EditorVideoEncoderSelection;
 }): {
   width: number;
   height: number;
@@ -250,6 +435,8 @@ export function buildNodeEditorExportCommand(input: {
   ffmpegArgs: string[];
   ffmpegCommandPreview: string[];
   notes: string[];
+  encoderUsed: string;
+  hardwareAccelerated: boolean;
 } {
   assertCliExportSupported(input.project, input.assets);
 
@@ -265,13 +452,16 @@ export function buildNodeEditorExportCommand(input: {
   });
   const useStillImageCompatibilityPreset = isStillImageCompatibilityExport(input.project);
   const overlays = input.overlays ?? [];
+  const overlaySequences = input.overlaySequences ?? [];
+  const videoEncoder = input.videoEncoder ?? getEditorSoftwareFallbackEncoder(input.resolution);
 
   let filterComplex = exportPlan.filterComplex;
   let videoTrackLabel = exportPlan.videoTrackLabel;
-  if (overlays.length > 0) {
+  if (overlays.length > 0 || overlaySequences.length > 0) {
     const overlayGraph = buildOverlayFilterGraph({
       baseVideoLabel: videoTrackLabel,
       overlays,
+      overlaySequences,
       overlayInputStartIndex: exportPlan.inputs.length,
     });
     filterComplex = `${filterComplex};${overlayGraph.filterParts.join(";")}`;
@@ -295,15 +485,16 @@ export function buildNodeEditorExportCommand(input: {
       imageFramerate: useStillImageCompatibilityPreset ? STILL_IMAGE_EXPORT_FPS : null,
     }),
     ...overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]),
+    ...overlaySequences.flatMap((sequence) => [
+      "-framerate",
+      String(sequence.fps),
+      "-i",
+      path.join(sequence.directoryPath, sequence.filenamePattern),
+    ]),
     "-filter_complex",
     filterComplex,
     ...mapArgs,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    input.resolution === "4K" ? "24" : "22",
+    ...videoEncoder.outputArgs,
   ];
   if (useStillImageCompatibilityPreset) {
     ffmpegArgs.push(
@@ -342,9 +533,9 @@ export function buildNodeEditorExportCommand(input: {
       input.project.timeline.imageItems.length
         ? `${input.project.timeline.imageItems.length} image track item${input.project.timeline.imageItems.length === 1 ? "" : "s"} layered across the export.`
         : "No image overlay track.",
-      overlays.length
-        ? `${overlays.length} reactive overlay atlas input${overlays.length === 1 ? "" : "s"} composed before subtitles.`
-        : "No reactive overlay atlases.",
+      overlays.length || overlaySequences.length
+        ? `${overlays.length + overlaySequences.length} overlay input${overlays.length + overlaySequences.length === 1 ? "" : "s"} composed before subtitles.`
+        : "No overlay inputs.",
       input.project.timeline.audioItems.length
         ? `${input.project.timeline.audioItems.length} audio track item${input.project.timeline.audioItems.length === 1 ? "" : "s"} mixed with clip audio.`
         : exportPlan.mixedAudioLabel
@@ -357,8 +548,12 @@ export function buildNodeEditorExportCommand(input: {
         ? `Still-image compatibility preset enabled: ${STILL_IMAGE_EXPORT_FPS}fps looped image inputs, CFR output, tune=stillimage, yuv420p, and explicit duration clamp.`
         : "Standard CLI export preset.",
       input.subtitleTrackPath ? "Global subtitle track burned in via ASS." : "No subtitle burn-in is rendered.",
-      input.resolution === "4K" ? "4K uses a slightly higher CRF preset." : "Standard CRF preset.",
+      videoEncoder.isHardwareAccelerated
+        ? `Hardware video encoder selected: ${videoEncoder.encoderUsed}.`
+        : `Software video encoder selected: ${videoEncoder.encoderUsed}.`,
     ],
+    encoderUsed: videoEncoder.encoderUsed,
+    hardwareAccelerated: videoEncoder.isHardwareAccelerated,
   };
 }
 
@@ -390,6 +585,7 @@ export async function exportEditorProjectWithSystemFfmpeg(
     project: input.project,
     assets: input.assets,
     overlays: input.overlays,
+    overlaySequences: input.overlaySequences,
     resolution: input.resolution,
     outputPath,
     overwrite: input.overwrite,
@@ -412,6 +608,9 @@ export async function exportEditorProjectWithSystemFfmpeg(
   }
 
   try {
+    let accumulatedFfmpegMs = 0;
+    let usedEncoder = getEditorSoftwareFallbackEncoder(input.resolution);
+    let finalCommand = command;
     if (!input.dryRun) {
       const commandCandidates = [
         "ffmpeg",
@@ -420,35 +619,146 @@ export async function exportEditorProjectWithSystemFfmpeg(
 
       let result: CommandRunResult | null = null;
       let lastProgressPercent = -1;
-      const emitProgress = (processedSeconds: number) => {
-        if (!input.onProgress || command.durationSeconds <= 0) return;
-        const percent = clampNumber((processedSeconds / command.durationSeconds) * 100, 0, 100);
+      const emitProgress = (processedSeconds: number, durationSeconds = command.durationSeconds) => {
+        if (!input.onProgress || durationSeconds <= 0) return;
+        const percent = clampNumber((processedSeconds / durationSeconds) * 100, 0, 100);
         if (percent <= lastProgressPercent + 0.25 && percent < 100) return;
         lastProgressPercent = percent;
         input.onProgress({
           percent,
           processedSeconds,
-          durationSeconds: command.durationSeconds,
+          durationSeconds,
         });
       };
 
       emitProgress(0);
+
       for (const commandName of commandCandidates) {
         try {
-          if (input.commandRunner) {
-            result = await input.commandRunner(commandName, command.ffmpegArgs);
-          } else {
-            result = await runCommand(commandName, command.ffmpegArgs, {
-              onStderrChunk: (chunk) => {
-                const processedSeconds = parseFfmpegProgressSeconds(chunk);
-                if (processedSeconds != null) {
-                  emitProgress(processedSeconds);
-                }
-              },
-              signal: input.signal,
+          const detectedEncoder = await detectVideoEncoder({
+            command: commandName,
+            resolution: input.resolution,
+            commandRunner: input.commandRunner,
+          });
+          const encoderAttempts =
+            detectedEncoder.isHardwareAccelerated && ((input.overlays?.length ?? 0) > 0 || (input.overlaySequences?.length ?? 0) > 0)
+              ? [detectedEncoder, getEditorSoftwareFallbackEncoder(input.resolution)]
+              : [detectedEncoder];
+
+          for (const [encoderAttemptIndex, videoEncoder] of encoderAttempts.entries()) {
+            const builtCommand = buildNodeEditorExportCommand({
+              project: input.project,
+              assets: input.assets,
+              overlays: input.overlays,
+              overlaySequences: input.overlaySequences,
+              resolution: input.resolution,
+              outputPath,
+              overwrite: input.overwrite,
+              subtitleTrackPath,
+              videoEncoder,
             });
+            const filterComplexScriptPath = path.join(
+              path.dirname(outputPath),
+              `${path.parse(outputPath).name}.${videoEncoder.encoderUsed}.filter_complex.txt`
+            );
+            const preparedCommand = await materializeFilterComplexArgs({
+              ffmpegArgs: builtCommand.ffmpegArgs,
+              scriptPath: filterComplexScriptPath,
+            });
+            const ffmpegStartedAt = performance.now();
+            const startupStallController = new AbortController();
+            const combinedAbort = createCombinedAbortSignal([input.signal, startupStallController.signal]);
+            let startupStallTriggered = false;
+            const startupStallMonitorId =
+              !input.commandRunner && videoEncoder.isHardwareAccelerated && ((input.overlays?.length ?? 0) > 0 || (input.overlaySequences?.length ?? 0) > 0)
+                ? setInterval(async () => {
+                    let outputBytes = 0;
+                    try {
+                      const stats = await stat(outputPath);
+                      outputBytes = stats.size;
+                    } catch {}
+                    if (outputBytes > 0) return;
+                    const elapsedMs = performance.now() - ffmpegStartedAt;
+                    if (elapsedMs < HARDWARE_ENCODER_STARTUP_STALL_MS) return;
+                    startupStallTriggered = true;
+                    startupStallController.abort();
+                  }, HARDWARE_ENCODER_STARTUP_CHECK_INTERVAL_MS)
+                : null;
+
+            try {
+              if (input.commandRunner) {
+                result = await input.commandRunner(commandName, preparedCommand.ffmpegArgs);
+              } else {
+                try {
+                  result = await runCommand(commandName, preparedCommand.ffmpegArgs, {
+                    onStderrChunk: (chunk) => {
+                      const processedSeconds = parseFfmpegProgressSeconds(chunk);
+                      if (processedSeconds != null) {
+                        emitProgress(processedSeconds, builtCommand.durationSeconds);
+                      }
+                    },
+                    signal: combinedAbort.signal,
+                  });
+                } catch (error) {
+                  if (startupStallTriggered) {
+                    throw createHardwareEncoderStartupStallError(
+                      videoEncoder.encoderUsed,
+                      performance.now() - ffmpegStartedAt
+                    );
+                  }
+                  throw error;
+                }
+              }
+
+              accumulatedFfmpegMs += performance.now() - ffmpegStartedAt;
+              usedEncoder = videoEncoder;
+              result = result ?? null;
+              if (result && result.code === 0) {
+                finalCommand = builtCommand;
+                emitProgress(builtCommand.durationSeconds, builtCommand.durationSeconds);
+                break;
+              }
+              if (
+                result &&
+                result.code !== 0 &&
+                videoEncoder.isHardwareAccelerated &&
+                encoderAttemptIndex < encoderAttempts.length - 1
+              ) {
+                try {
+                  await unlink(outputPath);
+                } catch {}
+                lastProgressPercent = -1;
+                continue;
+              }
+            } catch (error) {
+              accumulatedFfmpegMs += performance.now() - ffmpegStartedAt;
+              const canFallbackToSoftware =
+                videoEncoder.isHardwareAccelerated && encoderAttemptIndex < encoderAttempts.length - 1;
+              if (
+                canFallbackToSoftware &&
+                (isEditorHardwareEncoderStartupStallError(error) ||
+                  (error instanceof Error && error.message.startsWith("ffmpeg failed while rendering the timeline.")))
+              ) {
+                try {
+                  await unlink(outputPath);
+                } catch {}
+                lastProgressPercent = -1;
+                continue;
+              }
+              throw error;
+            } finally {
+              combinedAbort.dispose();
+              if (startupStallMonitorId != null) {
+                clearInterval(startupStallMonitorId);
+              }
+              if (preparedCommand.usedScript) {
+                await unlink(filterComplexScriptPath).catch(() => undefined);
+              }
+            }
           }
-          break;
+          if (result && result.code === 0) {
+            break;
+          }
         } catch (error) {
           if (isEnoentError(error)) {
             continue;
@@ -468,8 +778,6 @@ export async function exportEditorProjectWithSystemFfmpeg(
         const detail = getStderrTail(result.stderr) || result.stdout.trim() || "Unknown ffmpeg failure.";
         throw new Error(`ffmpeg failed while rendering the timeline.\n${detail}`);
       }
-
-      emitProgress(command.durationSeconds);
     }
 
     const outputStats = input.dryRun ? null : await stat(outputPath);
@@ -480,13 +788,20 @@ export async function exportEditorProjectWithSystemFfmpeg(
     return {
       outputPath,
       filename: path.basename(outputPath),
-      width: command.width,
-      height: command.height,
+      width: finalCommand.width,
+      height: finalCommand.height,
       sizeBytes: outputStats?.size ?? 0,
-      durationSeconds: command.durationSeconds,
-      warnings: command.warnings,
-      ffmpegCommandPreview: command.ffmpegCommandPreview,
-      notes: command.notes,
+      durationSeconds: finalCommand.durationSeconds,
+      warnings: finalCommand.warnings,
+      ffmpegCommandPreview: finalCommand.ffmpegCommandPreview,
+      notes: finalCommand.notes,
+      encoderUsed: usedEncoder.encoderUsed,
+      hardwareAccelerated: usedEncoder.isHardwareAccelerated,
+      timingsMs: !input.dryRun
+        ? {
+            serverFfmpeg: Number(accumulatedFfmpegMs.toFixed(2)),
+          }
+        : undefined,
       dryRun: Boolean(input.dryRun),
     };
   } finally {

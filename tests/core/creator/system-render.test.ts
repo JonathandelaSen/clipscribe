@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -72,6 +72,9 @@ function createRenderInput(tempDir: string) {
       subtitleFrameCount: 0,
       introOverlayFrameCount: 0,
       outroOverlayFrameCount: 0,
+      reactiveOverlayCount: 0,
+      reactiveOverlayFrameCount: 0,
+      reactiveOverlayPresetIds: [],
     },
     outputPath: path.join(tempDir, "exports", "short.mp4"),
     overwrite: true,
@@ -174,6 +177,130 @@ test("exportCreatorShortWithSystemFfmpeg builds an overlay filter graph when PNG
       };
     },
   });
+});
+
+test("exportCreatorShortWithSystemFfmpeg crops bounded reactive overlay atlases to their own raster size", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.overlays = [
+    {
+      absolutePath: "/media/reactive_overlay_0.png",
+      filename: "reactive_overlay_0.png",
+      start: 0,
+      end: 3,
+      kind: "reactive_overlay",
+      x: 0,
+      y: 921,
+      width: 1080,
+      height: 346,
+      cropExpression: "between(t,0.000,0.167)*346",
+    },
+  ];
+  input.renderModeUsed = "png_parity";
+  input.overlaySummary.reactiveOverlayCount = 1;
+  input.overlaySummary.reactiveOverlayFrameCount = 1;
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      const filterIndex = args.indexOf("-filter_complex");
+      assert.notEqual(filterIndex, -1);
+      assert.match(args[filterIndex + 1] ?? "", /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+      assert.match(args[filterIndex + 1] ?? "", /crop=1080:346:0:'between\(t,0\.000,0\.167\)\*346'/);
+      assert.doesNotMatch(args[filterIndex + 1] ?? "", /crop=1080:1920:0:'between\(t,0\.000,0\.167\)\*346'/);
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg externalizes oversized filter graphs into a script file", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.overlays = [
+    {
+      absolutePath: "/media/reactive_overlay_big.png",
+      filename: "reactive_overlay_big.png",
+      start: 0,
+      end: 20,
+      kind: "reactive_overlay",
+      x: 0,
+      y: 921,
+      width: 1080,
+      height: 346,
+      cropExpression: Array.from({ length: 1200 }, () => "between(t,0.000,0.167)*346").join("+"),
+    },
+  ];
+  input.renderModeUsed = "png_parity";
+  input.overlaySummary.reactiveOverlayCount = 1;
+  input.overlaySummary.reactiveOverlayFrameCount = 1;
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      const scriptIndex = args.indexOf("-filter_complex_script");
+      assert.notEqual(scriptIndex, -1);
+      const scriptPath = args[scriptIndex + 1];
+      assert.ok(scriptPath);
+      const script = await readFile(scriptPath!, "utf8");
+      assert.match(script, /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
+      assert.match(script, /overlay=x=0:y=921:enable='between/);
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg surfaces the relevant ffmpeg error context", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+
+  await assert.rejects(
+    exportCreatorShortWithSystemFfmpeg({
+      ...input,
+      commandRunner: async () => ({
+        code: 1,
+        stdout: "",
+        stderr: [
+          "Stream mapping:",
+          "  Stream #351:0 (png) -> setpts:default",
+          "  Stream #352:0 (png) -> setpts:default",
+          "Press [q] to stop, [?] for help",
+          "[Parsed_overlay_154 @ 0x123] Failed to configure input pad on Parsed_overlay_154",
+          "Error reinitializing filters!",
+          "Failed to inject frame into filter network: Invalid argument",
+          "Error while processing the decoded data for stream #355:0",
+          "Conversion failed!",
+        ].join("\n"),
+      }),
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /Failed to configure input pad on Parsed_overlay_154/);
+      assert.match(error.message, /Conversion failed!/);
+      return true;
+    }
+  );
 });
 
 test("exportCreatorShortWithSystemFfmpeg keeps fullscreen legacy overlays at 0,0", async (t) => {

@@ -7,6 +7,16 @@ export interface YouTubeLocalizationInput {
   description: string;
 }
 
+export interface YouTubeRelatedVideoReference {
+  videoId: string;
+  title: string;
+  watchUrl: string;
+  studioUrl: string;
+  privacyStatus?: YouTubePrivacyStatus;
+  publishedAt?: string;
+  thumbnailUrl?: string;
+}
+
 export interface YouTubeUploadDraft {
   title: string;
   description: string;
@@ -23,6 +33,7 @@ export interface YouTubeUploadDraft {
   containsSyntheticMedia?: boolean;
   recordingDate?: string;
   localizations: YouTubeLocalizationInput[];
+  relatedVideo?: YouTubeRelatedVideoReference;
 }
 
 export interface YouTubeThumbnailUpload {
@@ -46,6 +57,8 @@ export interface YouTubeChannelSummary {
   customUrl?: string;
   thumbnailUrl?: string;
 }
+
+export interface YouTubeRelatedVideoOption extends YouTubeRelatedVideoReference {}
 
 export interface YouTubeCategoryOption {
   id: string;

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, stat, unlink } from "node:fs/promises";
+import { access, mkdir, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { assertExportGeometryInvariants } from "../../../creator/core/export-contracts";
@@ -8,6 +8,7 @@ import { buildCreatorShortExportFilename } from "../../../creator/export-output"
 import type {
   CreatorShortFfmpegBenchmarkTimingsMs,
   CreatorShortEditorState,
+  CreatorReactiveOverlayPresetId,
   CreatorShortRasterOverlayKind,
   CreatorSuggestedShort,
 } from "../../../creator/types";
@@ -27,6 +28,20 @@ const FAST_SEEK_CUSHION_SECONDS = 3;
 const HARDWARE_ENCODER_STARTUP_STALL_MS = 12_000;
 const HARDWARE_ENCODER_STARTUP_CHECK_INTERVAL_MS = 1_000;
 const ENCODER_CACHE = new Map<string, Promise<CreatorVideoEncoderSelection>>();
+const FILTER_COMPLEX_INLINE_ARG_LIMIT = 24_000;
+
+export interface CreatorSystemRenderOverlaySequenceInput {
+  directoryPath: string;
+  filenamePattern: string;
+  fps: number;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mimeType: string;
+}
 
 export interface CreatorSystemRenderOverlayInput {
   absolutePath: string;
@@ -66,6 +81,7 @@ export interface CreatorSystemRenderInput {
     layoutMode?: "cover_crop" | "zoom_out_pad";
   };
   overlays: readonly CreatorSystemRenderOverlayInput[];
+  overlaySequences?: readonly CreatorSystemRenderOverlaySequenceInput[];
   subtitleBurnedIn: boolean;
   subtitleTrackPath?: string | null;
   sourcePlaybackMode?: CreatorShortSourcePlaybackMode;
@@ -74,6 +90,9 @@ export interface CreatorSystemRenderInput {
     subtitleFrameCount: number;
     introOverlayFrameCount: number;
     outroOverlayFrameCount: number;
+    reactiveOverlayFrameCount?: number;
+    reactiveOverlayCount?: number;
+    reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];
   };
   outputPath: string;
   overwrite?: boolean;
@@ -305,6 +324,9 @@ function buildMissingBinaryMessage() {
   return "ffmpeg is required to export shorts. Install project dependencies with npm install or place ffmpeg on PATH.";
 }
 
+const STDERR_ERROR_PATTERN =
+  /\b(error|invalid|failed|unable|cannot|conversion failed|permission denied|no such file|not found|out of memory)\b/i;
+
 function getStderrTail(stderr: string): string {
   const lines = stderr
     .split(/\r?\n/)
@@ -317,7 +339,21 @@ function getStderrTail(stderr: string): string {
       )
   );
   const source = filtered.length > 0 ? filtered : lines;
-  return source.slice(-8).join("\n");
+  if (source.length === 0) return "";
+
+  let relevantIndex = -1;
+  for (let index = source.length - 1; index >= 0; index -= 1) {
+    if (STDERR_ERROR_PATTERN.test(source[index] ?? "")) {
+      relevantIndex = index;
+      break;
+    }
+  }
+
+  if (relevantIndex >= 0) {
+    return source.slice(Math.max(0, relevantIndex - 4), Math.min(source.length, relevantIndex + 8)).join("\n");
+  }
+
+  return source.slice(-20).join("\n");
 }
 
 function escapeFilterPath(value: string): string {
@@ -330,6 +366,35 @@ function escapeFilterPath(value: string): string {
 
 function buildAssFilterExpression(subtitleTrackPath: string): string {
   return `ass='${escapeFilterPath(subtitleTrackPath)}'`;
+}
+
+async function materializeFilterComplexArgs(input: {
+  ffmpegArgs: readonly string[];
+  scriptPath: string;
+}) {
+  const filterIndex = input.ffmpegArgs.indexOf("-filter_complex");
+  if (filterIndex < 0) {
+    return {
+      ffmpegArgs: [...input.ffmpegArgs],
+      usedScript: false,
+    };
+  }
+
+  const filterGraph = input.ffmpegArgs[filterIndex + 1] ?? "";
+  if (filterGraph.length < FILTER_COMPLEX_INLINE_ARG_LIMIT) {
+    return {
+      ffmpegArgs: [...input.ffmpegArgs],
+      usedScript: false,
+    };
+  }
+
+  await writeFile(input.scriptPath, filterGraph, "utf8");
+  const ffmpegArgs = [...input.ffmpegArgs];
+  ffmpegArgs.splice(filterIndex, 2, "-filter_complex_script", input.scriptPath);
+  return {
+    ffmpegArgs,
+    usedScript: true,
+  };
 }
 
 function getOverlayPlacement(overlay: CreatorSystemRenderOverlayInput) {
@@ -368,10 +433,25 @@ function resolveTextOverlayRenderPath(input: {
   return textOverlays.every(isBoundedTextOverlay) ? "bounded_png" : "fullscreen_png_legacy";
 }
 
+function getReactiveOverlayRenderPath(overlays: readonly CreatorSystemRenderOverlayInput[]) {
+  const reactiveOverlays = overlays.filter((overlay) => overlay.kind === "reactive_overlay");
+  if (reactiveOverlays.length === 0) return "none";
+  return reactiveOverlays.every(
+    (overlay) =>
+      typeof overlay.x === "number" &&
+      typeof overlay.y === "number" &&
+      typeof overlay.width === "number" &&
+      typeof overlay.height === "number"
+  )
+    ? "reactive_overlay_atlas"
+    : "reactive_overlay_legacy";
+}
+
 function buildOverlayFilterGraph(input: {
   baseInputLabel?: string;
   baseFilter: string;
   overlays: readonly CreatorSystemRenderOverlayInput[];
+  overlaySequences?: readonly CreatorSystemRenderOverlaySequenceInput[];
   subtitleTrackPath?: string | null;
   overlayInputStartIndex?: number;
 }): {
@@ -393,13 +473,27 @@ function buildOverlayFilterGraph(input: {
     filterParts.push(`[${inputLabel}]setpts=PTS-STARTPTS[${normalizedOverlayInputLabel}]`);
 
     if (overlay.cropExpression) {
+      const cropWidth = Math.max(1, Math.round(overlay.width ?? OUTPUT_WIDTH));
+      const cropHeight = Math.max(1, Math.round(overlay.height ?? OUTPUT_HEIGHT));
       filterParts.push(
-        `[${normalizedOverlayInputLabel}]crop=${OUTPUT_WIDTH}:${OUTPUT_HEIGHT}:0:'${overlay.cropExpression}'[${overlayInputLabel}]`
+        `[${normalizedOverlayInputLabel}]crop=${cropWidth}:${cropHeight}:0:'${overlay.cropExpression}'[${overlayInputLabel}]`
       );
     }
 
     filterParts.push(
       `[${currentLabel}][${overlayInputLabel}]overlay=x=${placement.x}:y=${placement.y}:enable='between(t,${overlay.start.toFixed(3)},${overlay.end.toFixed(3)})'[${outLabel}]`
+    );
+    currentLabel = outLabel;
+  });
+
+  const seqStartIndex = overlayInputStartIndex + input.overlays.length;
+  input.overlaySequences?.forEach((seq, index) => {
+    const inputLabel = `${seqStartIndex + index}:v`;
+    const inLabel = `overlay_seq_in_${index}`;
+    const outLabel = `overlay_seq_${index}`;
+    filterParts.push(`[${inputLabel}]setpts=PTS-STARTPTS[${inLabel}]`);
+    filterParts.push(
+      `[${currentLabel}][${inLabel}]overlay=x=${seq.x}:y=${seq.y}:enable='between(t,${seq.start.toFixed(3)},${seq.end.toFixed(3)})':eof_action=pass[${outLabel}]`
     );
     currentLabel = outLabel;
   });
@@ -563,6 +657,7 @@ export function buildCreatorSystemRenderCommand(input: {
   sourceVideoSize: { width: number; height: number };
   geometry: CreatorSystemRenderInput["geometry"];
   overlays: readonly CreatorSystemRenderOverlayInput[];
+  overlaySequences?: readonly CreatorSystemRenderOverlaySequenceInput[];
   subtitleBurnedIn: boolean;
   subtitleTrackPath?: string | null;
   sourcePlaybackMode?: CreatorShortSourcePlaybackMode;
@@ -589,18 +684,27 @@ export function buildCreatorSystemRenderCommand(input: {
   const preInputSeek = input.seekMode === "hybrid" ? ["-ss", String(inputSeekSeconds)] : [];
   const postInputSeekSeconds =
     input.seekMode === "hybrid" ? exactTrimAfterSeekSeconds : input.short.startSeconds;
-  const overlayInputArgs = input.overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]);
+  const overlayInputArgs = [
+    ...input.overlays.flatMap((overlay) => ["-loop", "1", "-i", overlay.absolutePath]),
+    ...(input.overlaySequences ?? []).flatMap((seq) => [
+      "-framerate",
+      String(seq.fps),
+      "-i",
+      path.join(seq.directoryPath, seq.filenamePattern),
+    ]),
+  ];
   const buildOverrideFilterArgs = (
     inputIndexForVideo: string,
     audioMapLabel: string,
     baseFilter: string,
     overlayInputStartIndex: number
   ) => {
-    if (input.overlays.length > 0) {
+    if (input.overlays.length > 0 || (input.overlaySequences && input.overlaySequences.length > 0)) {
       const filterGraph = buildOverlayFilterGraph({
         baseInputLabel: inputIndexForVideo,
         baseFilter,
         overlays: input.overlays,
+        overlaySequences: input.overlaySequences,
         subtitleTrackPath: input.subtitleTrackPath,
         overlayInputStartIndex,
       });
@@ -630,16 +734,18 @@ export function buildCreatorSystemRenderCommand(input: {
                 baseInputLabel: "0:v",
                 baseFilter: stillBaseFilter,
                 overlays: input.overlays,
+                overlaySequences: input.overlaySequences,
                 subtitleTrackPath: input.subtitleTrackPath,
                 overlayInputStartIndex: 2,
               });
               return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "1:a?"];
             })()
-          : input.overlays.length > 0
+          : input.overlays.length > 0 || (input.overlaySequences && input.overlaySequences.length > 0)
             ? (() => {
                 const filterGraph = buildOverlayFilterGraph({
                   baseFilter: input.geometry.filter,
                   overlays: input.overlays,
+                  overlaySequences: input.overlaySequences,
                   subtitleTrackPath: input.subtitleTrackPath,
                 });
                 return ["-filter_complex", filterGraph.filterComplex, "-map", `[${filterGraph.outputLabel}]`, "-map", "0:a?"];
@@ -795,6 +901,7 @@ export function buildCreatorSystemRenderCommand(input: {
     overlays: input.overlays,
     overlaySummary: input.overlaySummary,
   });
+  const reactiveOverlayRenderPath = getReactiveOverlayRenderPath(input.overlays);
 
   return {
     ffmpegArgs,
@@ -832,11 +939,18 @@ export function buildCreatorSystemRenderCommand(input: {
         : "Rendered without burned subtitles.",
       input.overlaySummary.introOverlayFrameCount > 0 ? "Intro title overlay enabled." : "Intro title overlay disabled.",
       input.overlaySummary.outroOverlayFrameCount > 0 ? "Outro card overlay enabled." : "Outro card overlay disabled.",
+      input.overlaySummary.reactiveOverlayCount
+        ? `Reactive overlays enabled: ${input.overlaySummary.reactiveOverlayCount} item${input.overlaySummary.reactiveOverlayCount === 1 ? "" : "s"} (${input.overlaySummary.reactiveOverlayFrameCount ?? 0} atlas frame${input.overlaySummary.reactiveOverlayFrameCount === 1 ? "" : "s"}).`
+        : "Reactive overlays disabled.",
       `Text overlay render path: ${textOverlayRenderPath}.`,
+      `Reactive overlay render path: ${reactiveOverlayRenderPath}.`,
+      input.overlaySummary.reactiveOverlayPresetIds?.length
+        ? `Reactive overlay presets: ${input.overlaySummary.reactiveOverlayPresetIds.join(", ")}.`
+        : "Reactive overlay presets: none.",
       input.overlays.length > 0
         ? `Overlay raster area total: ${overlayRasterPixelArea}px (${overlayRasterAreaPct}% of one 1080x1920 frame).`
         : "Overlay raster area total: 0px (0% of one 1080x1920 frame).",
-      `Overlay slot counts: intro=${input.overlaySummary.introOverlayFrameCount}, outro=${input.overlaySummary.outroOverlayFrameCount}, subtitle_png=${input.overlaySummary.subtitleFrameCount}.`,
+      `Overlay slot counts: reactive=${input.overlaySummary.reactiveOverlayFrameCount ?? 0}, intro=${input.overlaySummary.introOverlayFrameCount}, outro=${input.overlaySummary.outroOverlayFrameCount}, subtitle_png=${input.overlaySummary.subtitleFrameCount}.`,
       input.overlays.length > 0
         ? `${input.overlays.length} overlay PNG input${input.overlays.length === 1 ? "" : "s"} composed in the final pass.`
         : "No PNG overlays required for this export.",
@@ -905,6 +1019,7 @@ export async function exportCreatorShortWithSystemFfmpeg(
         for (const [encoderAttemptIndex, videoEncoder] of encoderAttempts.entries()) {
           let attemptProgressBuffer = "";
           let attemptLastProgressSnapshot: FfmpegProgressSnapshot | null = null;
+          let filterComplexScriptPath: string | null = null;
           builtCommand = buildCreatorSystemRenderCommand({
             sourceFilePath: input.sourceFilePath,
             visualSourceFilePath: input.visualSourceFilePath,
@@ -993,11 +1108,30 @@ export async function exportCreatorShortWithSystemFfmpeg(
               : null;
 
           try {
+            const preparedCommand = await materializeFilterComplexArgs({
+              ffmpegArgs: builtCommand.ffmpegArgs,
+              scriptPath: path.join(
+                path.dirname(outputPath),
+                `${path.parse(outputPath).name}.${seekMode}.${videoEncoder.encoderUsed}.filter_complex.txt`
+              ),
+            });
+            filterComplexScriptPath = preparedCommand.usedScript
+              ? path.join(
+                  path.dirname(outputPath),
+                  `${path.parse(outputPath).name}.${seekMode}.${videoEncoder.encoderUsed}.filter_complex.txt`
+                )
+              : null;
+            if (preparedCommand.usedScript) {
+              input.onLogEvent?.({
+                stage: "ffmpeg",
+                message: `Filter graph externalized to script (${filterComplexScriptPath}) to avoid oversized spawn arguments.`,
+              });
+            }
             if (input.commandRunner) {
-              result = await input.commandRunner(commandName, builtCommand.ffmpegArgs);
+              result = await input.commandRunner(commandName, preparedCommand.ffmpegArgs);
             } else {
               try {
-                result = await runCommand(commandName, builtCommand.ffmpegArgs, {
+                result = await runCommand(commandName, preparedCommand.ffmpegArgs, {
                   onStderrChunk: (chunk) => {
                     attemptProgressBuffer += chunk;
                     if (attemptProgressBuffer.length > 32_768) {
@@ -1060,6 +1194,9 @@ export async function exportCreatorShortWithSystemFfmpeg(
             }
             if (startupStallMonitorId != null) {
               clearInterval(startupStallMonitorId);
+            }
+            if (filterComplexScriptPath) {
+              await unlink(filterComplexScriptPath).catch(() => undefined);
             }
           }
         }

@@ -10,6 +10,7 @@ function buildTask(overrides: Partial<BackgroundTaskRecord> = {}): BackgroundTas
     kind: overrides.kind ?? "transcription",
     title: overrides.title ?? "Task",
     message: overrides.message,
+    logLines: overrides.logLines,
     status: overrides.status ?? "queued",
     progress: overrides.progress ?? 0,
     canCancel: overrides.canCancel ?? true,
@@ -112,4 +113,19 @@ test("backgroundTaskReducer marks cancellation as non-active", () => {
   assert.equal(tasks[0].status, "canceled");
   assert.equal(tasks[0].message, "Canceled by user");
   assert.equal(isBackgroundTaskActive(tasks[0]), false);
+});
+
+test("backgroundTaskReducer keeps task log lines when patching progress", () => {
+  const tasks = backgroundTaskReducer([buildTask({ id: "task_logs", logLines: ["line 1"] })], {
+    type: "patch",
+    taskId: "task_logs",
+    now: 12,
+    patch: {
+      progress: 45,
+      logLines: ["line 1", "line 2"],
+    },
+  });
+
+  assert.deepEqual(tasks[0].logLines, ["line 1", "line 2"]);
+  assert.equal(tasks[0].progress, 45);
 });

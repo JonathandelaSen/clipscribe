@@ -318,6 +318,7 @@ export type CreatorSubtitleTextCase = "original" | "uppercase";
 export type CreatorSubtitleTimingMode = "segment" | "word" | "pair" | "triple";
 export type CreatorTextOverlayTextCase = "original" | "uppercase";
 export type CreatorTextOverlayPreset = "headline_bold" | "glass_card" | "neon_punch";
+export type CreatorReactiveOverlayPresetId = "waveform_line" | "equalizer_bars" | "pulse_ring";
 
 export interface CreatorSubtitleStyleSettings {
   preset: CreatorVerticalEditorPreset["subtitleStyle"];
@@ -366,6 +367,22 @@ export interface CreatorTextOverlayState {
   style?: Partial<CreatorTextOverlayStyleSettings>;
 }
 
+export interface CreatorReactiveOverlayItem {
+  id: string;
+  presetId: CreatorReactiveOverlayPresetId;
+  startOffsetSeconds: number;
+  durationSeconds: number;
+  positionXPercent: number;
+  positionYPercent: number;
+  widthPercent: number;
+  heightPercent: number;
+  scale: number;
+  opacity: number;
+  tintHex: string;
+  sensitivity: number;
+  smoothing: number;
+}
+
 export type CreatorShortVisualSourceMode = "original" | "asset";
 export type CreatorShortVisualAssetKind = "video" | "image";
 
@@ -388,6 +405,7 @@ export interface CreatorShortEditorState {
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
   introOverlay?: CreatorTextOverlayState;
   outroOverlay?: CreatorTextOverlayState;
+  reactiveOverlays?: CreatorReactiveOverlayItem[];
   visualSource?: CreatorShortVisualSourceState;
 }
 
@@ -417,6 +435,7 @@ export interface CreatorShortRenderResponse {
 export type CreatorShortRasterOverlayKind =
   | "intro_overlay"
   | "outro_overlay"
+  | "reactive_overlay"
   | "subtitle_atlas"
   | "subtitle_frame";
 
@@ -427,11 +446,15 @@ export interface CreatorShortSystemExportCounts {
   overlayRasterAreaPct: number;
   introOverlayCount: number;
   outroOverlayCount: number;
+  reactiveOverlayCount?: number;
+  reactiveOverlayFrameCount?: number;
+  reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];
 }
 
 export interface CreatorShortClientExportTimingsMs {
   introOverlayRender: number;
   outroOverlayRender: number;
+  reactiveOverlayPreparation?: number;
   subtitlePreparation: number;
   requestAssembly: number;
   post: number;

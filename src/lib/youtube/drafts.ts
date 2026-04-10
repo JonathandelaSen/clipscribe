@@ -139,6 +139,7 @@ export function buildYouTubeVideoInsertRequest(draft: YouTubeUploadDraft): YouTu
     body: {
       snippet,
       status,
+      // The public YouTube Data API does not currently expose the Shorts related-video field.
       ...(recordingDetails ? { recordingDetails } : {}),
       ...(Object.keys(localizations).length > 0 ? { localizations } : {}),
     },

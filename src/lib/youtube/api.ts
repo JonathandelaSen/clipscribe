@@ -10,8 +10,10 @@ import type {
   YouTubeChannelSummary,
   YouTubeLanguageOption,
   YouTubeOptionCatalog,
+  YouTubeRelatedVideoOption,
   YouTubeVideoProcessingStatus,
 } from "./types";
+import { createYouTubeResultUrls } from "./drafts";
 
 type FetchImpl = typeof fetch;
 
@@ -131,6 +133,124 @@ export function createYouTubeApiClient(fetchImpl: FetchImpl = fetch) {
         categories,
         languages,
       };
+    },
+
+    async listMyEligibleRelatedVideos(accessToken: string, maxResults = 25): Promise<YouTubeRelatedVideoOption[]> {
+      const channelData = await fetchYouTubeJson<
+        YouTubeListResponse<{
+          contentDetails?: {
+            relatedPlaylists?: {
+              uploads?: string;
+            };
+          };
+        }>
+      >(`${YOUTUBE_DATA_API_BASE_URL}/channels?part=contentDetails&mine=true`, accessToken, fetchImpl);
+
+      const uploadsPlaylistId = channelData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+      if (!uploadsPlaylistId) {
+        return [];
+      }
+
+      const playlistData = await fetchYouTubeJson<
+        YouTubeListResponse<{
+          snippet?: {
+            publishedAt?: string;
+            title?: string;
+            resourceId?: {
+              videoId?: string;
+            };
+            thumbnails?: {
+              default?: { url?: string };
+              medium?: { url?: string };
+              high?: { url?: string };
+            };
+          };
+        }>
+      >(
+        `${YOUTUBE_DATA_API_BASE_URL}/playlistItems?part=snippet&playlistId=${encodeURIComponent(uploadsPlaylistId)}&maxResults=${Math.max(1, Math.min(50, maxResults))}`,
+        accessToken,
+        fetchImpl
+      );
+
+      const orderedItems: Array<{
+        videoId: string;
+        title?: string;
+        publishedAt?: string;
+        thumbnailUrl?: string;
+      }> = [];
+      for (const item of playlistData.items ?? []) {
+        const videoId = item.snippet?.resourceId?.videoId;
+        if (typeof videoId !== "string" || videoId.length === 0) continue;
+        orderedItems.push({
+          videoId,
+          title: item.snippet?.title,
+          publishedAt: item.snippet?.publishedAt,
+          thumbnailUrl:
+            item.snippet?.thumbnails?.high?.url ||
+            item.snippet?.thumbnails?.medium?.url ||
+            item.snippet?.thumbnails?.default?.url,
+        });
+      }
+
+      if (orderedItems.length === 0) {
+        return [];
+      }
+
+      const detailsData = await fetchYouTubeJson<
+        YouTubeListResponse<{
+          id?: string;
+          status?: {
+            privacyStatus?: string;
+          };
+          snippet?: {
+            title?: string;
+            publishedAt?: string;
+            thumbnails?: {
+              default?: { url?: string };
+              medium?: { url?: string };
+              high?: { url?: string };
+            };
+          };
+        }>
+      >(
+        `${YOUTUBE_DATA_API_BASE_URL}/videos?part=snippet,status&id=${encodeURIComponent(orderedItems.map((item) => item.videoId).join(","))}`,
+        accessToken,
+        fetchImpl
+      );
+
+      const detailById = new Map(
+        (detailsData.items ?? [])
+          .filter(
+            (item): item is NonNullable<typeof item> & { id: string } =>
+              typeof item.id === "string" && item.id.length > 0
+          )
+          .map((item) => [item.id, item])
+      );
+
+      return orderedItems.flatMap((item) => {
+        const detail = detailById.get(item.videoId);
+        const privacyStatus = detail?.status?.privacyStatus;
+        if (privacyStatus !== "public" && privacyStatus !== "unlisted") {
+          return [];
+        }
+
+        const urls = createYouTubeResultUrls(item.videoId);
+        return [
+          {
+            videoId: item.videoId,
+            title: detail?.snippet?.title || item.title || item.videoId,
+            watchUrl: urls.watchUrl,
+            studioUrl: urls.studioUrl,
+            privacyStatus,
+            publishedAt: detail?.snippet?.publishedAt || item.publishedAt,
+            thumbnailUrl:
+              detail?.snippet?.thumbnails?.high?.url ||
+              detail?.snippet?.thumbnails?.medium?.url ||
+              detail?.snippet?.thumbnails?.default?.url ||
+              item.thumbnailUrl,
+          },
+        ];
+      });
     },
 
     async getVideoProcessingStatus(accessToken: string, videoId: string): Promise<YouTubeVideoProcessingStatus> {

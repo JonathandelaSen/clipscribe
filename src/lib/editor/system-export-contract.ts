@@ -1,4 +1,9 @@
-import type { EditorAssetRecord, EditorResolution } from "./types";
+import type {
+  EditorAssetRecord,
+  EditorExportCounts,
+  EditorExportTimingsMs,
+  EditorResolution,
+} from "./types";
 
 export const EDITOR_SYSTEM_EXPORT_FORM_FIELDS = {
   requestId: "requestId",
@@ -7,6 +12,7 @@ export const EDITOR_SYSTEM_EXPORT_FORM_FIELDS = {
   engine: "engine",
   assets: "assets",
   overlays: "overlays",
+  overlaySequences: "overlaySequences",
 } as const;
 
 const EDITOR_SYSTEM_EXPORT_HEADER_NAMES = {
@@ -18,6 +24,10 @@ const EDITOR_SYSTEM_EXPORT_HEADER_NAMES = {
   warnings: "x-clipscribe-export-warnings",
   debugNotes: "x-clipscribe-export-debug-notes",
   debugFfmpegCommand: "x-clipscribe-export-debug-ffmpeg-command",
+  encoderUsed: "x-clipscribe-export-encoder-used",
+  hardwareAccelerated: "x-clipscribe-export-hardware-accelerated",
+  timingsMs: "x-clipscribe-export-timings-ms",
+  counts: "x-clipscribe-export-counts",
 } as const;
 
 export type SystemEditorExportAssetRecord = Omit<EditorAssetRecord, "fileBlob">;
@@ -39,6 +49,19 @@ export interface EditorSystemExportOverlayDescriptor {
   cropExpression?: string;
 }
 
+export interface EditorSystemExportOverlaySequenceDescriptor {
+  fps: number;
+  frameCount: number;
+  fileFieldPrefix: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mimeType: "image/png" | "image/webp";
+}
+
 export interface EditorSystemExportResponseMetadata {
   filename: string;
   width: number;
@@ -48,6 +71,10 @@ export interface EditorSystemExportResponseMetadata {
   warnings: string[];
   debugNotes: string[];
   debugFfmpegCommand: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: EditorExportTimingsMs;
+  counts?: EditorExportCounts;
 }
 
 function parseNumericHeader(value: string | null): number {
@@ -65,6 +92,25 @@ function parseStringArrayHeader(value: string | null): string[] {
   }
 }
 
+function parseBooleanHeader(value: string | null): boolean | undefined {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return undefined;
+}
+
+function parseObjectHeader<T extends object>(value: string | null): T | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    return parsed as T;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildEditorSystemExportResponseHeaders(
   metadata: EditorSystemExportResponseMetadata
 ): HeadersInit {
@@ -77,6 +123,11 @@ export function buildEditorSystemExportResponseHeaders(
     [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.warnings]: JSON.stringify(metadata.warnings),
     [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.debugNotes]: JSON.stringify(metadata.debugNotes),
     [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.debugFfmpegCommand]: JSON.stringify(metadata.debugFfmpegCommand),
+    [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.encoderUsed]: metadata.encoderUsed ?? "",
+    [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.hardwareAccelerated]:
+      typeof metadata.hardwareAccelerated === "boolean" ? String(metadata.hardwareAccelerated) : "",
+    [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.timingsMs]: JSON.stringify(metadata.timingsMs ?? {}),
+    [EDITOR_SYSTEM_EXPORT_HEADER_NAMES.counts]: JSON.stringify(metadata.counts ?? {}),
   };
 }
 
@@ -96,5 +147,9 @@ export function parseEditorSystemExportResponseHeaders(
     warnings: parseStringArrayHeader(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.warnings)),
     debugNotes: parseStringArrayHeader(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.debugNotes)),
     debugFfmpegCommand: parseStringArrayHeader(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.debugFfmpegCommand)),
+    encoderUsed: headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.encoderUsed) || undefined,
+    hardwareAccelerated: parseBooleanHeader(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.hardwareAccelerated)),
+    timingsMs: parseObjectHeader<EditorExportTimingsMs>(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.timingsMs)),
+    counts: parseObjectHeader<EditorExportCounts>(headers.get(EDITOR_SYSTEM_EXPORT_HEADER_NAMES.counts)),
   };
 }

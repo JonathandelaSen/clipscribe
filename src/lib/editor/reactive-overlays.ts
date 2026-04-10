@@ -106,6 +106,26 @@ export interface EditorReactiveOverlayAtlasFrame {
   presetId: EditorReactiveOverlayPresetId;
 }
 
+export interface ReactiveOverlayFrameSequence {
+  /** Individual frame images for this sequence */
+  frames: Array<{ bytes: Uint8Array; filename: string }>;
+  /** FFmpeg framerate for this overlay sequence */
+  fps: number;
+  /** Timeline start time in seconds */
+  start: number;
+  /** Timeline end time in seconds */
+  end: number;
+  /** Position and size on the output frame */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  /** Preset used */
+  presetId: EditorReactiveOverlayPresetId;
+  /** Format of the frames */
+  mimeType: "image/png" | "image/webp";
+}
+
 function clampNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
@@ -151,18 +171,26 @@ function createRasterCanvas(width: number, height: number): OffscreenCanvas | HT
   return canvas;
 }
 
-async function canvasToPngBytes(canvas: OffscreenCanvas | HTMLCanvasElement): Promise<Uint8Array> {
+async function canvasToImageBytes(
+  canvas: OffscreenCanvas | HTMLCanvasElement,
+  mimeType: "image/png" | "image/webp",
+  quality?: number
+): Promise<Uint8Array> {
   const blob =
     typeof OffscreenCanvas !== "undefined" && canvas instanceof OffscreenCanvas
-      ? await canvas.convertToBlob({ type: "image/png" })
+      ? await canvas.convertToBlob({ type: mimeType, quality })
       : await new Promise<Blob>((resolve, reject) => {
-          (canvas as HTMLCanvasElement).toBlob((result: Blob | null) => {
-            if (!result) {
-              reject(new Error("Failed to rasterize overlay frame."));
-              return;
-            }
-            resolve(result);
-          }, "image/png");
+          (canvas as HTMLCanvasElement).toBlob(
+            (result: Blob | null) => {
+              if (!result) {
+                reject(new Error("Failed to rasterize overlay frame."));
+                return;
+              }
+              resolve(result);
+            },
+            mimeType,
+            quality
+          );
         });
   return new Uint8Array(await blob.arrayBuffer());
 }
@@ -268,6 +296,47 @@ export function buildProjectReactiveOverlayAudioAnalysis(input: {
     sampleRateHz,
     values: normalizeAnalysisValues(values),
   };
+}
+
+export function resolveReactiveOverlayExportFps(
+  overlays: readonly Pick<TimelineOverlayItem, "presetId" | "durationSeconds">[]
+) {
+  const resolveOverlayFps = (overlay: Pick<TimelineOverlayItem, "presetId" | "durationSeconds">) => {
+    const durationSeconds = Math.max(0, overlay.durationSeconds);
+
+    if (overlay.presetId === "equalizer_bars") {
+      if (durationSeconds >= 300) return 3;
+      if (durationSeconds >= 120) return 4;
+      if (durationSeconds >= 60) return 5;
+      if (durationSeconds >= 30) return 6;
+      if (durationSeconds >= 20) return 8;
+      if (durationSeconds >= 10) return 10;
+      if (durationSeconds >= 5) return 12;
+      return 15;
+    }
+
+    if (overlay.presetId === "pulse_ring") {
+      if (durationSeconds >= 300) return 2;
+      if (durationSeconds >= 120) return 3;
+      if (durationSeconds >= 60) return 4;
+      if (durationSeconds >= 30) return 6;
+      if (durationSeconds >= 20) return 8;
+      if (durationSeconds >= 10) return 10;
+      if (durationSeconds >= 5) return 12;
+      return 15;
+    }
+
+    if (durationSeconds >= 300) return 1;
+    if (durationSeconds >= 120) return 2;
+    if (durationSeconds >= 60) return 4;
+    if (durationSeconds >= 30) return 6;
+    if (durationSeconds >= 20) return 8;
+    if (durationSeconds >= 10) return 10;
+    if (durationSeconds >= 5) return 12;
+    return 15;
+  };
+
+  return overlays.reduce((max, overlay) => Math.max(max, resolveOverlayFps(overlay)), 1);
 }
 
 export async function buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets(input: {
@@ -558,6 +627,99 @@ function buildAtlasCropExpression(
     .join("+");
 }
 
+export async function renderReactiveOverlayFrameSequence(input: {
+  project: Pick<EditorProjectRecord, "timeline">;
+  overlayItems: readonly TimelineOverlayItem[];
+  analysis: EditorReactiveAudioAnalysisTrack;
+  outputWidth: number;
+  outputHeight: number;
+  fps?: number;
+  signal?: AbortSignal;
+}): Promise<ReactiveOverlayFrameSequence[]> {
+  const fps = input.fps ?? REACTIVE_OVERLAY_EXPORT_FPS;
+  const sequences: ReactiveOverlayFrameSequence[] = [];
+  const projectDuration = Math.max(getProjectDuration(input.project), 0.25);
+
+  const preferredMimeType = "image/webp";
+  const quality = 0.85;
+
+  for (const overlay of input.overlayItems) {
+    throwIfAborted(input.signal);
+    const rect = resolveReactiveOverlayRect({
+      overlay,
+      frameWidth: input.outputWidth,
+      frameHeight: input.outputHeight,
+    });
+    const frameHeight = rect.height;
+    const frameWidth = rect.width;
+    const overlayStart = Math.max(0, overlay.startOffsetSeconds);
+    const overlayEnd = Math.min(projectDuration, overlay.startOffsetSeconds + Math.max(0.25, overlay.durationSeconds));
+    const frameCount = Math.max(1, Math.ceil((overlayEnd - overlayStart) * fps));
+
+    const frames: Array<{ bytes: Uint8Array; filename: string }> = [];
+
+    const frameCanvas = createRasterCanvas(frameWidth, frameHeight);
+    const frameCtx = frameCanvas.getContext("2d") as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
+    if (!frameCtx) {
+      throw new Error("Failed to create reactive overlay sequence context.");
+    }
+
+    let actualMimeType: "image/png" | "image/webp" = preferredMimeType;
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      throwIfAborted(input.signal);
+      const frameStart = overlayStart + frameIndex / fps;
+
+      frameCtx.clearRect(0, 0, frameWidth, frameHeight);
+
+      const resolved = resolveReactiveOverlayFrame({
+        overlay,
+        rect,
+        analysis: input.analysis,
+        projectTimeSeconds: frameStart,
+        localTimeSeconds: Math.max(0, frameStart - overlayStart),
+      });
+
+      drawReactiveOverlayFrameToContext(frameCtx, resolved);
+
+      let bytes: Uint8Array;
+      try {
+        bytes = await canvasToImageBytes(frameCanvas, actualMimeType, quality);
+      } catch {
+        // Fallback to PNG if WebP fails
+        if (actualMimeType === "image/webp") {
+          actualMimeType = "image/png";
+          bytes = await canvasToImageBytes(frameCanvas, actualMimeType, quality);
+        } else {
+          throw new Error("Failed to rasterize overlay frame");
+        }
+      }
+
+      const extension = actualMimeType === "image/webp" ? "webp" : "png";
+      const frameFilename = `frame_${String(frameIndex + 1).padStart(5, "0")}.${extension}`;
+      frames.push({ bytes, filename: frameFilename });
+    }
+
+    sequences.push({
+      frames,
+      fps,
+      start: overlayStart,
+      end: overlayEnd,
+      x: rect.x,
+      y: rect.y,
+      width: frameWidth,
+      height: frameHeight,
+      presetId: overlay.presetId,
+      mimeType: actualMimeType,
+    });
+  }
+
+  return sequences;
+}
+
+/**
+ * @deprecated Use renderReactiveOverlayFrameSequence instead.
+ */
 export async function renderReactiveOverlayAtlases(input: {
   project: Pick<EditorProjectRecord, "timeline">;
   overlayItems: readonly TimelineOverlayItem[];
@@ -620,7 +782,7 @@ export async function renderReactiveOverlayAtlases(input: {
       }
 
       atlasFrames.push({
-        pngBytes: await canvasToPngBytes(atlasCanvas),
+        pngBytes: await canvasToImageBytes(atlasCanvas, "image/png"),
         start: batchFrames[0]?.start ?? overlayStart,
         end: batchFrames[batchFrames.length - 1]?.end ?? overlayEnd,
         x: rect.x,

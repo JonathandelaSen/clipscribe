@@ -1,6 +1,7 @@
 import type { ShortExportGeometryResult } from "@/lib/creator/core/export-geometry";
 import type { CreatorShortSemanticSubtitlePayload } from "@/lib/creator/semantic-subtitles";
 import type {
+  CreatorReactiveOverlayPresetId,
   CreatorShortSystemExportCounts,
   CreatorShortSystemExportTimingsMs,
   CreatorShortEditorState,
@@ -15,6 +16,7 @@ export const CREATOR_SYSTEM_EXPORT_FORM_FIELDS = {
   sourceFile: "source_file",
   visualSourceFile: "visual_source_file",
   overlays: "overlays",
+  overlaySequences: "overlay_sequences",
 } as const;
 
 const CREATOR_SYSTEM_EXPORT_HEADER_NAMES = {
@@ -43,14 +45,30 @@ export interface CreatorShortSystemExportOverlayDescriptor {
   width?: number;
   height?: number;
   /** FFmpeg crop expression for atlas overlays. When set, the server applies
-   *  `crop=1080:1920:0:EXPR` before the overlay filter. */
+   *  `crop=overlayWidth:overlayHeight:0:EXPR` before the overlay filter. */
   cropExpression?: string;
+}
+
+export interface CreatorShortSystemExportOverlaySequenceDescriptor {
+  fps: number;
+  frameCount: number;
+  fileFieldPrefix: string;
+  start: number;
+  end: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mimeType?: string;
 }
 
 export interface CreatorShortSystemExportOverlaySummary {
   subtitleFrameCount: number;
   introOverlayFrameCount: number;
   outroOverlayFrameCount: number;
+  reactiveOverlayFrameCount?: number;
+  reactiveOverlayCount?: number;
+  reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];
 }
 
 export interface CreatorShortSystemExportPayload {

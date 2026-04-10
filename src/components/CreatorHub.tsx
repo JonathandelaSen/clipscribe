@@ -39,6 +39,7 @@ import {
   type BrowserRenderStage,
 } from "@/lib/browser-render";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
+import type { BackgroundTaskRecord } from "@/lib/background-tasks/types";
 import {
   getLatestSubtitleForLanguage,
   getLatestTranscript,
@@ -56,6 +57,8 @@ import {
   secondsToClock,
   type CreatorGenerationSourceInput,
   type CreatorLLMProvider,
+  type CreatorReactiveOverlayItem,
+  type CreatorReactiveOverlayPresetId,
   type CreatorShortEditorState,
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
@@ -117,6 +120,16 @@ import { readMediaMetadata } from "@/lib/editor/media";
 import { createEditorAssetRecord } from "@/lib/editor/storage";
 import { buildCompletedCreatorShortRenderResponse } from "@/lib/creator/system-export-contract";
 import { requestSystemCreatorShortExport } from "@/lib/creator/system-export-client";
+import {
+  buildCreatorReactiveOverlayAudioAnalysis,
+  CREATOR_REACTIVE_OVERLAY_PRESETS,
+  createDefaultCreatorReactiveOverlay,
+  getCreatorReactiveOverlayPresetLabel,
+  resolveCreatorReactiveOverlayFrame,
+  resolveCreatorReactiveOverlayRect,
+  type CreatorReactiveAudioAnalysisTrack,
+  type CreatorReactiveOverlayFrame,
+} from "@/lib/creator/reactive-overlays";
 import {
   COMMON_SUBTITLE_STYLE_PRESETS,
   CREATOR_SUBTITLE_STYLE_LABELS,
@@ -206,6 +219,13 @@ function legacyCopyText(text: string): boolean {
   }
 
   return copied;
+}
+
+const SHORT_EXPORT_LOG_LIMIT = 250;
+
+function formatShortExportLogLine(message: string, startedAt: number, now: number) {
+  const elapsedSeconds = ((now - startedAt) / 1000).toFixed(2);
+  return `[${new Date(now).toISOString()} | +${elapsedSeconds}s] ${message}`;
 }
 
 function clampShortZoomForUi(value: number): number {
@@ -1342,6 +1362,101 @@ async function readVideoMetadata(
   }
 }
 
+function ReactiveOverlayPreviewGraphic({
+  frame,
+}: {
+  frame: CreatorReactiveOverlayFrame;
+}) {
+  if (frame.kind === "pulse_ring") {
+    return (
+      <svg
+        width={frame.width}
+        height={frame.height}
+        viewBox={`0 0 ${frame.width} ${frame.height}`}
+        className="block h-full w-full overflow-visible"
+      >
+        <circle cx={frame.centerX} cy={frame.centerY} r={frame.glowRadius} fill={frame.glowFill} />
+        <circle
+          cx={frame.centerX}
+          cy={frame.centerY}
+          r={frame.radius}
+          fill="none"
+          stroke={frame.stroke}
+          strokeWidth={frame.strokeWidth}
+          opacity={frame.opacity}
+        />
+        <circle
+          cx={frame.centerX}
+          cy={frame.centerY}
+          r={frame.innerRadius}
+          fill={frame.glowFill}
+          opacity={Math.min(0.42, frame.opacity * 0.7)}
+        />
+      </svg>
+    );
+  }
+
+  if (frame.kind === "equalizer_bars") {
+    return (
+      <svg
+        width={frame.width}
+        height={frame.height}
+        viewBox={`0 0 ${frame.width} ${frame.height}`}
+        className="block h-full w-full overflow-visible"
+      >
+        {frame.bars.map((bar, index) => (
+          <g key={`${index}_${bar.x}_${bar.height}`}>
+            <rect
+              x={bar.x}
+              y={bar.y}
+              width={bar.width}
+              height={bar.height}
+              rx={bar.radius}
+              fill={frame.glowFill}
+              opacity={0.28}
+            />
+            <rect
+              x={bar.x}
+              y={bar.y}
+              width={bar.width}
+              height={bar.height}
+              rx={bar.radius}
+              fill={frame.fill}
+              opacity={frame.opacity}
+            />
+          </g>
+        ))}
+      </svg>
+    );
+  }
+
+  return (
+    <svg
+      width={frame.width}
+      height={frame.height}
+      viewBox={`0 0 ${frame.width} ${frame.height}`}
+      className="block h-full w-full overflow-visible"
+    >
+      <path
+        d={frame.glowPath}
+        fill="none"
+        stroke={frame.stroke}
+        strokeWidth={frame.strokeWidth * 2.4}
+        strokeLinecap="round"
+        opacity={0.22}
+      />
+      <path
+        d={frame.path}
+        fill="none"
+        stroke={frame.stroke}
+        strokeWidth={frame.strokeWidth}
+        strokeLinecap="round"
+        opacity={frame.opacity}
+      />
+    </svg>
+  );
+}
+
 const VIDEO_INFO_BLOCK_OPTIONS: Array<{
   value: CreatorVideoInfoBlock;
   label: string;
@@ -1515,6 +1630,8 @@ export function CreatorHub({
   const [outroOverlay, setOutroOverlay] = useState<CreatorTextOverlayState>(() =>
     getDefaultCreatorTextOverlayState("outro")
   );
+  const [reactiveOverlays, setReactiveOverlays] = useState<CreatorReactiveOverlayItem[]>([]);
+  const [selectedReactiveOverlayId, setSelectedReactiveOverlayId] = useState("");
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
   const [, setIsExportingShort] = useState(false);
@@ -1553,9 +1670,11 @@ export function CreatorHub({
   const [activeSuggestionPreviewProjectId, setActiveSuggestionPreviewProjectId] = useState("");
   const [previewFrameSize, setPreviewFrameSize] = useState({ width: 0, height: 0 });
   const [previewSourceSize, setPreviewSourceSize] = useState({ width: 0, height: 0 });
+  const [reactiveOverlayAnalysis, setReactiveOverlayAnalysis] = useState<CreatorReactiveAudioAnalysisTrack | null>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   const previewAudioRef = useRef<HTMLAudioElement | null>(null);
   const previewFrameElRef = useRef<HTMLDivElement | null>(null);
+  const reactiveOverlayDecodedAudioCacheRef = useRef(new Map<string, Float32Array>());
   const visualAssetInputRef = useRef<HTMLInputElement | null>(null);
   const shortExportSessionCounterRef = useRef(0);
   const shortExportSessionRef = useRef<ActiveBrowserRenderSession | null>(null);
@@ -1644,24 +1763,33 @@ export function CreatorHub({
   const beginShortExportSession = useCallback(() => {
     return createActiveBrowserRenderSession(++shortExportSessionCounterRef.current);
   }, []);
+  const shortExportTaskLogSyncRef = useRef<{
+    taskId: string;
+    sync: (lines: string[]) => void;
+  } | null>(null);
 
   const beginShortExportLogSession = useCallback((message: string) => {
     const startedAt = Date.now();
     shortExportLogStartedAtRef.current = startedAt;
     shortExportLastLoggedProgressRef.current = -1;
-    const line = `[${new Date(startedAt).toISOString()} | +0.00s] ${message}`;
-    setShortExportLogLines([line]);
+    const line = formatShortExportLogLine(message, startedAt, startedAt);
+    const nextLines = [line];
+    setShortExportLogLines(nextLines);
+    shortExportTaskLogSyncRef.current?.sync(nextLines);
     console.info("[ShortExportLog]", line);
   }, []);
 
   const appendShortExportLog = useCallback((message: string) => {
     const now = Date.now();
     const startedAt = shortExportLogStartedAtRef.current ?? now;
-    const elapsedSeconds = ((now - startedAt) / 1000).toFixed(2);
-    const line = `[${new Date(now).toISOString()} | +${elapsedSeconds}s] ${message}`;
+    const line = formatShortExportLogLine(message, startedAt, now);
     setShortExportLogLines((prev) => {
       if (prev[prev.length - 1] === line) return prev;
-      const next = prev.length >= 250 ? [...prev.slice(prev.length - 249), line] : [...prev, line];
+      const next =
+        prev.length >= SHORT_EXPORT_LOG_LIMIT
+          ? [...prev.slice(prev.length - (SHORT_EXPORT_LOG_LIMIT - 1)), line]
+          : [...prev, line];
+      shortExportTaskLogSyncRef.current?.sync(next);
       return next;
     });
     console.info("[ShortExportLog]", line);
@@ -1890,6 +2018,8 @@ export function CreatorHub({
     setShowSafeZones(true);
     setIntroOverlay(getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(getDefaultCreatorTextOverlayState("outro"));
+    setReactiveOverlays([]);
+    setSelectedReactiveOverlayId("");
     setVisualSourceMode("original");
     setVisualSourceAssetId("");
     setActiveSuggestionPreviewProjectId("");
@@ -2171,6 +2301,7 @@ export function CreatorHub({
       showSafeZones,
       introOverlay,
       outroOverlay,
+      reactiveOverlays,
       visualSource:
         hasVisualOverride && selectedVisualOverrideKind && visualSourceAssetId
           ? {
@@ -2187,6 +2318,7 @@ export function CreatorHub({
       introOverlay,
       outroOverlay,
       panX,
+      reactiveOverlays,
       showSafeZones,
       showSubtitles,
       subtitleScale,
@@ -2329,6 +2461,92 @@ export function CreatorHub({
     },
     [editedClip, selectedPlan, updateTextOverlay]
   );
+
+  useEffect(() => {
+    if (reactiveOverlays.length === 0) {
+      if (selectedReactiveOverlayId) {
+        setSelectedReactiveOverlayId("");
+      }
+      return;
+    }
+    if (!reactiveOverlays.some((overlay) => overlay.id === selectedReactiveOverlayId)) {
+      setSelectedReactiveOverlayId(reactiveOverlays[0]?.id ?? "");
+    }
+  }, [reactiveOverlays, selectedReactiveOverlayId]);
+
+  const selectedReactiveOverlay = useMemo(
+    () => reactiveOverlays.find((overlay) => overlay.id === selectedReactiveOverlayId),
+    [reactiveOverlays, selectedReactiveOverlayId]
+  );
+
+  const updateReactiveOverlay = useCallback(
+    (overlayId: string, updater: (prev: CreatorReactiveOverlayItem) => CreatorReactiveOverlayItem) => {
+      setReactiveOverlays((current) =>
+        current.map((overlay) => (overlay.id === overlayId ? updater(overlay) : overlay))
+      );
+    },
+    []
+  );
+
+  const addReactiveOverlay = useCallback(
+    (presetId: CreatorReactiveOverlayPresetId) => {
+      const clipDuration = editedClip?.durationSeconds ?? 3;
+      const startOffsetSeconds = editedClip ? Math.max(0, currentTime - editedClip.startSeconds) : 0;
+      const nextOverlay = createDefaultCreatorReactiveOverlay({
+        id: makeId("rxov"),
+        presetId,
+        startOffsetSeconds,
+        durationSeconds: Math.min(4, Math.max(1.4, clipDuration - startOffsetSeconds || clipDuration)),
+      });
+      setReactiveOverlays((current) => [...current, nextOverlay]);
+      setSelectedReactiveOverlayId(nextOverlay.id);
+    },
+    [currentTime, editedClip]
+  );
+
+  const removeReactiveOverlay = useCallback((overlayId: string) => {
+    setReactiveOverlays((current) => current.filter((overlay) => overlay.id !== overlayId));
+    setSelectedReactiveOverlayId((current) => (current === overlayId ? "" : current));
+  }, []);
+
+  useEffect(() => {
+    if (!mediaFile || !editedClip || reactiveOverlays.length === 0) {
+      setReactiveOverlayAnalysis(null);
+      return;
+    }
+
+    let canceled = false;
+    const cacheKey = `${mediaFile.name}:${mediaFile.size}:${mediaFile.lastModified}`;
+
+    const loadAnalysis = async () => {
+      try {
+        let decoded = reactiveOverlayDecodedAudioCacheRef.current.get(cacheKey);
+        if (!decoded) {
+          const { decodeAudio } = await import("@/lib/audio");
+          decoded = await decodeAudio(mediaFile);
+          reactiveOverlayDecodedAudioCacheRef.current.set(cacheKey, decoded);
+        }
+        if (canceled) return;
+        setReactiveOverlayAnalysis(
+          buildCreatorReactiveOverlayAudioAnalysis({
+            clipStartSeconds: editedClip.startSeconds,
+            clipDurationSeconds: editedClip.durationSeconds,
+            decodedSamples: decoded,
+          })
+        );
+      } catch (error) {
+        if (canceled) return;
+        console.error("Failed to prepare reactive overlay analysis", error);
+        setReactiveOverlayAnalysis(null);
+      }
+    };
+
+    void loadAnalysis();
+
+    return () => {
+      canceled = true;
+    };
+  }, [editedClip, mediaFile, reactiveOverlays]);
 
   const savedExportsForActiveShort = useMemo(
     () => (activeSavedShortProject ? exportsByProjectId.get(activeSavedShortProject.id) ?? [] : []),
@@ -2913,6 +3131,8 @@ export function CreatorHub({
     setShowSafeZones(hydratedEditor.showSafeZones ?? true);
     setIntroOverlay(hydratedEditor.introOverlay ?? getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(hydratedEditor.outroOverlay ?? getDefaultCreatorTextOverlayState("outro"));
+    setReactiveOverlays(hydratedEditor.reactiveOverlays ?? []);
+    setSelectedReactiveOverlayId(hydratedEditor.reactiveOverlays?.[0]?.id ?? "");
     setVisualSourceMode(hydratedEditor.visualSource?.mode === "asset" ? "asset" : "original");
     setVisualSourceAssetId(hydratedEditor.visualSource?.mode === "asset" ? hydratedEditor.visualSource.assetId ?? "" : "");
   }, []);
@@ -3018,6 +3238,12 @@ export function CreatorHub({
       title: `Exporting ${selectedPlan.title}`,
       message: `${secondsToClock(editedClip.startSeconds)} → ${secondsToClock(editedClip.endSeconds)}`,
       run: async (task) => {
+        shortExportTaskLogSyncRef.current = {
+          taskId: task.taskId,
+          sync: (lines) => {
+            task.update({ logLines: lines });
+          },
+        };
         const session = beginShortExportSession();
         shortExportSessionRef.current = session;
         shortExportRestoreSnapshotRef.current = activeSavedShortProject
@@ -3366,6 +3592,9 @@ export function CreatorHub({
           });
           throw error instanceof Error ? error : new Error(toastMessage);
         } finally {
+          if (shortExportTaskLogSyncRef.current?.taskId === task.taskId) {
+            shortExportTaskLogSyncRef.current = null;
+          }
           if (shortExportSessionRef.current?.id === session.id) {
             shortExportSessionRef.current = null;
             shortExportRestoreSnapshotRef.current = null;
@@ -3468,6 +3697,41 @@ export function CreatorHub({
     resolvedIntroOverlayWindow,
     resolvedOutroOverlayStyle,
     resolvedOutroOverlayWindow,
+  ]);
+
+  const activePreviewReactiveOverlays = useMemo(() => {
+    if (!editedClip || !reactiveOverlayAnalysis || previewFrameSize.width <= 0 || previewFrameSize.height <= 0) {
+      return [];
+    }
+
+    return reactiveOverlays
+      .filter((overlay) => {
+        const overlayStart = Math.max(0, overlay.startOffsetSeconds);
+        const overlayEnd = overlayStart + Math.max(0.1, overlay.durationSeconds);
+        return clipRelativeTime >= overlayStart && clipRelativeTime <= overlayEnd;
+      })
+      .map((overlay) => {
+        const rect = resolveCreatorReactiveOverlayRect({
+          overlay,
+          frameWidth: 1080,
+          frameHeight: 1920,
+        });
+        const frame = resolveCreatorReactiveOverlayFrame({
+          overlay,
+          rect,
+          analysis: reactiveOverlayAnalysis,
+          projectTimeSeconds: clipRelativeTime,
+          localTimeSeconds: Math.max(0, clipRelativeTime - overlay.startOffsetSeconds),
+        });
+        return { overlay, rect, frame };
+      });
+  }, [
+    clipRelativeTime,
+    editedClip,
+    previewFrameSize.height,
+    previewFrameSize.width,
+    reactiveOverlayAnalysis,
+    reactiveOverlays,
   ]);
 
   // Export-equivalent font size (px at 1080-wide canvas) – used to derive preview CSS values.
@@ -4228,6 +4492,8 @@ export function CreatorHub({
                       setSubtitleStyleOverrides({});
                       setShowSubtitles(true);
                       setShowSafeZones(true);
+                      setReactiveOverlays([]);
+                      setSelectedReactiveOverlayId("");
                       setVisualSourceMode("original");
                       setVisualSourceAssetId("");
                       setIntroOverlay(
@@ -4588,6 +4854,25 @@ export function CreatorHub({
                               />
                             </>
                           )}
+
+                          {activePreviewReactiveOverlays.map(({ overlay, rect, frame }) => {
+                            const previewScale = previewFrameScale;
+                            return (
+                              <div
+                                key={overlay.id}
+                                className="absolute pointer-events-none"
+                                style={{
+                                  left: `${rect.x * previewScale}px`,
+                                  top: `${rect.y * previewScale}px`,
+                                  width: `${rect.width * previewScale}px`,
+                                  height: `${rect.height * previewScale}px`,
+                                  opacity: overlay.opacity,
+                                }}
+                              >
+                                <ReactiveOverlayPreviewGraphic frame={frame} />
+                              </div>
+                            );
+                          })}
 
                           {activePreviewTextOverlays.map((entry) => {
                             const previewScale = previewFrameScale;
@@ -5086,6 +5371,318 @@ export function CreatorHub({
                                   }
                                 />
                               </div>
+
+                              <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 space-y-4">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex items-center gap-2 text-sm font-semibold text-white/92">
+                                      <Layers className="h-4 w-4 text-cyan-200" />
+                                      Reactive Motion Overlays
+                                    </div>
+                                    <div className="mt-1 text-[11px] leading-relaxed text-white/50">
+                                      Add small audio-reactive assets over static video or images. They render above the visual layer and below title/subtitle text.
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {CREATOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                                      <Button
+                                        key={preset.id}
+                                        type="button"
+                                        size="sm"
+                                        variant="ghost"
+                                        className="bg-white/5 px-3 text-xs text-white/85 hover:bg-white/10"
+                                        onClick={() => addReactiveOverlay(preset.id)}
+                                      >
+                                        {preset.label}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-4 xl:grid-cols-[280px_minmax(0,1fr)]">
+                                  <div className="space-y-2">
+                                    {reactiveOverlays.length > 0 ? (
+                                      reactiveOverlays.map((overlay, index) => {
+                                        const isActive = selectedReactiveOverlayId === overlay.id;
+                                        return (
+                                          <button
+                                            key={overlay.id}
+                                            type="button"
+                                            onClick={() => setSelectedReactiveOverlayId(overlay.id)}
+                                            className={cn(
+                                              "w-full rounded-2xl border px-4 py-3 text-left transition-colors",
+                                              isActive
+                                                ? "border-cyan-300/35 bg-cyan-400/10"
+                                                : "border-white/10 bg-black/25 hover:bg-white/[0.05]"
+                                            )}
+                                          >
+                                            <div className="flex items-start justify-between gap-3">
+                                              <div>
+                                                <div className="text-sm font-semibold text-white/90">
+                                                  {index + 1}. {getCreatorReactiveOverlayPresetLabel(overlay.presetId)}
+                                                </div>
+                                                <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-white/38">
+                                                  {overlay.startOffsetSeconds.toFixed(1)}s to {(overlay.startOffsetSeconds + overlay.durationSeconds).toFixed(1)}s
+                                                </div>
+                                              </div>
+                                              <Button
+                                                type="button"
+                                                size="icon"
+                                                variant="ghost"
+                                                className="h-8 w-8 shrink-0 bg-white/5 text-white/55 hover:bg-red-500/15 hover:text-red-100"
+                                                onClick={(event) => {
+                                                  event.stopPropagation();
+                                                  removeReactiveOverlay(overlay.id);
+                                                }}
+                                              >
+                                                <Trash2 className="h-4 w-4" />
+                                              </Button>
+                                            </div>
+                                          </button>
+                                        );
+                                      })
+                                    ) : (
+                                      <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm leading-relaxed text-white/55">
+                                        No reactive overlays yet. Add one of the presets to bring movement into static shots.
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {selectedReactiveOverlay ? (
+                                    <div className="rounded-2xl border border-white/10 bg-black/25 p-4 space-y-4">
+                                      <div className="flex items-start justify-between gap-4">
+                                        <div>
+                                          <div className="text-sm font-semibold text-white/92">
+                                            {getCreatorReactiveOverlayPresetLabel(selectedReactiveOverlay.presetId)}
+                                          </div>
+                                          <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">
+                                            Audio-reactive overlay
+                                          </div>
+                                        </div>
+                                        <div className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-cyan-100">
+                                          O1
+                                        </div>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                        <label className="text-xs text-white/70 block">
+                                          Preset
+                                          <Select
+                                            value={selectedReactiveOverlay.presetId}
+                                            onValueChange={(value) => {
+                                              if (value !== "waveform_line" && value !== "equalizer_bars" && value !== "pulse_ring") return;
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...createDefaultCreatorReactiveOverlay({
+                                                  id: prev.id,
+                                                  presetId: value,
+                                                  startOffsetSeconds: prev.startOffsetSeconds,
+                                                  durationSeconds: prev.durationSeconds,
+                                                }),
+                                                startOffsetSeconds: prev.startOffsetSeconds,
+                                                durationSeconds: prev.durationSeconds,
+                                              }));
+                                            }}
+                                          >
+                                            <SelectTrigger className="mt-1 border-white/10 bg-white/[0.04] text-white">
+                                              <SelectValue />
+                                            </SelectTrigger>
+                                            <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                                              {CREATOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                                                <SelectItem key={preset.id} value={preset.id}>
+                                                  {preset.label}
+                                                </SelectItem>
+                                              ))}
+                                            </SelectContent>
+                                          </Select>
+                                        </label>
+                                        <label className="text-xs text-white/70 block">
+                                          Tint
+                                          <input
+                                            type="color"
+                                            value={selectedReactiveOverlay.tintHex}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                tintHex: event.target.value.toUpperCase(),
+                                              }))
+                                            }
+                                            className="mt-1 h-9 w-full rounded-md border border-white/10 bg-white/[0.04]"
+                                          />
+                                        </label>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                        <label className="text-xs text-white/70 block">
+                                          Start offset
+                                          <Input
+                                            type="number"
+                                            min={0}
+                                            step={0.1}
+                                            value={selectedReactiveOverlay.startOffsetSeconds}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                startOffsetSeconds: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="mt-1 border-white/10 bg-white/[0.04] text-white"
+                                          />
+                                        </label>
+                                        <label className="text-xs text-white/70 block">
+                                          Duration
+                                          <Input
+                                            type="number"
+                                            min={0.2}
+                                            step={0.1}
+                                            value={selectedReactiveOverlay.durationSeconds}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                durationSeconds: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="mt-1 border-white/10 bg-white/[0.04] text-white"
+                                          />
+                                        </label>
+                                      </div>
+
+                                      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                        <label className="text-xs text-white/70 block">Position X: {selectedReactiveOverlay.positionXPercent.toFixed(0)}%</label>
+                                        <input
+                                          type="range"
+                                          min={5}
+                                          max={95}
+                                          step={1}
+                                          value={selectedReactiveOverlay.positionXPercent}
+                                          onChange={(event) =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                              ...prev,
+                                              positionXPercent: Number(event.target.value),
+                                            }))
+                                          }
+                                          className="w-full"
+                                        />
+                                        <label className="text-xs text-white/70 block">Position Y: {selectedReactiveOverlay.positionYPercent.toFixed(0)}%</label>
+                                        <input
+                                          type="range"
+                                          min={5}
+                                          max={95}
+                                          step={1}
+                                          value={selectedReactiveOverlay.positionYPercent}
+                                          onChange={(event) =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                              ...prev,
+                                              positionYPercent: Number(event.target.value),
+                                            }))
+                                          }
+                                          className="w-full"
+                                        />
+                                        <label className="text-xs text-white/70 block">Width: {selectedReactiveOverlay.widthPercent.toFixed(0)}%</label>
+                                        <input
+                                          type="range"
+                                          min={8}
+                                          max={100}
+                                          step={1}
+                                          value={selectedReactiveOverlay.widthPercent}
+                                          onChange={(event) =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                              ...prev,
+                                              widthPercent: Number(event.target.value),
+                                            }))
+                                          }
+                                          className="w-full"
+                                        />
+                                        <label className="text-xs text-white/70 block">Height: {selectedReactiveOverlay.heightPercent.toFixed(0)}%</label>
+                                        <input
+                                          type="range"
+                                          min={6}
+                                          max={100}
+                                          step={1}
+                                          value={selectedReactiveOverlay.heightPercent}
+                                          onChange={(event) =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                              ...prev,
+                                              heightPercent: Number(event.target.value),
+                                            }))
+                                          }
+                                          className="w-full"
+                                        />
+                                      </div>
+
+                                      <label className="text-xs text-white/70 block">Scale: {selectedReactiveOverlay.scale.toFixed(2)}x</label>
+                                      <input
+                                        type="range"
+                                        min={0.2}
+                                        max={3}
+                                        step={0.01}
+                                        value={selectedReactiveOverlay.scale}
+                                        onChange={(event) =>
+                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                            ...prev,
+                                            scale: Number(event.target.value),
+                                          }))
+                                        }
+                                        className="w-full"
+                                      />
+                                      <label className="text-xs text-white/70 block">Opacity: {Math.round(selectedReactiveOverlay.opacity * 100)}%</label>
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={1}
+                                        step={0.01}
+                                        value={selectedReactiveOverlay.opacity}
+                                        onChange={(event) =>
+                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                            ...prev,
+                                            opacity: Number(event.target.value),
+                                          }))
+                                        }
+                                        className="w-full"
+                                      />
+                                      <label className="text-xs text-white/70 block">Sensitivity: {selectedReactiveOverlay.sensitivity.toFixed(2)}</label>
+                                      <input
+                                        type="range"
+                                        min={0.2}
+                                        max={3}
+                                        step={0.01}
+                                        value={selectedReactiveOverlay.sensitivity}
+                                        onChange={(event) =>
+                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                            ...prev,
+                                            sensitivity: Number(event.target.value),
+                                          }))
+                                        }
+                                        className="w-full"
+                                      />
+                                      <label className="text-xs text-white/70 block">Smoothing: {selectedReactiveOverlay.smoothing.toFixed(2)}</label>
+                                      <input
+                                        type="range"
+                                        min={0}
+                                        max={0.95}
+                                        step={0.01}
+                                        value={selectedReactiveOverlay.smoothing}
+                                        onChange={(event) =>
+                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                            ...prev,
+                                            smoothing: Number(event.target.value),
+                                          }))
+                                        }
+                                        className="w-full"
+                                      />
+
+                                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[11px] text-white/58">
+                                        {reactiveOverlayAnalysis
+                                          ? "Preview is driven by decoded source audio from the selected clip."
+                                          : "Preview analysis will appear once the source audio is decoded."}
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-5 text-sm leading-relaxed text-white/55">
+                                      Select an overlay to edit its timing, placement and motion controls.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           </TabsContent>
 
@@ -5519,6 +6116,8 @@ export function CreatorHub({
                                   setSubtitleStyleOverrides({});
                                   setShowSafeZones(true);
                                   setShowSubtitles(true);
+                                  setReactiveOverlays([]);
+                                  setSelectedReactiveOverlayId("");
                                   setVisualSourceMode("original");
                                   setVisualSourceAssetId("");
                                   setIntroOverlay(

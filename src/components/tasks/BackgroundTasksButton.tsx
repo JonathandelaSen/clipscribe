@@ -1,6 +1,8 @@
 "use client";
 
-import { Clapperboard, Clock3, Film, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { Check, Clapperboard, Clock3, Copy, Film, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
+import { toast } from "sonner";
 
 import { useBackgroundTasks, getBackgroundTaskStatusLabel } from "@/components/tasks/BackgroundTaskProvider";
 import { isBackgroundTaskActive } from "@/lib/background-tasks/core";
@@ -18,6 +20,38 @@ const TASK_ICONS: Record<BackgroundTaskKind, LucideIcon> = {
   "timeline-export": Film,
   "short-export": Clapperboard,
 };
+
+function legacyCopyText(text: string): boolean {
+  if (typeof document === "undefined") return false;
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+  document.body.append(textarea);
+  textarea.focus();
+  textarea.select();
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  } finally {
+    textarea.remove();
+  }
+
+  return copied;
+}
+
+async function copyTaskLogs(text: string) {
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return true;
+  }
+  return legacyCopyText(text);
+}
 
 function formatTimestamp(timestamp: number) {
   return new Intl.DateTimeFormat(undefined, {
@@ -45,6 +79,21 @@ function TaskRow({
   onDismiss?: () => void;
 }) {
   const Icon = TASK_ICONS[task.kind];
+  const [didCopyLogs, setDidCopyLogs] = useState(false);
+  const taskLogText = task.logLines?.join("\n") ?? "";
+
+  const handleCopyLogs = async () => {
+    if (!taskLogText) return;
+    try {
+      const copied = await copyTaskLogs(taskLogText);
+      if (!copied) throw new Error("copy-failed");
+      setDidCopyLogs(true);
+      window.setTimeout(() => setDidCopyLogs(false), 1800);
+      toast.success("Task logs copied.");
+    } catch {
+      toast.error("Couldn't copy task logs.");
+    }
+  };
 
   return (
     <div className="rounded-[1.35rem] border border-white/10 bg-black/20 p-4">
@@ -102,6 +151,29 @@ function TaskRow({
             value={task.progress}
             className="h-2 bg-white/10 [&_[data-slot=progress-indicator]]:bg-[linear-gradient(90deg,rgba(34,211,238,0.95),rgba(251,191,36,0.95))]"
           />
+        </div>
+      ) : null}
+
+      {task.error ? <div className="mt-4 rounded-2xl border border-red-400/16 bg-red-500/10 px-3 py-2 text-sm text-red-100">{task.error}</div> : null}
+
+      {task.logLines && task.logLines.length > 0 ? (
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-[11px] uppercase tracking-[0.22em] text-white/42">Logs</div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+              onClick={handleCopyLogs}
+            >
+              {didCopyLogs ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+              {didCopyLogs ? "Copied" : "Copy logs"}
+            </Button>
+          </div>
+          <pre className="max-h-56 overflow-auto rounded-2xl border border-white/10 bg-black/30 p-3 text-[11px] leading-5 text-white/72 whitespace-pre-wrap">
+            {taskLogText}
+          </pre>
         </div>
       ) : null}
 

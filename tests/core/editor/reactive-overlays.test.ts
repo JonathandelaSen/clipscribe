@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   buildProjectReactiveOverlayAudioAnalysis,
+  resolveReactiveOverlayExportFps,
   resolveReactiveOverlayFrame,
   resolveReactiveOverlayRect,
 } from "../../../src/lib/editor/reactive-overlays";
@@ -64,6 +65,26 @@ test("buildProjectReactiveOverlayAudioAnalysis respects reverse clips, audio off
   assert.equal(analysis.values[2], analysis.values[3]);
   assert.ok(analysis.values[2]! > 0);
   assert.ok(analysis.values[2]! < analysis.values[0]!);
+});
+
+test("resolveReactiveOverlayExportFps lowers fps for long overlays", () => {
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 3 }]), 15);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 7 }]), 12);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 15 }]), 10);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 25 }]), 8);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 45 }]), 6);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 75 }]), 4);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 180 }]), 2);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "waveform_line", durationSeconds: 955.62 }]), 1);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "pulse_ring", durationSeconds: 955.62 }]), 2);
+  assert.equal(resolveReactiveOverlayExportFps([{ presetId: "equalizer_bars", durationSeconds: 955.62 }]), 3);
+  assert.equal(
+    resolveReactiveOverlayExportFps([
+      { presetId: "waveform_line", durationSeconds: 955.62 },
+      { presetId: "equalizer_bars", durationSeconds: 955.62 },
+    ]),
+    3
+  );
 });
 
 test("resolveReactiveOverlayFrame returns stable geometry for every preset", () => {

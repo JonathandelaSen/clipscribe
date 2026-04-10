@@ -212,6 +212,36 @@ export function ProjectYouTubeUploadList({
                                 )}
                               </div>
                             </div>
+
+                            <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                              <div className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Related video</div>
+                              {upload.draft.relatedVideo ? (
+                                <div className="mt-3 space-y-3">
+                                  <div>
+                                    <div className="text-sm font-medium text-white">{upload.draft.relatedVideo.title}</div>
+                                    <div className="mt-1 text-xs text-zinc-400">
+                                      {detailValue(upload.draft.relatedVideo.privacyStatus)} • {detailValue(upload.draft.relatedVideo.publishedAt)}
+                                    </div>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Button asChild variant="outline" className="border-white/10 bg-white/5 text-white hover:bg-white/10">
+                                      <a href={upload.draft.relatedVideo.watchUrl} target="_blank" rel="noreferrer">
+                                        Video
+                                        <ExternalLink className="ml-2 h-4 w-4" />
+                                      </a>
+                                    </Button>
+                                    <Button asChild variant="outline" className="border-white/10 bg-white/5 text-white hover:bg-white/10">
+                                      <a href={upload.draft.relatedVideo.studioUrl} target="_blank" rel="noreferrer">
+                                        Studio
+                                        <ExternalLink className="ml-2 h-4 w-4" />
+                                      </a>
+                                    </Button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="mt-3 block text-sm text-zinc-400">No related video saved</span>
+                              )}
+                            </div>
                           </div>
                         </div>
 

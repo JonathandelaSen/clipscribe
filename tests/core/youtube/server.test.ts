@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   getYouTubeBrowserAccessToken,
   listConnectedYouTubeChannels,
+  listConnectedYouTubeRelatedVideos,
   loadConnectedYouTubeOptions,
   resolveYouTubeServerSession,
 } from "../../../src/lib/youtube/server";
@@ -69,6 +70,7 @@ test("listConnectedYouTubeChannels uses the refreshed access token", async () =>
         receivedAccessToken = token;
         return [{ id: "channel_1", title: "Main Channel" }];
       },
+      listMyEligibleRelatedVideos: async () => [],
       listVideoCategories: async () => [],
       listI18nLanguages: async () => [],
       loadOptionCatalog: async () => ({ regionCode: "US", categories: [], languages: [] }),
@@ -99,6 +101,7 @@ test("loadConnectedYouTubeOptions returns the catalog from the injected API clie
     env: ENV,
     apiClient: {
       listMyChannels: async () => [],
+      listMyEligibleRelatedVideos: async () => [],
       listVideoCategories: async () => [],
       listI18nLanguages: async () => [],
       loadOptionCatalog: async (_token, regionCode) => ({
@@ -118,6 +121,52 @@ test("loadConnectedYouTubeOptions returns the catalog from the injected API clie
     categories: [{ id: "22", title: "People & Blogs", assignable: true }],
     languages: [{ id: "es", name: "Spanish" }],
   });
+});
+
+test("listConnectedYouTubeRelatedVideos returns eligible channel videos from the injected API client", async () => {
+  const cookieValue = encryptYouTubeSession(
+    {
+      accessToken: "access_token",
+      refreshToken: "refresh_token",
+      expiresAt: 99_999_999_999_999,
+      scope: "scope_a",
+      tokenType: "Bearer",
+    },
+    ENV.YOUTUBE_SESSION_SECRET!
+  );
+
+  const result = await listConnectedYouTubeRelatedVideos(cookieValue, {
+    env: ENV,
+    apiClient: {
+      listMyChannels: async () => [],
+      listMyEligibleRelatedVideos: async () => [
+        {
+          videoId: "video_99",
+          title: "Deep dive",
+          watchUrl: "https://www.youtube.com/watch?v=video_99",
+          studioUrl: "https://studio.youtube.com/video/video_99/edit",
+          privacyStatus: "public",
+        },
+      ],
+      listVideoCategories: async () => [],
+      listI18nLanguages: async () => [],
+      loadOptionCatalog: async () => ({ regionCode: "US", categories: [], languages: [] }),
+      getVideoProcessingStatus: async () => ({
+        videoId: "video_1",
+        processingStatus: "succeeded",
+      }),
+    },
+  });
+
+  assert.deepEqual(result.videos, [
+    {
+      videoId: "video_99",
+      title: "Deep dive",
+      watchUrl: "https://www.youtube.com/watch?v=video_99",
+      studioUrl: "https://studio.youtube.com/video/video_99/edit",
+      privacyStatus: "public",
+    },
+  ]);
 });
 
 test("getYouTubeBrowserAccessToken exposes a usable short-lived access token", async () => {

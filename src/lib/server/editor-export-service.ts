@@ -8,6 +8,7 @@ import {
   EDITOR_SYSTEM_EXPORT_FORM_FIELDS,
   type EditorSystemExportAssetDescriptor,
   type EditorSystemExportOverlayDescriptor,
+  type EditorSystemExportOverlaySequenceDescriptor,
 } from "../editor/system-export-contract";
 import {
   exportEditorProjectWithSystemFfmpeg,
@@ -15,9 +16,16 @@ import {
   type NodeEditorExportProgress,
   type NodeEditorExportAsset,
   type NodeEditorExportOverlay,
+  type NodeEditorExportOverlaySequence,
   type NodeEditorExportResult,
 } from "../editor/node-render";
-import type { EditorAssetRecord, EditorProjectRecord, EditorResolution } from "../editor/types";
+import type {
+  EditorAssetRecord,
+  EditorProjectRecord,
+  EditorResolution,
+  EditorExportCounts,
+  EditorExportTimingsMs,
+} from "../editor/types";
 
 type LooseRecord = Record<string, unknown>;
 
@@ -35,6 +43,10 @@ export interface ParsedEditorSystemExportFormData {
     descriptor: EditorSystemExportOverlayDescriptor;
     file: File;
   }>;
+  overlaySequences: Array<{
+    descriptor: EditorSystemExportOverlaySequenceDescriptor;
+    files: File[];
+  }>;
 }
 
 export interface RenderedEditorSystemExportResult {
@@ -48,6 +60,10 @@ export interface RenderedEditorSystemExportResult {
   warnings: string[];
   debugNotes: string[];
   debugFfmpegCommand: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: EditorExportTimingsMs;
+  counts?: EditorExportCounts;
 }
 
 export interface EditorSystemExportDependencies {
@@ -139,6 +155,43 @@ function parseOverlayDescriptor(value: unknown, index: number): EditorSystemExpo
   };
 }
 
+function parseOverlaySequenceDescriptor(value: unknown, index: number): EditorSystemExportOverlaySequenceDescriptor {
+  if (!isRecord(value)) {
+    throw new Error(`overlaySequences[${index}] is invalid.`);
+  }
+  if (typeof value.fileFieldPrefix !== "string" || !value.fileFieldPrefix.trim()) {
+    throw new Error(`overlaySequences[${index}].fileFieldPrefix is required.`);
+  }
+  const fps = Number(value.fps);
+  const frameCount = Number(value.frameCount);
+  const start = Number(value.start);
+  const end = Number(value.end);
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const width = Number(value.width);
+  const height = Number(value.height);
+  if (![fps, frameCount, start, end, x, y, width, height].every(Number.isFinite)) {
+    throw new Error(`overlaySequences[${index}] fields must be finite numbers.`);
+  }
+  if (width <= 0 || height <= 0 || frameCount <= 0 || fps <= 0) {
+    throw new Error(`overlaySequences[${index}] must have positive dimensions and timing.`);
+  }
+  const mimeType = value.mimeType === "image/webp" ? "image/webp" : "image/png";
+
+  return {
+    fps,
+    frameCount,
+    fileFieldPrefix: value.fileFieldPrefix,
+    start,
+    end,
+    x,
+    y,
+    width,
+    height,
+    mimeType,
+  };
+}
+
 export function parseEditorSystemExportFormData(formData: FormData): ParsedEditorSystemExportFormData {
   const project = parseJson<EditorProjectRecord>(
     formData.get(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.project),
@@ -184,6 +237,26 @@ export function parseEditorSystemExportFormData(formData: FormData): ParsedEdito
       file: fileValue,
     };
   });
+  const rawSequenceDescriptors = parseJson<unknown[]>(
+    formData.get(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlaySequences) ?? "[]",
+    "overlaySequences"
+  );
+  const sequenceDescriptors = rawSequenceDescriptors.map((value, index) => parseOverlaySequenceDescriptor(value, index));
+  const overlaySequences = sequenceDescriptors.map((descriptor, index) => {
+    const files: File[] = [];
+    for (let frameIndex = 0; frameIndex < descriptor.frameCount; frameIndex += 1) {
+      const fieldName = `${descriptor.fileFieldPrefix}_${frameIndex}`;
+      const fileValue = formData.get(fieldName);
+      if (!(fileValue instanceof File)) {
+        throw new Error(`overlaySequences[${index}] missing frame ${frameIndex}.`);
+      }
+      files.push(fileValue);
+    }
+    return {
+      descriptor,
+      files,
+    };
+  });
 
   return {
     engine: "system",
@@ -191,6 +264,7 @@ export function parseEditorSystemExportFormData(formData: FormData): ParsedEdito
     resolution: resolutionValue,
     assets,
     overlays,
+    overlaySequences,
   };
 }
 
@@ -199,6 +273,7 @@ export async function renderEditorSystemExport(
     project: EditorProjectRecord;
     assets: readonly EditorSystemExportUpload[];
     overlays: ParsedEditorSystemExportFormData["overlays"];
+    overlaySequences: ParsedEditorSystemExportFormData["overlaySequences"];
     resolution: EditorResolution;
     signal?: AbortSignal;
     onProgress?: (progress: NodeEditorExportProgress) => void;
@@ -217,8 +292,11 @@ export async function renderEditorSystemExport(
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), "clipscribe-editor-export-"));
 
   try {
+    const startTempWriteMs = performance.now();
     const preparedAssets: NodeEditorExportAsset[] = [];
     const preparedOverlays: NodeEditorExportOverlay[] = [];
+    const preparedOverlaySequences: NodeEditorExportOverlaySequence[] = [];
+    let overlayRasterPixelArea = 0;
 
     for (const [index, entry] of input.assets.entries()) {
       const bytes = new Uint8Array(await entry.file.arrayBuffer());
@@ -242,7 +320,36 @@ export async function renderEditorSystemExport(
         absolutePath,
         ...entry.descriptor,
       });
+      overlayRasterPixelArea += Math.max(1, Math.round(entry.descriptor.width)) * Math.max(1, Math.round(entry.descriptor.height));
     }
+
+    for (const [seqIndex, entry] of input.overlaySequences.entries()) {
+      const extension = entry.descriptor.mimeType === "image/webp" ? "webp" : "png";
+      const seqDirName = `seq_${String(seqIndex).padStart(3, "0")}`;
+      const sequencePath = path.join(tempRoot, "overlays", seqDirName);
+      await mkdir(sequencePath, { recursive: true });
+
+      for (const [frameIndex, file] of entry.files.entries()) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const frameFilename = `frame_${String(frameIndex + 1).padStart(5, "0")}.${extension}`;
+        await writeFile(path.join(sequencePath, frameFilename), bytes);
+      }
+
+      preparedOverlaySequences.push({
+        directoryPath: sequencePath,
+        filenamePattern: `frame_%05d.${extension}`,
+        fps: entry.descriptor.fps,
+        start: entry.descriptor.start,
+        end: entry.descriptor.end,
+        x: entry.descriptor.x,
+        y: entry.descriptor.y,
+        width: entry.descriptor.width,
+        height: entry.descriptor.height,
+      });
+      overlayRasterPixelArea += Math.max(1, Math.round(entry.descriptor.width)) * Math.max(1, Math.round(entry.descriptor.height));
+    }
+
+    const tempFileWriteMs = performance.now() - startTempWriteMs;
 
     const outputPath = path.join(
       tempRoot,
@@ -253,6 +360,7 @@ export async function renderEditorSystemExport(
       project: input.project,
       assets: preparedAssets,
       overlays: preparedOverlays,
+      overlaySequences: preparedOverlaySequences,
       resolution: input.resolution,
       outputPath,
       overwrite: true,
@@ -272,6 +380,18 @@ export async function renderEditorSystemExport(
       warnings: result.warnings,
       debugNotes: result.notes,
       debugFfmpegCommand: result.ffmpegCommandPreview,
+      encoderUsed: result.encoderUsed,
+      hardwareAccelerated: result.hardwareAccelerated,
+      timingsMs: {
+        serverFfmpeg: result.timingsMs?.serverFfmpeg,
+        tempFileWrite: Number(tempFileWriteMs.toFixed(2)),
+      },
+      counts: {
+        overlayCount: input.project.timeline.overlayItems.length,
+        atlasCount: preparedOverlays.length,
+        sequenceCount: preparedOverlaySequences.length,
+        overlayRasterPixelArea,
+      },
     };
   } catch (error) {
     if (isNodeEditorExportCanceledError(error)) {

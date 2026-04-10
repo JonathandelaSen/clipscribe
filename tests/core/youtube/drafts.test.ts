@@ -27,6 +27,13 @@ test("buildYouTubeVideoInsertRequest maps required and advanced metadata", () =>
     selfDeclaredMadeForKids: false,
     containsSyntheticMedia: true,
     recordingDate: "2026-03-10",
+    relatedVideo: {
+      videoId: "video_2",
+      title: "Long form",
+      watchUrl: "https://www.youtube.com/watch?v=video_2",
+      studioUrl: "https://studio.youtube.com/video/video_2/edit",
+      privacyStatus: "public",
+    },
     localizations: [
       { locale: "es", title: "Titulo", description: "Descripcion" },
       { locale: " ", title: "", description: "" },
@@ -46,6 +53,7 @@ test("buildYouTubeVideoInsertRequest maps required and advanced metadata", () =>
   assert.equal(result.body.status.containsSyntheticMedia, true);
   assert.equal(result.body.status.publishAt, new Date("2026-03-17T10:30").toISOString());
   assert.equal(result.body.recordingDetails?.recordingDate, "2026-03-10T00:00:00.000Z");
+  assert.equal("relatedVideo" in result.body, false);
   assert.deepEqual(result.body.localizations, {
     es: {
       title: "Titulo",
@@ -74,6 +82,7 @@ test("buildYouTubeVideoInsertRequest omits unset optional fields", () => {
   assert.equal("containsSyntheticMedia" in result.body.status, false);
   assert.equal("recordingDetails" in result.body, false);
   assert.equal("localizations" in result.body, false);
+  assert.equal("relatedVideo" in result.body, false);
 });
 
 test("buildYouTubeVideoInsertRequest preserves explicit false values", () => {

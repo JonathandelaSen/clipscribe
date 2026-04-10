@@ -13,6 +13,7 @@ import {
   CREATOR_SYSTEM_EXPORT_FORM_FIELDS,
   parseCreatorShortSystemExportResponseHeaders,
   type CreatorShortSystemExportOverlayDescriptor,
+  type CreatorShortSystemExportOverlaySequenceDescriptor,
   type CreatorShortSystemExportPayload,
 } from "@/lib/creator/system-export-contract";
 import { assertExportGeometryInvariants } from "@/lib/creator/core/export-contracts";
@@ -21,8 +22,16 @@ import { resolveCreatorSuggestedShort } from "@/lib/creator/shorts-compat";
 import { renderSubtitleAtlases } from "@/lib/creator/subtitle-canvas";
 import { trimSourceForExport } from "@/lib/creator/source-trim";
 import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
+import {
+  buildCreatorReactiveOverlayAudioAnalysis,
+  getCreatorReactiveOverlayRasterPixelArea,
+  renderCreatorReactiveOverlayFrameSequence,
+  resolveCreatorReactiveOverlayExportFps,
+  type CreatorReactiveOverlayFrameSequence,
+} from "@/lib/creator/reactive-overlays";
 import { prepareSystemExportTimelineArtifacts } from "./system-export-timeline";
 import type {
+  CreatorReactiveOverlayPresetId,
   CreatorShortEditorState,
   CreatorShortPlan,
   CreatorShortRenderResponse,
@@ -42,8 +51,9 @@ const PROGRESS = {
   trimReady: 12,
   introReady: 14,
   outroReady: 16,
-  subtitlesReady: 20,
-  renderStart: 20,
+  reactiveReady: 18,
+  subtitlesReady: 22,
+  renderStart: 22,
   renderMax: 92,
   responseRead: 95,
   packaged: 97,
@@ -94,7 +104,7 @@ function getOverlayRasterAreaPct(input: {
 }
 
 function describeOverlayRenderPath(input: {
-  kind?: "intro_overlay" | "outro_overlay" | "subtitle_atlas" | "subtitle_frame";
+  kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
   x?: number;
   y?: number;
   width?: number;
@@ -107,6 +117,9 @@ function describeOverlayRenderPath(input: {
       typeof input.height === "number"
       ? "bounded_png"
       : "fullscreen_png_legacy";
+  }
+  if (input.kind === "reactive_overlay") {
+    return "reactive_overlay_atlas";
   }
   return input.kind ?? "overlay";
 }
@@ -382,6 +395,55 @@ export async function requestSystemCreatorShortExport(
     logDebug(`Outro overlay prepared: 0 frame(s) in ${outroOverlayRenderMs}ms.`);
   }
 
+  let reactiveOverlaySequences: CreatorReactiveOverlayFrameSequence[] = [];
+  let reactiveOverlayPreparationMs = 0;
+  let reactiveOverlayRasterPixelArea = 0;
+  let reactiveOverlayExportFps = 0;
+  const reactiveOverlayPresetIds = Array.from(
+    new Set(
+      (input.editor.reactiveOverlays ?? [])
+        .map((overlay) => overlay.presetId)
+        .filter((presetId): presetId is CreatorReactiveOverlayPresetId => typeof presetId === "string")
+    )
+  );
+  if ((input.editor.reactiveOverlays?.length ?? 0) > 0) {
+    const reactiveStartedAt = nowMs();
+    reactiveOverlayExportFps = resolveCreatorReactiveOverlayExportFps(input.editor.reactiveOverlays ?? []);
+    const { decodeAudio } = await import("@/lib/audio");
+    const decodedSamples = await decodeAudio(input.sourceFile);
+    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+    const reactiveAnalysis = buildCreatorReactiveOverlayAudioAnalysis({
+      clipStartSeconds: short.startSeconds,
+      clipDurationSeconds,
+      decodedSamples,
+    });
+    reactiveOverlaySequences = await renderCreatorReactiveOverlayFrameSequence({
+      overlays: input.editor.reactiveOverlays ?? [],
+      analysis: reactiveAnalysis,
+      frameWidth: OUTPUT_WIDTH,
+      frameHeight: OUTPUT_HEIGHT,
+      fps: reactiveOverlayExportFps,
+      signal: input.renderLifecycle?.signal,
+    });
+    reactiveOverlayPreparationMs = roundMs(nowMs() - reactiveStartedAt);
+    reactiveOverlayRasterPixelArea = reactiveOverlaySequences.reduce(
+      (total, seq) => total + getCreatorReactiveOverlayRasterPixelArea({
+        width: seq.width ?? OUTPUT_WIDTH,
+        height: seq.height ?? OUTPUT_HEIGHT,
+        framesLength: seq.frames.length,
+      }),
+      0
+    );
+  }
+  emitProgress(PROGRESS.reactiveReady);
+  if (reactiveOverlaySequences[0]) {
+    logDebug(
+      `Reactive overlays prepared: count=${input.editor.reactiveOverlays?.length ?? 0}, sequences=${reactiveOverlaySequences.length}, fps=${reactiveOverlayExportFps}, presets=${reactiveOverlayPresetIds.join(",") || "none"}, analysisSource=final_mix, prep=${reactiveOverlayPreparationMs}ms, raster=${reactiveOverlayRasterPixelArea}px.`
+    );
+  } else {
+    logDebug(`Reactive overlays prepared: 0 sequences(s) in ${reactiveOverlayPreparationMs}ms.`);
+  }
+
   const semanticSubtitles = timelineArtifacts.semanticSubtitles;
   const subtitleRenderMode = timelineArtifacts.subtitleRenderMode;
   const subtitleAtlases = timelineArtifacts.subtitleAtlases;
@@ -394,10 +456,11 @@ export async function requestSystemCreatorShortExport(
     );
   }
   logDebug(
-    `Subtitle mode selected: ${subtitleRenderMode}; semantic events=${semanticSubtitles?.chunks.length ?? 0}; png atlases=${subtitleAtlases.length}; prep=${subtitlePreparationMs}ms.`
+      `Subtitle mode selected: ${subtitleRenderMode}; semantic events=${semanticSubtitles?.chunks.length ?? 0}; png atlases=${subtitleAtlases.length}; prep=${subtitlePreparationMs}ms.`
   );
 
   const overlayDescriptors: CreatorShortSystemExportOverlayDescriptor[] = [];
+  const overlaySequenceDescriptors: CreatorShortSystemExportOverlaySequenceDescriptor[] = [];
   const formData = new FormData();
   const requestAssemblyStartedAt = nowMs();
 
@@ -407,7 +470,7 @@ export async function requestSystemCreatorShortExport(
     start: number;
     end: number;
     cropExpression?: string;
-    kind?: "intro_overlay" | "outro_overlay" | "subtitle_atlas" | "subtitle_frame";
+    kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
     x?: number;
     y?: number;
     width?: number;
@@ -433,13 +496,41 @@ export async function requestSystemCreatorShortExport(
     overlayIndex++;
   };
 
+  for (const [seqIndex, seq] of reactiveOverlaySequences.entries()) {
+    const fileFieldPrefix = `overlay_seq_${seqIndex}`;
+    overlaySequenceDescriptors.push({
+      fps: seq.fps,
+      frameCount: seq.frames.length,
+      fileFieldPrefix,
+      start: seq.start,
+      end: seq.end,
+      x: typeof seq.x === "number" ? Math.max(0, Math.round(seq.x)) : 0,
+      y: typeof seq.y === "number" ? Math.max(0, Math.round(seq.y)) : 0,
+      width: typeof seq.width === "number" ? Math.max(1, Math.round(seq.width)) : OUTPUT_WIDTH,
+      height: typeof seq.height === "number" ? Math.max(1, Math.round(seq.height)) : OUTPUT_HEIGHT,
+      mimeType: "image/webp",
+    });
+
+    for (let frameIndex = 0; frameIndex < seq.frames.length; frameIndex++) {
+      const frameBuffer = seq.frames[frameIndex]?.bytes;
+      if (!frameBuffer) continue;
+      const frameName = `${fileFieldPrefix}_${frameIndex}.webp`;
+      formData.set(
+        `${fileFieldPrefix}_${frameIndex}`,
+        // @ts-expect-error File constructor is available in browser context where this runs
+        new File([frameBuffer], frameName, { type: "image/webp" }),
+        frameName
+      );
+    }
+  }
+
   for (const frame of introOverlayFrames) addOverlayFrame(frame);
   for (const frame of outroOverlayFrames) addOverlayFrame(frame);
   for (const atlas of subtitleAtlases) addOverlayFrame(atlas);
   const overlayRasterPixelArea = overlayDescriptors.reduce(
     (total, overlay) => total + getOverlayRasterPixelArea(overlay),
     0
-  );
+  ) + reactiveOverlayRasterPixelArea;
   const overlayRasterAreaPct = Number(
     ((overlayRasterPixelArea / (OUTPUT_WIDTH * OUTPUT_HEIGHT)) * 100).toFixed(2)
   );
@@ -447,6 +538,7 @@ export async function requestSystemCreatorShortExport(
   const clientTimingsBase = {
     introOverlayRender: introOverlayRenderMs,
     outroOverlayRender: outroOverlayRenderMs,
+    reactiveOverlayPreparation: reactiveOverlayPreparationMs,
     subtitlePreparation: subtitlePreparationMs,
   } as const;
   const renderRequestId = createRenderRequestId();
@@ -480,6 +572,9 @@ export async function requestSystemCreatorShortExport(
       subtitleFrameCount: subtitleAtlases.length,
       introOverlayFrameCount: introOverlayFrames.length,
       outroOverlayFrameCount: outroOverlayFrames.length,
+      reactiveOverlayFrameCount: reactiveOverlaySequences.reduce((sum, s) => sum + s.frames.length, 0),
+      reactiveOverlayCount: input.editor.reactiveOverlays?.length ?? 0,
+      reactiveOverlayPresetIds,
     },
     clientTimingsMs: clientTimingsBase,
   };
@@ -495,6 +590,9 @@ export async function requestSystemCreatorShortExport(
     );
   }
   formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, JSON.stringify(overlayDescriptors));
+  if (overlaySequenceDescriptors.length > 0) {
+    formData.set(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.overlaySequences, JSON.stringify(overlaySequenceDescriptors));
+  }
   const requestAssemblyMs = roundMs(nowMs() - requestAssemblyStartedAt);
   logDebug(`Server render request id: ${renderRequestId}.`);
   logDebug(

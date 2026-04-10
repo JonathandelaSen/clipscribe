@@ -519,6 +519,14 @@ test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for p
         description: "Descripcion",
       },
     ],
+    relatedVideo: {
+      videoId: "video_related",
+      title: "Related long-form",
+      watchUrl: "https://youtube.com/watch?v=video_related",
+      studioUrl: "https://studio.youtube.com/video/video_related/edit",
+      privacyStatus: "public",
+      publishedAt: "2026-03-20T09:00:00.000Z",
+    },
   };
   const result: YouTubePublishResult = {
     ok: true,
@@ -558,6 +566,8 @@ test("buildProjectYouTubeUploadRecord preserves the upload snapshot needed for p
   assert.equal(record.draft.publishIntent, "short");
   assert.deepEqual(record.draft.tags, ["clipscribe", "launch"]);
   assert.equal(record.draft.localizations[0]?.locale, "es");
+  assert.equal(record.draft.relatedVideo?.videoId, "video_related");
+  assert.equal(record.draft.relatedVideo?.title, "Related long-form");
   assert.equal(record.result.processingStatus, "processing");
   assert.equal(record.result.thumbnailState, "applied");
   assert.equal(record.result.captionState, "skipped");

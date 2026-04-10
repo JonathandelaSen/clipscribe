@@ -117,6 +117,17 @@ export function buildProjectYouTubeUploadRecord(input: {
         title: localization.title,
         description: localization.description,
       })),
+      relatedVideo: input.draft.relatedVideo
+        ? {
+            videoId: input.draft.relatedVideo.videoId,
+            title: input.draft.relatedVideo.title,
+            watchUrl: input.draft.relatedVideo.watchUrl,
+            studioUrl: input.draft.relatedVideo.studioUrl,
+            privacyStatus: input.draft.relatedVideo.privacyStatus,
+            publishedAt: input.draft.relatedVideo.publishedAt,
+            thumbnailUrl: input.draft.relatedVideo.thumbnailUrl,
+          }
+        : undefined,
     },
     result: {
       processingStatus: input.result.processing.processingStatus,

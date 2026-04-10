@@ -13,7 +13,7 @@ type OverlayFrame = {
   start: number;
   end: number;
   vfsPath: string;
-  kind?: "intro_overlay" | "outro_overlay" | "subtitle_atlas" | "subtitle_frame";
+  kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
   x?: number;
   y?: number;
   width?: number;

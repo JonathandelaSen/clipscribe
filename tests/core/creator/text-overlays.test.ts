@@ -65,6 +65,7 @@ test("manual editor hydration keeps overlays disabled when missing", () => {
   assert.equal(hydrated.outroOverlay?.enabled, false);
   assert.equal(hydrated.introOverlay?.text, "");
   assert.equal(hydrated.outroOverlay?.text, "");
+  assert.deepEqual(hydrated.reactiveOverlays, []);
   assert.deepEqual(hydrated.visualSource, { mode: "original" });
 });
 
@@ -137,4 +138,44 @@ test("overlay windows clamp to clip duration instead of failing", () => {
   assert.equal(window.startOffsetSeconds, 14);
   assert.equal(window.durationSeconds, 1);
   assert.equal(window.endOffsetSeconds, 15);
+});
+
+test("editor hydration keeps normalized reactive overlays", () => {
+  const hydrated = hydrateCreatorShortEditorState(
+    {
+      zoom: 1.2,
+      panX: 10,
+      panY: 0,
+      subtitleScale: 1,
+      subtitleXPositionPct: 50,
+      subtitleYOffsetPct: 78,
+      reactiveOverlays: [
+        {
+          id: "overlay_1",
+          presetId: "waveform_line",
+          startOffsetSeconds: 1,
+          durationSeconds: 2.5,
+          positionXPercent: 55,
+          positionYPercent: 74,
+          widthPercent: 68,
+          heightPercent: 16,
+          scale: 1.1,
+          opacity: 0.88,
+          tintHex: "#7CE7FF",
+          sensitivity: 1.2,
+          smoothing: 0.66,
+        },
+      ],
+    },
+    {
+      origin: "manual",
+      plan: samplePlan,
+      clipDurationSeconds: 22,
+    }
+  );
+
+  assert.equal(hydrated.reactiveOverlays?.length, 1);
+  assert.equal(hydrated.reactiveOverlays?.[0]?.id, "overlay_1");
+  assert.equal(hydrated.reactiveOverlays?.[0]?.presetId, "waveform_line");
+  assert.equal(hydrated.reactiveOverlays?.[0]?.positionXPercent, 55);
 });

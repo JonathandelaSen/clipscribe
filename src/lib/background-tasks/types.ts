@@ -19,6 +19,7 @@ export interface BackgroundTaskRecord {
   kind: BackgroundTaskKind;
   title: string;
   message?: string;
+  logLines?: string[];
   status: BackgroundTaskStatus;
   progress: number | null;
   canCancel: boolean;

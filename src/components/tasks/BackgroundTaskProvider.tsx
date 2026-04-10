@@ -169,6 +169,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
         kind: options.kind,
         title: options.title,
         message: options.message,
+        logLines: [],
         status: "queued",
         progress: 0,
         canCancel: true,

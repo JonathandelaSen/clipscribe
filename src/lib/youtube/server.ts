@@ -6,6 +6,7 @@ import type {
   YouTubeAccessTokenResponse,
   YouTubeOAuthSession,
   YouTubeOptionCatalog,
+  YouTubeRelatedVideoOption,
   YouTubeSessionStatus,
   YouTubeChannelSummary,
 } from "./types";
@@ -152,6 +153,21 @@ export async function loadConnectedYouTubeOptions(
 
   return {
     catalog: await apiClient.loadOptionCatalog(session.accessToken, regionCode),
+    nextCookieValue: resolution.nextCookieValue,
+    clearCookie: resolution.clearCookie,
+  };
+}
+
+export async function listConnectedYouTubeRelatedVideos(
+  cookieValue: string | undefined,
+  deps: ServerDeps = {}
+): Promise<{ videos: YouTubeRelatedVideoOption[]; nextCookieValue?: string; clearCookie: boolean }> {
+  const resolution = await resolveYouTubeServerSession(cookieValue, deps);
+  const session = requireConnectedSession(resolution);
+  const apiClient = deps.apiClient ?? createYouTubeApiClient(deps.fetchImpl);
+
+  return {
+    videos: await apiClient.listMyEligibleRelatedVideos(session.accessToken),
     nextCookieValue: resolution.nextCookieValue,
     clearCookie: resolution.clearCookie,
   };

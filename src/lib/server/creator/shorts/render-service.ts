@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   CREATOR_SYSTEM_EXPORT_FORM_FIELDS,
   type CreatorShortSystemExportOverlayDescriptor,
+  type CreatorShortSystemExportOverlaySequenceDescriptor,
   type CreatorShortSystemExportPayload,
   type CreatorShortSystemExportResponseMetadata,
 } from "../../../creator/system-export-contract";
@@ -13,6 +14,7 @@ import {
   exportCreatorShortWithSystemFfmpeg,
   isCreatorSystemRenderCanceledError,
   type CreatorSystemRenderOverlayInput,
+  type CreatorSystemRenderOverlaySequenceInput,
   type CreatorSystemRenderResult,
 } from "./system-render";
 import { buildAssSubtitleDocument } from "./ass-subtitles";
@@ -32,6 +34,10 @@ export interface ParsedCreatorShortSystemExportFormData {
   overlays: Array<{
     descriptor: CreatorShortSystemExportOverlayDescriptor;
     file: File;
+  }>;
+  overlaySequences?: Array<{
+    descriptor: CreatorShortSystemExportOverlaySequenceDescriptor;
+    frames: File[];
   }>;
 }
 
@@ -128,6 +134,7 @@ function parseOverlayDescriptor(value: unknown, index: number): CreatorShortSyst
   const kind =
     value.kind === "intro_overlay" ||
     value.kind === "outro_overlay" ||
+    value.kind === "reactive_overlay" ||
     value.kind === "subtitle_atlas" ||
     value.kind === "subtitle_frame"
       ? value.kind
@@ -144,6 +151,43 @@ function parseOverlayDescriptor(value: unknown, index: number): CreatorShortSyst
     width,
     height,
     cropExpression,
+  };
+}
+
+export function parseOverlaySequenceDescriptor(value: unknown, index: number): CreatorShortSystemExportOverlaySequenceDescriptor {
+  if (!isRecord(value)) throw new Error(`overlaySequences[${index}] is invalid.`);
+  if (typeof value.fileFieldPrefix !== "string" || !value.fileFieldPrefix.trim()) {
+    throw new Error(`overlaySequences[${index}].fileFieldPrefix is required.`);
+  }
+
+  const fps = Number(value.fps);
+  const frameCount = Number(value.frameCount);
+  const start = Number(value.start);
+  const end = Number(value.end);
+  const x = Number(value.x);
+  const y = Number(value.y);
+  const width = Number(value.width);
+  const height = Number(value.height);
+
+  if (![fps, frameCount, start, end, x, y, width, height].every(Number.isFinite)) {
+    throw new Error(`overlaySequences[${index}] must include finite numerical properties.`);
+  }
+
+  if (fps <= 0 || frameCount <= 0 || width <= 0 || height <= 0 || end <= start) {
+    throw new Error(`overlaySequences[${index}] has invalid dimensions or timing.`);
+  }
+
+  return {
+    fps,
+    frameCount,
+    fileFieldPrefix: value.fileFieldPrefix,
+    start,
+    end,
+    x,
+    y,
+    width,
+    height,
+    mimeType: typeof value.mimeType === "string" ? value.mimeType : "image/png",
   };
 }
 
@@ -296,12 +340,35 @@ export function parseCreatorShortSystemExportFormData(formData: FormData): Parse
     };
   });
 
+  const rawSeqStr = formData.get(CREATOR_SYSTEM_EXPORT_FORM_FIELDS.overlaySequences);
+  let overlaySequences: ParsedCreatorShortSystemExportFormData["overlaySequences"];
+  if (typeof rawSeqStr === "string" && rawSeqStr.trim()) {
+    const rawSeqDescriptors = parseJson<unknown[]>(rawSeqStr, "overlaySequences");
+    const seqDescriptors = rawSeqDescriptors.map((value, index) => parseOverlaySequenceDescriptor(value, index));
+    overlaySequences = seqDescriptors.map((descriptor, seqIndex) => {
+      const frames: File[] = [];
+      for (let i = 0; i < descriptor.frameCount; i++) {
+        const fieldName = `${descriptor.fileFieldPrefix}_${i}`;
+        const fileValue = formData.get(fieldName);
+        if (!(fileValue instanceof File)) {
+          throw new Error(`overlaySequences[${seqIndex}] frame ${i} file is required.`);
+        }
+        frames.push(fileValue);
+      }
+      return {
+        descriptor,
+        frames,
+      };
+    });
+  }
+
   return {
     engine: "system",
     payload,
     sourceFile: sourceFileValue,
     visualSourceFile: visualSourceFileValue instanceof File ? visualSourceFileValue : undefined,
     overlays,
+    overlaySequences,
   };
 }
 
@@ -313,6 +380,10 @@ export async function renderCreatorShortSystemExport(
     overlays: Array<{
       descriptor: CreatorShortSystemExportOverlayDescriptor;
       file: File;
+    }>;
+    overlaySequences?: Array<{
+      descriptor: CreatorShortSystemExportOverlaySequenceDescriptor;
+      frames: File[];
     }>;
     signal?: AbortSignal;
     formDataParseMs?: number;
@@ -380,6 +451,39 @@ export async function renderCreatorShortSystemExport(
         cropExpression: entry.descriptor.cropExpression,
       });
     }
+
+    const preparedOverlaySequences: CreatorSystemRenderOverlaySequenceInput[] = [];
+    if (input.overlaySequences) {
+      for (const [seqIndex, seqEntry] of input.overlaySequences.entries()) {
+        const seqDirName = `overlay_seq_${String(seqIndex).padStart(3, "0")}`;
+        const seqDirPath = path.join(tempRoot, "overlay_sequences", seqDirName);
+        await mkdir(seqDirPath, { recursive: true });
+
+        const extension = seqEntry.descriptor.mimeType === "image/webp" ? "webp" : "png";
+        let frameIndexOffset = 0;
+        for (const frameFile of seqEntry.frames) {
+          const frameBytes = new Uint8Array(await frameFile.arrayBuffer());
+          overlayBytesTotal += frameBytes.byteLength;
+          const frameFilename = `frame_${String(frameIndexOffset).padStart(5, "0")}.${extension}`;
+          await writeFile(path.join(seqDirPath, frameFilename), frameBytes);
+          frameIndexOffset++;
+        }
+
+        preparedOverlaySequences.push({
+          directoryPath: seqDirPath,
+          filenamePattern: `frame_%05d.${extension}`,
+          fps: seqEntry.descriptor.fps,
+          start: seqEntry.descriptor.start,
+          end: seqEntry.descriptor.end,
+          x: seqEntry.descriptor.x,
+          y: seqEntry.descriptor.y,
+          width: seqEntry.descriptor.width,
+          height: seqEntry.descriptor.height,
+          mimeType: seqEntry.descriptor.mimeType || "image/png",
+        });
+      }
+    }
+
     tempFileWriteMs = performance.now() - writeStartedAt;
     const resolvedVisualSourceKind = inferVisualSourceKind({
       payloadVisualSource: input.payload.visualSource,
@@ -500,6 +604,7 @@ export async function renderCreatorShortSystemExport(
       sourceVideoSize: input.payload.sourceVideoSize,
       geometry,
       overlays: effectiveOverlays,
+      overlaySequences: preparedOverlaySequences,
       subtitleBurnedIn: input.payload.subtitleBurnedIn,
       subtitleTrackPath,
       sourcePlaybackMode: !hasVisualOverride && sourcePlaybackProfile.mode === "still" ? "still" : "normal",
@@ -570,6 +675,9 @@ export async function renderCreatorShortSystemExport(
         overlayRasterAreaPct,
         introOverlayCount: input.payload.overlaySummary.introOverlayFrameCount,
         outroOverlayCount: input.payload.overlaySummary.outroOverlayFrameCount,
+        reactiveOverlayCount: input.payload.overlaySummary.reactiveOverlayCount,
+        reactiveOverlayFrameCount: input.payload.overlaySummary.reactiveOverlayFrameCount,
+        reactiveOverlayPresetIds: input.payload.overlaySummary.reactiveOverlayPresetIds,
       },
       debugNotes: result.notes,
       debugFfmpegCommand: result.ffmpegCommandPreview,

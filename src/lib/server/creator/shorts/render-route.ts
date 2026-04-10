@@ -72,6 +72,7 @@ export async function postCreatorShortRender(
       sourceFile: payload.sourceFile,
       visualSourceFile: payload.visualSourceFile,
       overlays: payload.overlays,
+      overlaySequences: payload.overlaySequences,
       signal: request.signal,
       formDataParseMs: Number((performance.now() - parseStartedAt).toFixed(2)),
       onProgressEvent: (event) => {

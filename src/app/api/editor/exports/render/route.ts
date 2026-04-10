@@ -69,6 +69,7 @@ export async function POST(request: Request) {
       project: payload.project,
       assets: payload.assets,
       overlays: payload.overlays,
+      overlaySequences: payload.overlaySequences,
       resolution: payload.resolution,
       signal: request.signal,
       onProgress: (progress) => {
@@ -103,6 +104,10 @@ export async function POST(request: Request) {
           warnings: result.warnings,
           debugNotes: result.debugNotes,
           debugFfmpegCommand: result.debugFfmpegCommand,
+          encoderUsed: result.encoderUsed,
+          hardwareAccelerated: result.hardwareAccelerated,
+          timingsMs: result.timingsMs,
+          counts: result.counts,
         }),
       },
     });

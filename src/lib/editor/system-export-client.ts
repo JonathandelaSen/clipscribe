@@ -2,17 +2,26 @@ import { buildEditorExportFilename } from "./export-output";
 import { filterEditorAssetsForExport } from "./export-capabilities";
 import {
   buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets,
-  getReactiveOverlayRasterPixelArea,
-  renderReactiveOverlayAtlases,
+  renderReactiveOverlayFrameSequence,
+  resolveReactiveOverlayExportFps,
+  type EditorReactiveAudioAnalysisTrack,
+  type ReactiveOverlayFrameSequence,
 } from "./reactive-overlays";
 import {
   EDITOR_SYSTEM_EXPORT_FORM_FIELDS,
   parseEditorSystemExportResponseHeaders,
   type EditorSystemExportAssetDescriptor,
   type EditorSystemExportOverlayDescriptor,
+  type EditorSystemExportOverlaySequenceDescriptor,
   type SystemEditorExportAssetRecord,
 } from "./system-export-contract";
-import type { EditorProjectRecord, EditorResolution, ResolvedEditorAsset } from "./types";
+import type {
+  EditorExportCounts,
+  EditorExportTimingsMs,
+  EditorProjectRecord,
+  EditorResolution,
+  ResolvedEditorAsset,
+} from "./types";
 import { getEditorOutputDimensions } from "./core/aspect-ratio";
 
 export interface SystemEditorExportClientResult {
@@ -24,6 +33,21 @@ export interface SystemEditorExportClientResult {
   warnings: string[];
   debugNotes: string[];
   debugFfmpegCommand: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: EditorExportTimingsMs;
+  counts?: EditorExportCounts;
+}
+
+interface EditorExportProgressPollEvent {
+  index: number;
+  createdAt: number;
+  elapsedMs: number;
+  stage: string;
+  message: string;
+  progressPct?: number;
+  processedSeconds?: number;
+  durationSeconds?: number;
 }
 
 interface EditorExportProgressPollSnapshot {
@@ -33,6 +57,18 @@ interface EditorExportProgressPollSnapshot {
   progressPct?: number;
   errorMessage?: string;
   cursor: number;
+  events: EditorExportProgressPollEvent[];
+}
+
+function formatServerProgressLog(event: EditorExportProgressPollEvent) {
+  const parts = [`server +${(event.elapsedMs / 1000).toFixed(2)}s`, `stage=${event.stage}`];
+  if (typeof event.progressPct === "number") {
+    parts.push(`progress=${event.progressPct.toFixed(1)}%`);
+  }
+  if (typeof event.processedSeconds === "number" && typeof event.durationSeconds === "number") {
+    parts.push(`${event.processedSeconds.toFixed(2)}s/${event.durationSeconds.toFixed(2)}s`);
+  }
+  return `Server event (${parts.join(", ")}): ${event.message}`;
 }
 
 function serializeAssetRecord(asset: ResolvedEditorAsset["asset"]): SystemEditorExportAssetRecord {
@@ -74,9 +110,18 @@ export async function requestSystemEditorExport(input: {
   project: EditorProjectRecord;
   resolvedAssets: ResolvedEditorAsset[];
   resolution: EditorResolution;
+  reactiveOverlayAnalysis?: EditorReactiveAudioAnalysisTrack | null;
+  reactiveOverlaySequences?: ReactiveOverlayFrameSequence[] | null;
+  analysisReuseWaitMs?: number;
+  onReactiveOverlaySequencesPrepared?: (sequences: ReactiveOverlayFrameSequence[]) => void;
   signal?: AbortSignal;
   onServerProgress?: (progressPct: number) => void;
+  onDebugLog?: (message: string) => void;
 }): Promise<SystemEditorExportClientResult> {
+  const totalStartedAt = performance.now();
+  const logDebug = (message: string) => {
+    input.onDebugLog?.(message);
+  };
   const relevantAssets = filterEditorAssetsForExport(input.project, input.resolvedAssets).filter(
     (entry): entry is ResolvedEditorAsset & { file: File } => Boolean(entry.file)
   );
@@ -85,6 +130,13 @@ export async function requestSystemEditorExport(input: {
   const formData = new FormData();
   const requestId = createRenderRequestId();
   const localDebugNotes: string[] = [];
+  let localOverlayPreparationMs = 0;
+  let localOverlayRasterPixelArea = 0;
+  let localOverlaySequenceCount = 0;
+
+  logDebug(
+    `Export started for ${input.project.name}: resolution=${input.resolution}, assets=${relevantAssets.length}, overlays=${input.project.timeline.overlayItems.length}.`
+  );
 
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.requestId, requestId);
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.project, JSON.stringify(input.project));
@@ -104,47 +156,64 @@ export async function requestSystemEditorExport(input: {
 
   if (input.project.timeline.overlayItems.length > 0) {
     const overlayStartedAt = performance.now();
-    const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
-    const analysis = await buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets({
-      project: input.project,
-      resolvedAssets: relevantAssets,
-      signal: input.signal,
-    });
-    const overlayAtlases = await renderReactiveOverlayAtlases({
-      project: input.project,
-      overlayItems: input.project.timeline.overlayItems,
-      analysis,
-      outputWidth: width,
-      outputHeight: height,
-      signal: input.signal,
-    });
-    let overlayRasterPixelArea = 0;
-    overlayAtlases.forEach((atlas, index) => {
-      const fileField = `overlay_${index}`;
-      const filename = `${String(index).padStart(3, "0")}.png`;
-      const pngBytes = new Uint8Array(atlas.pngBytes);
-      overlayRasterPixelArea += getReactiveOverlayRasterPixelArea(atlas);
-      overlayDescriptors.push({
-        start: atlas.start,
-        end: atlas.end,
-        fileField,
-        filename,
-        x: atlas.x,
-        y: atlas.y,
-        width: atlas.width,
-        height: atlas.height,
-        cropExpression: atlas.cropExpression,
-      });
-      formData.set(fileField, new File([pngBytes], filename, { type: "image/png" }), filename);
-    });
-    formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, JSON.stringify(overlayDescriptors));
-    localDebugNotes.push(
-      `Reactive overlays prepared in ${Math.round(performance.now() - overlayStartedAt)}ms: overlayCount=${input.project.timeline.overlayItems.length}, atlases=${overlayAtlases.length}, analysisSource=final_mix, overlayRasterPixelArea=${overlayRasterPixelArea}px.`
+    const reactiveOverlayExportFps = resolveReactiveOverlayExportFps(input.project.timeline.overlayItems);
+    logDebug(
+      `Preparing reactive overlays: count=${input.project.timeline.overlayItems.length}, fps=${reactiveOverlayExportFps}, analysisSource=final_mix.`
     );
+    const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
+    const analysis =
+      input.reactiveOverlayAnalysis ??
+      (await buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets({
+        project: input.project,
+        resolvedAssets: relevantAssets,
+        signal: input.signal,
+      }));
+    const overlaySequences =
+      input.reactiveOverlaySequences ??
+      (await renderReactiveOverlayFrameSequence({
+        project: input.project,
+        overlayItems: input.project.timeline.overlayItems,
+        analysis,
+        outputWidth: width,
+        outputHeight: height,
+        fps: reactiveOverlayExportFps,
+        signal: input.signal,
+      }));
+    if (!input.reactiveOverlaySequences) {
+      input.onReactiveOverlaySequencesPrepared?.(overlaySequences);
+    }
+    const sequenceDescriptors: EditorSystemExportOverlaySequenceDescriptor[] = [];
+    overlaySequences.forEach((sequence, index) => {
+      const fileFieldPrefix = `overlay_seq_${index}`;
+      localOverlayRasterPixelArea += sequence.width * sequence.height * sequence.frames.length;
+      sequenceDescriptors.push({
+        fps: sequence.fps,
+        frameCount: sequence.frames.length,
+        fileFieldPrefix,
+        start: sequence.start,
+        end: sequence.end,
+        x: sequence.x,
+        y: sequence.y,
+        width: sequence.width,
+        height: sequence.height,
+        mimeType: sequence.mimeType,
+      });
+      sequence.frames.forEach((frame, frameIndex) => {
+        const fieldName = `${fileFieldPrefix}_${frameIndex}`;
+        formData.set(fieldName, new File([frame.bytes as any], frame.filename, { type: sequence.mimeType }), frame.filename);
+      });
+    });
+    localOverlaySequenceCount = overlaySequences.length;
+    formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlaySequences, JSON.stringify(sequenceDescriptors));
+    localOverlayPreparationMs = Math.round(performance.now() - overlayStartedAt);
+    const overlayPrepMessage = `Reactive overlays prepared in ${localOverlayPreparationMs}ms: overlayCount=${input.project.timeline.overlayItems.length}, sequences=${overlaySequences.length}, fps=${reactiveOverlayExportFps}, analysisSource=final_mix, overlayRasterPixelArea=${localOverlayRasterPixelArea}px.`;
+    localDebugNotes.push(overlayPrepMessage);
+    logDebug(overlayPrepMessage);
   }
 
   let pollCursor = -1;
   let pollingActive = true;
+  let pollingFailureLogged = false;
   const pollProgress = async () => {
     while (pollingActive && !input.signal?.aborted) {
       try {
@@ -159,8 +228,23 @@ export async function requestSystemEditorExport(input: {
         if (response.ok) {
           const snapshot = (await response.json()) as EditorExportProgressPollSnapshot;
           pollCursor = snapshot.cursor;
+          for (const event of snapshot.events) {
+            logDebug(formatServerProgressLog(event));
+            if (typeof event.progressPct === "number" && Number.isFinite(event.progressPct)) {
+              input.onServerProgress?.(event.progressPct);
+            }
+          }
           if (typeof snapshot.progressPct === "number" && Number.isFinite(snapshot.progressPct)) {
             input.onServerProgress?.(snapshot.progressPct);
+          }
+          if (
+            snapshot.status &&
+            snapshot.status !== "pending" &&
+            snapshot.status !== "running" &&
+            snapshot.errorMessage &&
+            snapshot.events.length === 0
+          ) {
+            logDebug(`Server render status=${snapshot.status}: ${snapshot.errorMessage}`);
           }
           if (snapshot.status === "completed" || snapshot.status === "failed" || snapshot.status === "canceled") {
             return;
@@ -170,6 +254,10 @@ export async function requestSystemEditorExport(input: {
         if (input.signal?.aborted) {
           return;
         }
+        if (!pollingFailureLogged) {
+          pollingFailureLogged = true;
+          logDebug("Server progress polling temporarily unavailable.");
+        }
       }
 
       const shouldContinue = await waitForDelayOrAbort(650, input.signal);
@@ -178,11 +266,14 @@ export async function requestSystemEditorExport(input: {
   };
   const pollPromise = pollProgress();
 
+  logDebug("POST /api/editor/exports/render started.");
+  const uploadStartedAt = performance.now();
   const response = await fetch("/api/editor/exports/render", {
     method: "POST",
     body: formData,
     signal: input.signal,
   });
+  const uploadFinishedAt = performance.now();
   pollingActive = false;
   await pollPromise.catch(() => undefined);
 
@@ -201,6 +292,7 @@ export async function requestSystemEditorExport(input: {
       }
     }
 
+    logDebug(`Export failed: ${message}`);
     throw new Error(message);
   }
 
@@ -218,6 +310,12 @@ export async function requestSystemEditorExport(input: {
     type: response.headers.get("content-type") || "video/mp4",
   });
   input.onServerProgress?.(100);
+  logDebug(
+    `Render complete: ${metadata.filename}, ${metadata.sizeBytes || file.size}B, ${metadata.width}x${metadata.height}, duration=${metadata.durationSeconds.toFixed(2)}s.`
+  );
+  const serverFfmpegMs = metadata.timingsMs?.serverFfmpeg ?? 0;
+  const totalMs = Number((performance.now() - totalStartedAt).toFixed(2));
+  const uploadMs = Number(Math.max(0, uploadFinishedAt - uploadStartedAt - serverFfmpegMs).toFixed(2));
 
   return {
     file,
@@ -228,5 +326,20 @@ export async function requestSystemEditorExport(input: {
     warnings: metadata.warnings,
     debugNotes: [...localDebugNotes, ...metadata.debugNotes],
     debugFfmpegCommand: metadata.debugFfmpegCommand,
+    encoderUsed: metadata.encoderUsed,
+    hardwareAccelerated: metadata.hardwareAccelerated,
+    timingsMs: {
+      analysisReuseWait: input.analysisReuseWaitMs ? Number(input.analysisReuseWaitMs.toFixed(2)) : undefined,
+      overlayPreparation: localOverlayPreparationMs || undefined,
+      upload: uploadMs || undefined,
+      serverFfmpeg: metadata.timingsMs?.serverFfmpeg,
+      total: totalMs,
+    },
+    counts: {
+      overlayCount: input.project.timeline.overlayItems.length,
+      atlasCount: metadata.counts?.atlasCount,
+      sequenceCount: localOverlaySequenceCount || metadata.counts?.sequenceCount,
+      overlayRasterPixelArea: localOverlayRasterPixelArea || metadata.counts?.overlayRasterPixelArea,
+    },
   };
 }

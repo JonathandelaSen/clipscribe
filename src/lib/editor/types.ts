@@ -228,6 +228,10 @@ export interface EditorExportRecord {
   error?: string;
   debugFfmpegCommand?: string[];
   debugNotes?: string[];
+  encoderUsed?: string;
+  hardwareAccelerated?: boolean;
+  timingsMs?: EditorExportTimingsMs;
+  counts?: EditorExportCounts;
 }
 
 export interface TimelineClipPlacement {
@@ -266,4 +270,20 @@ export interface ResolvedEditorAsset {
   asset: EditorAssetRecord;
   file: File | null;
   missing: boolean;
+}
+
+export interface EditorExportTimingsMs {
+  analysisReuseWait?: number;
+  overlayPreparation?: number;
+  upload?: number;
+  serverFfmpeg?: number;
+  tempFileWrite?: number;
+  total?: number;
+}
+
+export interface EditorExportCounts {
+  overlayCount?: number;
+  atlasCount?: number;
+  sequenceCount?: number;
+  overlayRasterPixelArea?: number;
 }
