@@ -1518,7 +1518,7 @@ function toggleBlock(list: CreatorVideoInfoBlock[], block: CreatorVideoInfoBlock
 }
 
 type CreatorToolMode = "video_info" | "clip_lab";
-type HubView = "start" | "ai_lab" | "editor";
+type HubView = "start" | "editor";
 
 type CreatorHubProps = {
   initialTool?: CreatorToolMode;
@@ -2047,7 +2047,7 @@ export function CreatorHub({
     visualSourceMode === "asset" ? isVisualMediaPreviewLoading || (hasVisualOverride && !visualMediaUrl) : isMediaPreviewLoading;
 
   useEffect(() => {
-    if (hubView !== "start" && hubView !== "ai_lab") {
+    if (hubView !== "start") {
       setActiveSuggestionPreviewProjectId("");
     }
   }, [hubView]);
@@ -2930,6 +2930,11 @@ export function CreatorHub({
     }
 
     await runClipLabGeneration();
+  };
+
+  const handleOpenAiMagicClips = () => {
+    if (isGeneratingShorts) return;
+    void handleGenerateClipLab();
   };
 
   const buildCurrentShortProjectRecord = useCallback(
@@ -3821,56 +3826,7 @@ export function CreatorHub({
               {pageDescription}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            {isToolLocked && (
-              <Link href="/creator">
-                <Button
-                  variant="ghost"
-                  className={cn(
-                    "text-white/85 border",
-                    isVideoInfoPage
-                      ? "bg-emerald-400/8 border-emerald-300/20 hover:bg-emerald-300/12"
-                      : "bg-orange-400/8 border-orange-300/20 hover:bg-orange-300/12"
-                  )}
-                >
-                  <Sparkles className="w-4 h-4 mr-2" /> Tool Hub
-                </Button>
-              </Link>
-            )}
-            {isToolLocked && (
-              <Link href={isVideoInfoPage ? "/creator/shorts" : "/creator/video-info"}>
-                <Button
-                  variant="ghost"
-                  className={cn(
-                    "text-white/85 border",
-                    isVideoInfoPage
-                      ? "bg-white/5 border-cyan-300/20 hover:bg-cyan-400/10"
-                      : "bg-white/5 border-fuchsia-300/20 hover:bg-fuchsia-400/10"
-                  )}
-                >
-                  {isVideoInfoPage ? (
-                    <>
-                      <Clapperboard className="w-4 h-4 mr-2" /> Shorts Page
-                    </>
-                  ) : (
-                    <>
-                      <Lightbulb className="w-4 h-4 mr-2" /> Info Page
-                    </>
-                  )}
-                </Button>
-              </Link>
-            )}
-            <Link href="/">
-              <Button variant="ghost" className="bg-white/5 hover:bg-white/10 text-white/80">
-                <ArrowLeft className="w-4 h-4 mr-2" /> Home
-              </Button>
-            </Link>
-            <Link href="/history">
-              <Button variant="ghost" className="bg-white/5 hover:bg-white/10 text-white/80">
-                <Layers className="w-4 h-4 mr-2" /> History
-              </Button>
-            </Link>
-          </div>
+          {/* Navigation buttons removed */}
         </div>
 
         <div className="w-full">
@@ -4523,7 +4479,7 @@ export function CreatorHub({
 
                   <Card 
                     className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
-                    onClick={() => setHubView("ai_lab")}
+                    onClick={handleOpenAiMagicClips}
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-fuchsia-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
                     <CardHeader>
@@ -4611,76 +4567,6 @@ export function CreatorHub({
                     />
                   </div>
                 )}
-              </div>
-            )}
-
-            {activeTool === "clip_lab" && hubView === "ai_lab" && (
-              <div className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <Button variant="ghost" className="text-white/70 hover:text-white hover:bg-white/10 -ml-3" onClick={() => setHubView("start")}>
-                    <ArrowLeft className="w-4 h-4 mr-2" /> Back
-                  </Button>
-                  <TooltipProvider delayDuration={0}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <span className="inline-block cursor-not-allowed">
-                          <Button
-                            onClick={handleGenerateClipLab}
-                            disabled={!canAnalyzeWithAI || isAnalyzing}
-                            className="text-black font-semibold bg-gradient-to-r from-orange-500 to-fuchsia-400 hover:from-orange-400 hover:to-fuchsia-300 shadow-lg"
-                            style={{ pointerEvents: (!canAnalyzeWithAI || isAnalyzing) ? 'none' : 'auto' }}
-                          >
-                            {isAnalyzing ? (
-                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            ) : (
-                              <Flame className="w-4 h-4 mr-2" />
-                            )}
-                            {matchingAiSuggestionGenerations.length > 0 || aiSuggestionsByGeneration.length > 0
-                              ? "Generate More Clips"
-                              : "Generate Clips"}
-                          </Button>
-                        </span>
-                      </TooltipTrigger>
-                      {!canAnalyzeWithAI && (
-                        <TooltipContent>
-                          <p>Please configure your {getCreatorProviderLabel(resolvedShortsProvider)} API key in settings</p>
-                        </TooltipContent>
-                      )}
-                    </Tooltip>
-                  </TooltipProvider>
-                </div>
-                <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
-                  <CardHeader>
-                    <CardTitle className="flex items-center gap-2 text-2xl"><Flame className="w-6 h-6 text-orange-300" /> AI Magic Clips</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4 max-h-[42rem] overflow-auto pr-1">
-                    {matchingAiSuggestionGenerations.length > 0 ? (
-                      <AiSuggestionBatchGroups
-                        groups={matchingAiSuggestionGenerations}
-                        getTranscriptPreview={resolveAiSuggestionTranscriptPreview}
-                        onOpenEditor={(project) => {
-                          applySavedShortProject(project);
-                          setHubView("editor");
-                        }}
-                        onDeleteProject={(project) => void handleDeleteShortProject(project)}
-                        onDeleteGeneration={(generationId, generationLabel) =>
-                          void handleDeleteAiSuggestionGeneration(generationId, generationLabel)
-                        }
-                        activePreviewProjectId={activeSuggestionPreviewProjectId}
-                        onTogglePreview={handleToggleAiSuggestionPreview}
-                        previewSourceUrl={mediaUrl}
-                        previewSourceFilename={mediaFilename}
-                        previewSourceIsVideo={isVideoMedia}
-                        isPreviewSourceLoading={isMediaPreviewLoading}
-                      />
-                    ) : (
-                      <div className="rounded-xl border border-dashed border-white/15 bg-black/20 p-8 text-center text-sm text-white/60">
-                        <Flame className="w-8 h-8 mx-auto text-white/20 mb-3" />
-                        Run <span className="text-white font-semibold">Generate Clip Lab</span> to save your first AI suggestion batch.
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
               </div>
             )}
 
