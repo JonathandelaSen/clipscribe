@@ -17,11 +17,13 @@ import {
   resolveMatchingVideoInfoRecord,
   resolveYouTubeShortEligibility,
   resolveInitialYouTubePublishSelection,
+  resolveYouTubeShortExportForProjectAsset,
   resolveYouTubePublishView,
   YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
 } from "../../../src/lib/creator/youtube-publish";
 import type { YouTubePublishResult, YouTubeUploadDraft } from "../../../src/lib/youtube/types";
 import type { CreatorVideoInfoProjectRecord } from "../../../src/lib/creator/types";
+import type { CreatorShortProjectRecord } from "../../../src/lib/creator/storage";
 
 function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetRecord {
   return {
@@ -51,6 +53,8 @@ function createExport(overrides: Partial<ProjectExportRecord> = {}): ProjectExpo
     id: overrides.id ?? "export_1",
     projectId: overrides.projectId ?? "project_1",
     kind: overrides.kind ?? "short",
+    shortProjectId: overrides.shortProjectId,
+    shortProjectName: overrides.shortProjectName,
     createdAt: overrides.createdAt ?? 2_000,
     status: overrides.status ?? "completed",
     sourceAssetId: overrides.sourceAssetId ?? "asset_1",
@@ -58,6 +62,10 @@ function createExport(overrides: Partial<ProjectExportRecord> = {}): ProjectExpo
     mimeType: overrides.mimeType ?? "video/mp4",
     sizeBytes: overrides.sizeBytes ?? 2048,
     outputAssetId: overrides.outputAssetId ?? "asset_1",
+    clip: overrides.clip,
+    plan: overrides.plan,
+    short: overrides.short,
+    editor: overrides.editor,
   };
 }
 
@@ -99,6 +107,72 @@ function createVideoInfoRecord(overrides: Partial<CreatorVideoInfoProjectRecord>
         detectedTheme: "Testing",
       },
     },
+  };
+}
+
+function createShortProject(overrides: Partial<CreatorShortProjectRecord> = {}): CreatorShortProjectRecord {
+  const short = overrides.short ?? {
+    id: "short_1",
+    startSeconds: 0,
+    endSeconds: 25,
+    durationSeconds: 25,
+    score: 0.88,
+    title: "Linked short title",
+    reason: "Reason",
+    caption: "Linked short caption #shorts",
+    openingText: "Opening",
+    endCardText: "Outro",
+    sourceChunkIndexes: [0],
+    suggestedSubtitleLanguage: "en",
+    editorPreset: {
+      aspectRatio: "9:16",
+      resolution: "1080x1920",
+      subtitleStyle: "clean_caption",
+      safeTopPct: 10,
+      safeBottomPct: 14,
+      targetDurationRange: [20, 45],
+    },
+  };
+  const plan = overrides.plan ?? {
+    id: short.id,
+    clipId: short.id,
+    title: short.title,
+    caption: short.caption,
+    openingText: short.openingText,
+    endCardText: short.endCardText,
+    editorPreset: short.editorPreset,
+  };
+  return {
+    id: overrides.id ?? "short_project_1",
+    projectId: overrides.projectId ?? "project_1",
+    sourceAssetId: overrides.sourceAssetId ?? "source_asset_1",
+    sourceFilename: overrides.sourceFilename ?? "source.mp4",
+    transcriptId: overrides.transcriptId ?? "transcript_1",
+    subtitleId: overrides.subtitleId ?? "subtitle_1",
+    clipId: overrides.clipId ?? short.id,
+    planId: overrides.planId ?? plan.id,
+    shortId: overrides.shortId ?? short.id,
+    name: overrides.name ?? "Linked AI Suggestion",
+    clip: overrides.clip ?? {
+      id: short.id,
+      startSeconds: short.startSeconds,
+      endSeconds: short.endSeconds,
+      durationSeconds: short.durationSeconds,
+      score: short.score,
+      title: short.title,
+      hook: short.openingText,
+      reason: short.reason,
+      punchline: short.endCardText,
+      sourceChunkIndexes: short.sourceChunkIndexes,
+      suggestedSubtitleLanguage: short.suggestedSubtitleLanguage,
+    },
+    plan,
+    short,
+    editor: overrides.editor ?? ({} as CreatorShortProjectRecord["editor"]),
+    createdAt: overrides.createdAt ?? 1_000,
+    updatedAt: overrides.updatedAt ?? 1_000,
+    status: overrides.status ?? "exported",
+    origin: overrides.origin ?? "ai_suggestion",
   };
 }
 
@@ -350,6 +424,85 @@ test("getEligibleYouTubeProjectExports preserves short suggestion metadata for p
   assert.equal(result?.shortProjectId, "short_project_1");
   assert.equal(result?.short?.title, "Short suggestion title");
   assert.equal(result?.displayName, "Gemma 4 resumen");
+});
+
+test("getEligibleYouTubeProjectExports falls back to linked short project metadata for short exports", () => {
+  const asset = createAsset();
+  const assetsById = new Map<string, ProjectAssetRecord>([[asset.id, asset]]);
+  const linkedShortProject = createShortProject({
+    id: "short_project_1",
+    name: "Se puede psicoanalizar a una IA",
+    short: {
+      id: "short_ia",
+      startSeconds: 0,
+      endSeconds: 25,
+      durationSeconds: 25,
+      score: 0.88,
+      title: "Short-specific AI title",
+      reason: "Reason",
+      caption: "Short-specific AI caption #shorts",
+      openingText: "Opening",
+      endCardText: "Outro",
+      sourceChunkIndexes: [0],
+      suggestedSubtitleLanguage: "es",
+      editorPreset: {
+        aspectRatio: "9:16",
+        resolution: "1080x1920",
+        subtitleStyle: "clean_caption",
+        safeTopPct: 10,
+        safeBottomPct: 14,
+        targetDurationRange: [20, 45],
+      },
+    },
+  });
+  const exportRecord = createExport({
+    id: "export_short_ai",
+    kind: "short",
+    outputAssetId: asset.id,
+    shortProjectId: linkedShortProject.id,
+  });
+
+  const [result] = getEligibleYouTubeProjectExports(
+    [exportRecord],
+    assetsById,
+    new Map([[linkedShortProject.id, linkedShortProject]])
+  );
+
+  assert.equal(result?.shortProjectId, linkedShortProject.id);
+  assert.equal(result?.short?.title, "Short-specific AI title");
+  assert.equal(result?.plan?.caption, "Short-specific AI caption #shorts");
+  assert.equal(result?.displayName, "Se puede psicoanalizar a una IA");
+});
+
+test("resolveYouTubeShortExportForProjectAsset finds the short export that produced a selected project asset", () => {
+  const shortAsset = createAsset({ id: "asset_short", createdAt: 3_000 });
+  const timelineAsset = createAsset({ id: "asset_timeline", createdAt: 2_000 });
+  const assetsById = new Map<string, ProjectAssetRecord>([
+    [shortAsset.id, shortAsset],
+    [timelineAsset.id, timelineAsset],
+  ]);
+  const exports = getEligibleYouTubeProjectExports(
+    [
+      createExport({ id: "export_short", kind: "short", outputAssetId: shortAsset.id, createdAt: 3_000 }),
+      createExport({ id: "export_timeline", kind: "timeline", outputAssetId: timelineAsset.id, createdAt: 2_000 }),
+    ],
+    assetsById
+  );
+
+  assert.equal(
+    resolveYouTubeShortExportForProjectAsset({
+      assetId: shortAsset.id,
+      exports,
+    })?.exportId,
+    "export_short"
+  );
+  assert.equal(
+    resolveYouTubeShortExportForProjectAsset({
+      assetId: timelineAsset.id,
+      exports,
+    }),
+    null
+  );
 });
 
 test("getEligibleYouTubeProjectAssets only returns project videos backed by blobs", () => {

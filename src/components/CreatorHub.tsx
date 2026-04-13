@@ -131,7 +131,6 @@ import {
   type CreatorReactiveOverlayFrame,
 } from "@/lib/creator/reactive-overlays";
 import {
-  COMMON_SUBTITLE_STYLE_PRESETS,
   CREATOR_SUBTITLE_STYLE_LABELS,
   cssRgbaFromHex,
   cssTextShadowFromStyle,
@@ -141,7 +140,6 @@ import {
   wrapSubtitleLines,
 } from "@/lib/creator/subtitle-style";
 import {
-  COMMON_TEXT_OVERLAY_STYLE_PRESETS,
   CREATOR_TEXT_OVERLAY_STYLE_LABELS,
   cssTextShadowFromTextOverlayStyle,
   getDefaultCreatorTextOverlayStyle,
@@ -572,33 +570,6 @@ function TextOverlayEditorCard({
         Effective timing: {effectiveWindow.enabled
           ? `${effectiveWindow.startOffsetSeconds.toFixed(1)}s → ${effectiveWindow.endOffsetSeconds.toFixed(1)}s`
           : "Disabled or empty"}
-      </div>
-
-      <div className="space-y-3">
-        <div className="text-sm font-medium text-white/82">Quick styles</div>
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-          {COMMON_TEXT_OVERLAY_STYLE_PRESETS.map((quick) => (
-            <button
-              key={quick.id}
-              type="button"
-              onClick={() => onChange((prev) => ({ ...prev, style: { ...quick.style } }))}
-              className="rounded-2xl border border-white/10 bg-black/35 p-3 text-left transition-colors hover:bg-white/[0.05] hover:border-white/20"
-            >
-              <div className="mb-3 rounded-xl border border-white/10 bg-[linear-gradient(135deg,rgba(10,18,30,0.96),rgba(18,38,62,0.88)_52%,rgba(107,33,168,0.25))] px-4 py-7 text-center">
-                <TextOverlayPreviewText
-                  text="Title Goes Here"
-                  overlayStyle={quick.style}
-                  fontSizePx={20}
-                  lineHeightPx={22}
-                  borderWidthPx={Math.max(1, quick.style.borderWidth * 0.6)}
-                  shadowScale={0.65}
-                />
-              </div>
-              <div className="text-sm font-semibold text-white/90">{quick.name}</div>
-              <div className="mt-1 text-xs leading-relaxed text-white/55">{quick.description}</div>
-            </button>
-          ))}
-        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -4583,7 +4554,7 @@ export function CreatorHub({
                     onCancel={activeShortExportTask.canCancel ? handleCancelShortExport : undefined}
                   />
                 ) : null}
-                <div className="grid grid-cols-1 xl:grid-cols-[280px_1fr] 2xl:grid-cols-[320px_1fr] gap-6 items-start">
+                <div className="grid grid-cols-1 gap-6 items-start min-[1680px]:grid-cols-[240px_minmax(0,1fr)] min-[1880px]:grid-cols-[280px_minmax(0,1fr)]">
 
                 <div className="space-y-6">
                   <Card className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl">
@@ -4603,7 +4574,13 @@ export function CreatorHub({
                         </div>
                       )}
 
-                            <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-1">
+                            <div
+                              className={cn(
+                                "grid gap-2",
+                                "max-[1679px]:grid-flow-col max-[1679px]:auto-cols-[220px] max-[1679px]:grid-rows-1 max-[1679px]:overflow-x-auto max-[1679px]:pb-2",
+                                "min-[1680px]:max-h-[60vh] min-[1680px]:grid-cols-1 min-[1680px]:overflow-y-auto min-[1680px]:pr-1"
+                              )}
+                            >
                         {savedShortProjects.map((project) => {
                           const isActive = activeSavedShortProjectId === project.id;
                           return (
@@ -4611,7 +4588,7 @@ export function CreatorHub({
                               key={project.id}
                               onClick={() => applySavedShortProject(project)}
                               className={cn(
-                                "rounded-xl border p-3 cursor-pointer transition-colors hover:bg-white/10",
+                                "min-w-0 rounded-xl border p-3 cursor-pointer transition-colors hover:bg-white/10",
                                 isActive ? "border-emerald-300/40 bg-emerald-400/10" : "border-white/10 bg-black/20"
                               )}
                             >
@@ -4652,8 +4629,8 @@ export function CreatorHub({
                     <CardTitle className="flex items-center gap-2"><Clapperboard className="w-5 h-5 text-fuchsia-300" /> Vertical Editor + Export</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-5">
-                    <div className="grid grid-cols-1 xl:grid-cols-[380px_1fr] 2xl:grid-cols-[440px_1fr] gap-8">
-                      <div className="space-y-3 sticky top-6 self-start">
+                    <div className="grid grid-cols-1 gap-6 min-[1500px]:grid-cols-[minmax(320px,360px)_minmax(0,1fr)] min-[1800px]:grid-cols-[420px_minmax(0,1fr)]">
+                      <div className="space-y-3 self-start min-[1500px]:sticky min-[1500px]:top-6">
                         <input
                           ref={visualAssetInputRef}
                           type="file"
@@ -4935,18 +4912,18 @@ export function CreatorHub({
 
                       <div className="space-y-4 min-w-0">
                         <Tabs defaultValue="subtitles" className="w-full">
-                          <TabsList className="flex w-full mb-6 bg-black/40 border border-white/10 p-1.5 rounded-2xl h-auto gap-1 shadow-2xl relative overflow-hidden">
+                          <TabsList className="grid w-full grid-cols-2 gap-1 overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-1.5 shadow-2xl h-auto mb-6 relative min-[1180px]:grid-cols-4">
                             <div className="absolute inset-0 bg-gradient-to-r from-fuchsia-500/5 via-cyan-500/5 to-transparent pointer-events-none" />
-                            <TabsTrigger value="framing" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(52,211,153,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-emerald-400/30 data-[state=active]:text-emerald-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(52,211,153,0.15)] font-medium tracking-wide relative">
+                            <TabsTrigger value="framing" className="min-w-0 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(52,211,153,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-emerald-400/30 data-[state=active]:text-emerald-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(52,211,153,0.15)] font-medium tracking-wide relative">
                               <span className="relative z-10">Framing & Trim</span>
                             </TabsTrigger>
-                            <TabsTrigger value="copy" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(251,191,36,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-amber-400/30 data-[state=active]:text-amber-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(251,191,36,0.15)] font-medium tracking-wide relative">
+                            <TabsTrigger value="copy" className="min-w-0 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(251,191,36,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-amber-400/30 data-[state=active]:text-amber-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(251,191,36,0.15)] font-medium tracking-wide relative">
                               <span className="relative z-10">Copy & Titles</span>
                             </TabsTrigger>
-                            <TabsTrigger value="subtitles" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(34,211,238,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-cyan-400/30 data-[state=active]:text-cyan-50 text-cyan-50/50 hover:text-cyan-50 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(34,211,238,0.15)] font-medium tracking-wide relative">
+                            <TabsTrigger value="subtitles" className="min-w-0 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(34,211,238,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-cyan-400/30 data-[state=active]:text-cyan-50 text-cyan-50/50 hover:text-cyan-50 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(34,211,238,0.15)] font-medium tracking-wide relative">
                                <span className="relative z-10">Subtitles</span>
                             </TabsTrigger>
-                            <TabsTrigger value="export" className="flex-1 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(232,121,249,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-fuchsia-400/30 data-[state=active]:text-fuchsia-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(232,121,249,0.15)] font-medium tracking-wide relative">
+                            <TabsTrigger value="export" className="min-w-0 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(232,121,249,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-fuchsia-400/30 data-[state=active]:text-fuchsia-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(232,121,249,0.15)] font-medium tracking-wide relative">
                                <span className="relative z-10">Save & Export</span>
                             </TabsTrigger>
                           </TabsList>
@@ -5626,35 +5603,6 @@ export function CreatorHub({
                                 <input type="range" min={10} max={90} step={1} value={subtitleXPositionPct} onChange={(e) => setSubtitleXPositionPct(Number(e.target.value))} className="w-full" />
                                 <label className="text-xs text-white/70 block">Subtitle vertical position: {subtitleYOffsetPct.toFixed(0)}%</label>
                                 <input type="range" min={45} max={92} step={1} value={subtitleYOffsetPct} onChange={(e) => setSubtitleYOffsetPct(Number(e.target.value))} className="w-full" />
-                                <div className="space-y-3 pt-2">
-                                  <div className="text-sm font-medium text-white/80">Quick Styles</div>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                    {COMMON_SUBTITLE_STYLE_PRESETS.map((quick) => (
-                                      <button
-                                        key={quick.id}
-                                        type="button"
-                                        onClick={() => {
-                                          setSubtitleStyleOverrides({ ...quick.style });
-                                        }}
-                                        className="rounded-2xl border border-white/10 bg-black/40 hover:bg-white/5 hover:border-white/20 text-left p-4 transition-all group"
-                                      >
-                                        <div className="mb-3 rounded-xl border border-white/10 bg-[linear-gradient(135deg,rgba(3,7,18,0.92),rgba(19,34,54,0.82)_55%,rgba(88,28,135,0.35))] px-4 py-8 shadow-inner flex items-center justify-center group-hover:shadow-cyan-500/10 transition-shadow">
-                                          <SubtitlePreviewText
-                                            text="Captions Rock!"
-                                            subtitleStyle={quick.style}
-                                            fontSizePx={22}
-                                            lineHeightPx={24}
-                                            borderWidthPx={2}
-                                            shadowScale={0.7}
-                                            className="text-center"
-                                          />
-                                        </div>
-                                        <div className="text-sm font-semibold text-white/90">{quick.name}</div>
-                                        <div className="text-xs text-white/55 mt-1 leading-relaxed">{quick.description}</div>
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
                                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
                                   <label className="text-xs text-white/70 block">
                                     Text color

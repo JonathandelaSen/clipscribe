@@ -5,6 +5,7 @@ import type {
   CreatorVideoInfoGenerateResponse,
   CreatorVideoInfoProjectRecord,
 } from "@/lib/creator/types";
+import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
 import { makeId } from "@/lib/history";
 import type {
   ProjectAssetRecord,
@@ -314,7 +315,8 @@ export function getEligibleYouTubeProjectAssets(
 
 export function getEligibleYouTubeProjectExports(
   exports: ProjectExportRecord[],
-  assetsById: Map<string, ProjectAssetRecord>
+  assetsById: Map<string, ProjectAssetRecord>,
+  shortProjectsById: Map<string, CreatorShortProjectRecord> = new Map()
 ): YouTubeProjectExportOption[] {
   return exports
     .flatMap((record) => {
@@ -323,17 +325,20 @@ export function getEligibleYouTubeProjectExports(
       const asset = assetsById.get(record.outputAssetId);
       if (!asset?.fileBlob) return [];
       if (asset.kind !== "video") return [];
+      const linkedShortProject = record.shortProjectId ? shortProjectsById.get(record.shortProjectId) : undefined;
+      const short = record.short ?? linkedShortProject?.short;
+      const plan = record.plan ?? linkedShortProject?.plan;
 
       return [
         {
           exportId: record.id,
           projectId: record.projectId,
           outputAssetId: record.outputAssetId,
-          sourceAssetId: record.sourceAssetId,
+          sourceAssetId: record.sourceAssetId ?? linkedShortProject?.sourceAssetId,
           shortProjectId: record.shortProjectId,
           displayName:
             record.kind === "short"
-              ? record.shortProjectName?.trim() || record.plan?.title?.trim() || record.short?.title?.trim() || record.filename || asset.filename
+              ? record.shortProjectName?.trim() || linkedShortProject?.name?.trim() || plan?.title?.trim() || short?.title?.trim() || record.filename || asset.filename
               : record.filename || asset.filename,
           filename: record.filename || asset.filename,
           createdAt: record.createdAt,
@@ -341,13 +346,23 @@ export function getEligibleYouTubeProjectExports(
           durationSeconds: record.durationSeconds ?? asset.durationSeconds,
           width: record.width ?? asset.width,
           height: record.height ?? asset.height,
-          short: record.short,
-          plan: record.plan,
+          short,
+          plan,
           file: asset.fileBlob,
         },
       ];
     })
     .sort((left, right) => right.createdAt - left.createdAt);
+}
+
+export function resolveYouTubeShortExportForProjectAsset(input: {
+  assetId?: string | null;
+  exports: YouTubeProjectExportOption[];
+}): YouTubeProjectExportOption | null {
+  const assetId = input.assetId?.trim();
+  if (!assetId) return null;
+
+  return input.exports.find((record) => record.kind === "short" && record.outputAssetId === assetId) ?? null;
 }
 
 export function resolveInitialYouTubePublishSelection(input: {

@@ -498,6 +498,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                 projectId={project.id}
                 initialAssetId={initialAssetId}
                 initialExportId={initialExportId}
+                shortProjects={shortProjects}
                 embedded
                 onUploadSuccess={handleYouTubeUploadSuccess}
               />
