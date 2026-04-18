@@ -1,69 +1,181 @@
 # ClipScribe
 
-A local-first web application built with Next.js for audio/video transcription, subtitle workflows, short-form clip creation, and AI-assisted content repurposing.
+ClipScribe is an AI-driven creator workstation for turning raw video and audio into transcripts, subtitled shorts, voiceovers, timeline edits, and YouTube-ready packages.
 
-## Key Features
+It is built around a connected content workflow where AI helps drive repurposing, packaging, editing, and publishing instead of being treated as an isolated text-generation feature.
 
-- Local audio/video transcription (browser-side, no data leaves your device)
-- Language auto-detection and manual selector (11 languages)
-- Real-time progress and cancellable jobs
-- Persistent transcription history (localStorage)
-- Subtitle translation (client-side, 10 target languages)
-- Export as `.txt` or `.srt`, one-click clipboard copy
-- Video import and local FFmpeg WASM rendering
-- Timeline Studio: multi-track editor with trimming, pan/zoom, safe-zone overlays, and local export
-- Creator AI: auto-generate titles, SEO descriptions, chapters, and viral clip suggestions from transcripts
-- Visual subtitles with configurable styles and time shifting
-- YouTube upload via OAuth integration
-- Voiceover generation via ElevenLabs TTS
+<!-- Replace with demo video: 45-90s guided platform walkthrough -->
 
-## Models & APIs
+[Watch product walkthrough](docs/readme/hero-demo.mp4)
 
-| Integration | Purpose | Runtime |
-|---|---|---|
-| `Xenova/whisper-tiny` (Transformers.js) | Transcription | Client (Web Worker) |
-| `Xenova/opus-mt-*` (Transformers.js) | Subtitle translation | Client (Web Worker) |
-| OpenAI API | Creator AI text generation | Server |
-| Gemini API | Creator AI text generation | Server |
-| ElevenLabs API | Voiceover / TTS | Server |
-| YouTube Data API v3 | Video publishing | Server (OAuth) |
+<!-- Replace with poster image: hero cover / platform overview -->
 
-## Environment Variables
+![ClipScribe hero cover](docs/readme/hero-cover.png)
 
-Copy `.env.example` to `.env.local` and fill in the values you need:
+## What ClipScribe Does
 
-```env
-# Debug
-NEXT_PUBLIC_ENABLE_LOGS=true
+- Imports creator source material from local files or YouTube into a project-centered workspace. 🎬
+- Runs AI-driven transcription, subtitle, and content packaging workflows inside a unified creator workspace. 🤖
+- Generates YouTube metadata, title ideas, content packs, and viral short suggestions with Creator AI. ✍️
+- Provides a dedicated shorts workflow with framing, subtitle styling, overlays, and export diagnostics. 📱
+- Includes a multi-track timeline editor for more deliberate editing and rendering workflows. 🎞️
+- Generates AI voiceovers with ElevenLabs and stores them as reusable project assets. 🎙️
+- Publishes videos to YouTube with draft assembly, localization support, captions, thumbnails, and upload history. 🚀
 
-# Creator AI providers
-OPENAI_API_KEY=
-GEMINI_API_KEY=
+## Product Walkthrough
 
-# Creator AI feature defaults
-CREATOR_SHORTS_PROVIDER=gemini
-CREATOR_SHORTS_MODEL=gemini-2.5-flash
-CREATOR_SHORTS_TEMPERATURE=0.4
-CREATOR_VIDEO_INFO_PROVIDER=openai
-CREATOR_VIDEO_INFO_MODEL=gpt-4.1-mini
-CREATOR_VIDEO_INFO_TEMPERATURE=0.4
+### 1. Project Library + Assets 📚
 
-# YouTube Publish (Google OAuth)
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-YOUTUBE_SESSION_SECRET=
+The project library is the starting point for the whole workflow. It gives creators a clean entry point for ingesting source material, organizing active work, and turning uploaded media into structured project assets that can later feed transcripts, shorts, voiceovers, and exports.
 
-# ElevenLabs TTS
-ELEVEN_LABS_APY_KEY=
-ELEVEN_LABS_VOICE_ID=
-EVELEN_LABS_MODEL=
-```
+- Drag-and-drop project creation from local media files.
+- Import from YouTube URL into a normalized project asset.
+- Active source selection and project-scoped asset management.
+- Centralized view of source assets, derived media, and exports.
 
-## Tech Stack
+![Project Library](docs/readme/01-project-library.png)
+<img title="a title" alt="Alt text" src="/docs/readme/01-project-library.png">
 
-Next.js 16 · Tailwind CSS 4 · shadcn/ui · Lucide React · Transformers.js · FFmpeg WASM · Dexie.js · ElevenLabs SDK
+### 2. Transcripts 🧩
 
-## Getting Started
+Transcription is one of the foundations of the product because it turns raw media into structured, time-aware content that the rest of the platform can reuse. ClipScribe runs transcription through Transformers.js using timestamped Whisper variants, preferring `onnx-community/whisper-base_timestamped` and falling back to `onnx-community/whisper-tiny_timestamped`, with word-level timestamps enabled.
+
+- Background transcription with status and progress handling.
+- Transcript versioning and subtitle generation from project history.
+- Translation workflows for multilingual subtitle outputs.
+- Word-level timestamps unlock features such as subtitle generation, precise seeking, timed clip extraction, and transcript-aware short suggestions.
+
+<!-- Replace with screenshot: Transcript workflow and timed transcript view -->
+
+![Transcripts and timed transcript workflow](docs/readme/02-project-workspace-assets-transcripts.png)
+
+### 3. Creator AI Metadata ✨
+
+The metadata workflow is built for packaging long-form content, not just generating generic text. It can assemble titles, descriptions, hashtags, chapters, thumbnail hooks, and richer content-pack outputs while exposing prompt customization depth that feels productized rather than bolted on.
+
+- AI generation for title ideas, descriptions, hashtags, chapters, pinned comments, and insights.
+- Feature-specific prompt customization rather than a single generic text box.
+- Per-feature model configuration routed through the shared Creator AI runtime.
+- Designed for repeatable packaging workflows across multiple videos.
+
+<!-- Replace with screenshot: Creator AI metadata studio -->
+
+![Creator AI metadata studio](docs/readme/03-ai-metadata.png)
+
+### 4. Shorts Forge 🔥
+
+The shorts workflow focuses on repurposing a longer source into platform-native short-form content. Instead of stopping at clip suggestions, it carries the creator into framing, subtitles, overlay styling, and reusable short project states.
+
+- Viral clip suggestion generation from transcript-aware inputs.
+- Dedicated short editor with framing controls and creative tuning.
+- Subtitle style controls and text overlay customization.
+- Saved shorts library so generated ideas can become durable assets.
+
+<!-- Replace with screenshot: Shorts Forge clip workflow -->
+
+![Shorts Forge clip workflow](docs/readme/04-shorts-forge.png)
+
+### 5. Shorts Export / Preview 🎥
+
+One of the most technically important parts of the app is that shorts preview and export are treated as the same product problem. The goal is not just to render a short, but to maintain trust that what the user previews is what the export pipeline will produce.
+
+- Canonical framing logic for preview and export parity.
+- Export diagnostics and rendering progress for creator-facing feedback.
+- Browser and system-backed export paths depending on capability.
+- Subtitle timing and overlay behavior designed for real export workflows.
+
+<!-- Replace with screenshot: Shorts export and preview parity -->
+
+![Shorts export and preview parity](docs/readme/05-shorts-export.png)
+
+### 6. Timeline Studio 🎞️
+
+ClipScribe also includes a more explicit editing environment for creators who need more control than an AI-first short workflow provides. Timeline Studio expands the project into a multi-track editor with trimming, layout control, overlays, and export settings.
+
+- Multi-track editing for video, audio, images, captions, and overlays.
+- Aspect ratio control for common creator output formats.
+- Export settings for resolution and rendering strategy.
+- Built to support more deliberate composition than the quick shorts flow.
+
+<!-- Replace with screenshot: Timeline Studio editor -->
+
+![Timeline Studio editor](docs/readme/06-timeline-studio.png)
+
+### 7. Voiceover Workspace 🎙️
+
+The voiceover workflow extends the platform beyond transcription and editing into AI-generated narration. It supports script drafting, usage estimation, generation, replay, and reuse of voice outputs as first-class project assets.
+
+- ElevenLabs-powered voiceover generation from editable scripts.
+- Draft persistence and configuration-aware generation flow.
+- Cost and usage estimation surfaced in the UI.
+- Generated audio saved back into the project for reuse elsewhere.
+
+<!-- Replace with screenshot: Voiceover workspace -->
+
+![Voiceover workspace](docs/readme/07-voiceover-workspace.png)
+
+### 8. YouTube Publish 📡
+
+Publishing is treated as part of the product, not an afterthought. ClipScribe can turn project assets or exports into YouTube-ready drafts, help prefill metadata from prior AI runs, and track the history of completed uploads.
+
+- Publish drafts for shorts or standard videos.
+- Metadata prefills from AI metadata and short suggestion outputs.
+- Support for captions, localizations, thumbnails, and related metadata.
+- Upload history view so publishing remains part of the project record.
+
+<!-- Replace with screenshot: YouTube publish workflow -->
+
+![YouTube publish workflow](docs/readme/08-youtube-publish.png)
+
+## Why This Project Is Technically Interesting ⚙️
+
+ClipScribe is intentionally broader than a transcription demo. It combines AI feature orchestration, project-scoped data modeling, export pipelines, and external publishing flows in one cohesive product.
+
+- AI is embedded across the workflow, from metadata generation and short ideation to voiceover, packaging, and publishing preparation.
+- Creator AI runs through a shared runtime, while feature services remain responsible for prompt building, validation, response mapping, and feature-specific behavior.
+- Shorts framing uses canonical geometry inputs so preview and export derive from the same layout logic instead of browser-only measurements.
+- Export supports both browser and system render paths depending on runtime capabilities and workflow needs.
+- Provider adapters stay separate from feature logic while executions trace provider, model, prompt version, usage, and estimated cost when inferable.
+
+<!-- Replace with diagram: compact architecture overview -->
+
+![ClipScribe architecture overview](docs/readme/architecture-overview.png)
+
+## Stack And Integrations 🧱
+
+### Frontend / Platform
+
+- Next.js 16
+- React 19
+- Tailwind CSS 4
+- shadcn/ui
+- Dexie.js for client-side persistence
+
+### Media / Rendering
+
+- FFmpeg WASM for interactive media workflows
+- Bundled `ffmpeg` / `ffprobe` for CLI and system export flows
+- Custom media, subtitle, framing, and export utilities
+
+### AI / Runtime
+
+- Transformers.js with worker-based transcription and translation pipelines
+- Shared Creator AI runtime for provider/model selection, tracing, usage, and pricing
+- Feature-specific prompt pipelines for `shorts` and `video_info`
+- ElevenLabs integration for voiceover generation
+
+### Integrations
+
+| Integration                                                            | Purpose                                       | Runtime |
+| ---------------------------------------------------------------------- | --------------------------------------------- | ------- |
+| `onnx-community/whisper-base_timestamped` / `whisper-tiny_timestamped` | Transcription with word-level timestamps      | Client  |
+| `Xenova/opus-mt-*`                                                     | Subtitle translation                          | Client  |
+| OpenAI API                                                             | Creator AI text generation (`video_info`)     | Server  |
+| Gemini API                                                             | Creator AI text generation (`shorts` default) | Server  |
+| ElevenLabs API                                                         | Voiceover / TTS                               | Server  |
+| YouTube Data API v3                                                    | Video publishing                              | Server  |
+
+## Getting Started 🚀
 
 ```bash
 npm install
@@ -72,39 +184,73 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## CLI
+### Environment Variables 🔐
 
-The CLI automates timeline project creation and video rendering using bundled `ffmpeg`/`ffprobe`.
+Copy `.env.example` to `.env.local` and configure only the integrations you need.
+
+```env
+# Debug
+NEXT_PUBLIC_ENABLE_LOGS=true
+
+# Creator AI
+OPENAI_API_KEY=
+GEMINI_API_KEY=
+CREATOR_SHORTS_PROVIDER=gemini
+CREATOR_SHORTS_MODEL=gemini-2.5-flash
+CREATOR_SHORTS_TEMPERATURE=0.4
+CREATOR_VIDEO_INFO_PROVIDER=openai
+CREATOR_VIDEO_INFO_MODEL=gpt-4.1-mini
+CREATOR_VIDEO_INFO_TEMPERATURE=0.4
+
+# YouTube Publish
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+YOUTUBE_SESSION_SECRET=
+
+# ElevenLabs Voiceover
+ELEVEN_LABS_APY_KEY=
+ELEVEN_LABS_VOICE_ID=
+EVELEN_LABS_MODEL=
+```
+
+## CLI And Power Features 🛠️
+
+Beyond the main UI, ClipScribe includes CLI workflows for automation, repeatable rendering, and batch-friendly project creation.
 
 ### Create a timeline project
 
 ```bash
-# Interactive wizard
 npm run create:timeline-project -- --interactive
+```
 
-# Direct
+```bash
 npm run create:timeline-project -- \
-  --name "My Short" --aspect 9:16 \
-  --video ./clip.mp4 --audio ./music.mp3 \
+  --name "My Short" \
+  --aspect 9:16 \
+  --video ./clip.mp4 \
+  --audio ./music.mp3 \
   --output ./projects
 ```
 
-Flags: `--video`, `--video-trim`, `--video-volume`, `--video-muted`, `--reverse`, `--video-clone-to-fill`, `--audio-trim-final-to-video`.
-
-### Import / Export
+### Import and export a timeline project
 
 ```bash
 npm run import:timeline-project -- --bundle ./projects/my-short.clipscribe-project
 npm run export:timeline-project -- --project ./projects/my-short.clipscribe-project --resolution 1080p --output ./exports
 ```
 
-Export flags: `--resolution <480p|720p|1080p|4k>`, `--dry-run`, `--json`.
-
-### Create & export in one step
+### Create and export in one step
 
 ```bash
 npm run create-and-export:timeline-project
 ```
+
+## Future Improvements 🌱
+
+- Add a polished end-to-end demo video with narration and callouts for the full creator workflow.
+- Expand README architecture visuals with a single diagram for project storage, AI runtime, and export paths.
+- Add benchmark snapshots for short export and timeline export performance.
+- Document evaluation fixtures and regression contracts more explicitly for the Creator AI runtime.
 
 ## License
 
