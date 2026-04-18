@@ -33,8 +33,9 @@ The project library is the starting point for the whole workflow. It gives creat
 - Active source selection and project-scoped asset management.
 - Centralized view of source assets, derived media, and exports.
 
-![Project Library](docs/readme/01-project-library.png)
-<img title="a title" alt="Alt text" src="/docs/readme/01-project-library.png">
+![Project Library](docs/readme/proyect_library_1.png)
+![Project Library](docs/readme/proyect_library_2.png)
+![Project Library](docs/readme/proyect_library_3.png)
 
 ### 2. Transcripts 🧩
 
@@ -47,9 +48,23 @@ Transcription is one of the foundations of the product because it turns raw medi
 
 <!-- Replace with screenshot: Transcript workflow and timed transcript view -->
 
-![Transcripts and timed transcript workflow](docs/readme/02-project-workspace-assets-transcripts.png)
+![Transcripts and timed transcript workflow](docs/readme/transcript_1.png)
+![Transcripts and timed transcript workflow](docs/readme/transcript_2.png)
 
-### 3. Creator AI Metadata ✨
+### 3. Timeline Studio 🎞️
+
+ClipScribe also includes a more explicit editing environment for creators who need more control than an AI-first short workflow provides. Timeline Studio expands the project into a multi-track editor with trimming, layout control, overlays, and export settings.
+
+- Multi-track editing for video, audio, images, captions, and overlays.
+- Aspect ratio control for common creator output formats.
+- Export settings for resolution and rendering strategy.
+- Built to support more deliberate composition than the quick shorts flow.
+
+<!-- Replace with screenshot: Timeline Studio editor -->
+
+![Timeline Studio editor](docs/readme/timeline_editor_1.png)
+
+### 4. Creator AI Metadata ✨
 
 The metadata workflow is built for packaging long-form content, not just generating generic text. It can assemble titles, descriptions, hashtags, chapters, thumbnail hooks, and richer content-pack outputs while exposing prompt customization depth that feels productized rather than bolted on.
 
@@ -60,9 +75,10 @@ The metadata workflow is built for packaging long-form content, not just generat
 
 <!-- Replace with screenshot: Creator AI metadata studio -->
 
-![Creator AI metadata studio](docs/readme/03-ai-metadata.png)
+![Creator AI metadata studio](docs/readme/metadata_1.png)
+![Creator AI metadata studio](docs/readme/metadata_2.png)
 
-### 4. Shorts Forge 🔥
+### 5. Shorts Forge 🔥
 
 The shorts workflow focuses on repurposing a longer source into platform-native short-form content. Instead of stopping at clip suggestions, it carries the creator into framing, subtitles, overlay styling, and reusable short project states.
 
@@ -73,9 +89,11 @@ The shorts workflow focuses on repurposing a longer source into platform-native 
 
 <!-- Replace with screenshot: Shorts Forge clip workflow -->
 
-![Shorts Forge clip workflow](docs/readme/04-shorts-forge.png)
+![Shorts Forge clip workflow](docs/readme/shorts_1.png)
+![Shorts Forge clip workflow](docs/readme/shorts_2.png)
+![Shorts Forge clip workflow](docs/readme/shorts_3.png)
 
-### 5. Shorts Export / Preview 🎥
+### 6. Shorts Export / Preview 🎥
 
 One of the most technically important parts of the app is that shorts preview and export are treated as the same product problem. The goal is not just to render a short, but to maintain trust that what the user previews is what the export pipeline will produce.
 
@@ -87,19 +105,6 @@ One of the most technically important parts of the app is that shorts preview an
 <!-- Replace with screenshot: Shorts export and preview parity -->
 
 ![Shorts export and preview parity](docs/readme/05-shorts-export.png)
-
-### 6. Timeline Studio 🎞️
-
-ClipScribe also includes a more explicit editing environment for creators who need more control than an AI-first short workflow provides. Timeline Studio expands the project into a multi-track editor with trimming, layout control, overlays, and export settings.
-
-- Multi-track editing for video, audio, images, captions, and overlays.
-- Aspect ratio control for common creator output formats.
-- Export settings for resolution and rendering strategy.
-- Built to support more deliberate composition than the quick shorts flow.
-
-<!-- Replace with screenshot: Timeline Studio editor -->
-
-![Timeline Studio editor](docs/readme/06-timeline-studio.png)
 
 ### 7. Voiceover Workspace 🎙️
 
