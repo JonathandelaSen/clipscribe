@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
-import { Clapperboard, Download, Film, Languages, Loader2, MoreHorizontal, Pencil, Plus, Sparkles, Trash2, Upload } from "lucide-react";
+import { Clapperboard, Download, Film, Languages, Link as LinkIcon, Loader2, MoreHorizontal, Pencil, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
 import { AiMetadataHub } from "@/components/creator/AiMetadataHub";
@@ -13,6 +13,7 @@ import { CreatorHub } from "@/components/CreatorHub";
 import { HistoryItemCard } from "@/components/HistoryItemCard";
 import { LanguageSelector } from "@/components/LanguageSelector";
 import { ProjectAudioPlayer } from "@/components/projects/ProjectAudioPlayer";
+import { YouTubeImportDialog } from "@/components/projects/YouTubeImportDialog";
 import { ProjectVoiceoverWorkspace } from "@/components/projects/ProjectVoiceoverWorkspace";
 import { YouTubeUploadHub } from "@/components/creator/YouTubeUploadHub";
 import { TimelineEditorWorkspace } from "@/components/editor/TimelineEditorWorkspace";
@@ -111,6 +112,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     saveYouTubeUpload,
   } = useProjectWorkspace(projectId);
   const assetInputRef = useRef<HTMLInputElement | null>(null);
+  const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false);
   const [transcriptionLanguage, setTranscriptionLanguage] = useState("es");
   const {
     history,
@@ -119,7 +121,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     saveTranslation,
     deleteTranscriptVersion,
   } = useTranscriber();
-  const { getTaskForResource } = useBackgroundTasks();
+  const { getTaskForResource, startYouTubeImport } = useBackgroundTasks();
 
   const projectHistory = useMemo(
     () => history.filter((item) => (item as typeof item & { projectId?: string }).projectId === projectId),
@@ -189,6 +191,17 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
       console.error(err);
       toast.error(err instanceof Error ? err.message : "No se pudieron añadir los assets");
     }
+  };
+
+  const handleAddYouTubeAsset = async (url: string, signal: AbortSignal) => {
+    if (signal.aborted) return;
+    startYouTubeImport({
+      url,
+      projectId,
+      onComplete: ({ filename }) => {
+        toast.success(`Asset importado: ${filename}`);
+      },
+    });
   };
 
   const handleStartTranscription = async () => {
@@ -300,10 +313,20 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
             <Card className="border-white/10 bg-white/[0.03] text-white">
               <CardHeader className="flex flex-row items-center justify-between gap-4">
                 <CardTitle>Project Assets</CardTitle>
-                <Button className="rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200" onClick={() => assetInputRef.current?.click()}>
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Assets
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                    onClick={() => setIsYouTubeDialogOpen(true)}
+                  >
+                    <LinkIcon className="mr-2 h-4 w-4" />
+                    Import URL
+                  </Button>
+                  <Button className="rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200" onClick={() => assetInputRef.current?.click()}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    Add Assets
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {assets.length === 0 ? (
@@ -360,6 +383,11 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                             Updated {formatRelativeDate(asset.updatedAt)}
                             {asset.durationSeconds > 0 ? ` · ${asset.durationSeconds.toFixed(1)}s` : ""}
                           </div>
+                          {asset.externalSource?.kind === "youtube" ? (
+                            <div className="text-xs text-cyan-100/70">
+                              YouTube{asset.externalSource.channelTitle ? ` · ${asset.externalSource.channelTitle}` : ""}{asset.externalSource.title ? ` · ${asset.externalSource.title}` : ""}
+                            </div>
+                          ) : null}
                           {asset.kind === "audio" ? <ProjectAudioPlayer file={asset.fileBlob} className="max-w-xl" /> : null}
                         </div>
                       </div>
@@ -581,6 +609,14 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
           )}
         </div>
       </div>
+      <YouTubeImportDialog
+        open={isYouTubeDialogOpen}
+        onOpenChange={setIsYouTubeDialogOpen}
+        title="Importar asset desde YouTube"
+        description="Descarga el vídeo, lo normaliza a MP4 y lo añade a este proyecto como source."
+        confirmLabel="Importar asset"
+        onImport={handleAddYouTubeAsset}
+      />
       <Toaster theme="dark" position="bottom-center" />
     </main>
   );

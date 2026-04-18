@@ -40,7 +40,9 @@ function toProjectAssetRecord(asset: EditorAssetRecord): ProjectAssetRecord {
   return {
     ...asset,
     role: (asset as ProjectAssetRecord).role ?? "support",
-    origin: (asset as ProjectAssetRecord).origin ?? (asset.sourceType === "history" ? "manual" : "upload"),
+    origin:
+      (asset as ProjectAssetRecord).origin ??
+      (asset.sourceType === "history" ? "manual" : asset.sourceType === "youtube" ? "youtube-import" : "upload"),
     derivedFromAssetId: (asset as ProjectAssetRecord).derivedFromAssetId,
   };
 }

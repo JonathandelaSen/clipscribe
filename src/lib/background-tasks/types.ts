@@ -1,4 +1,4 @@
-export type BackgroundTaskKind = "transcription" | "timeline-export" | "timeline-bake" | "short-export";
+export type BackgroundTaskKind = "transcription" | "timeline-export" | "timeline-bake" | "short-export" | "youtube-import";
 
 export type BackgroundTaskStatus =
   | "queued"

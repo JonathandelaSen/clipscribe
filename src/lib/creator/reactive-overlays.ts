@@ -1,21 +1,28 @@
 import {
-  EDITOR_REACTIVE_OVERLAY_PRESETS,
-  REACTIVE_OVERLAY_ANALYSIS_HZ,
-  getReactiveOverlayPresetLabel,
-  renderReactiveOverlayFrameSequence,
-  resolveReactiveOverlayFrame,
-  resolveReactiveOverlayRect,
-  type EditorReactiveAudioAnalysisTrack,
-  type ReactiveOverlayFrameSequence,
-  type ResolvedReactiveOverlayFrame,
-} from "../editor/reactive-overlays";
+  MOTION_OVERLAY_ANALYSIS_HZ,
+  MOTION_OVERLAY_PRESETS,
+  createDefaultMotionOverlayItem,
+  getMotionOverlayPresetLabel,
+  getMotionOverlayRasterPixelArea,
+  isAudioReactiveMotionOverlayItem,
+  normalizeMotionOverlayItem,
+  renderMotionOverlayFrameSequence,
+  resolveMotionOverlayExportFps,
+  resolveMotionOverlayFrame,
+  resolveMotionOverlayRect,
+  type AudioReactiveMotionOverlayItem,
+  type AudioReactiveMotionOverlayPresetId,
+  type MotionOverlayAudioAnalysisTrack,
+  type MotionOverlayFrameSequence,
+  type ResolvedMotionOverlayFrame,
+} from "../motion-overlays";
 import type { CreatorReactiveOverlayItem, CreatorReactiveOverlayPresetId } from "./types";
 
-function clampNumber(value: number, min: number, max: number): number {
+function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function round3(value: number): number {
+function round3(value: number) {
   return Number(value.toFixed(3));
 }
 
@@ -52,14 +59,18 @@ function measureAudioWindowEnergy(
   return Math.sqrt(sumSquares / Math.max(1, sampleEnd - sampleStart));
 }
 
-export type CreatorReactiveAudioAnalysisTrack = EditorReactiveAudioAnalysisTrack;
-export type CreatorReactiveOverlayFrame = ResolvedReactiveOverlayFrame;
-export type CreatorReactiveOverlayFrameSequence = ReactiveOverlayFrameSequence;
+export type CreatorReactiveAudioAnalysisTrack = MotionOverlayAudioAnalysisTrack;
+export type CreatorReactiveOverlayFrame = ResolvedMotionOverlayFrame;
+export type CreatorReactiveOverlayFrameSequence = MotionOverlayFrameSequence;
 
-export const CREATOR_REACTIVE_OVERLAY_PRESETS = EDITOR_REACTIVE_OVERLAY_PRESETS;
+export const CREATOR_REACTIVE_OVERLAY_PRESETS = MOTION_OVERLAY_PRESETS.filter(
+  (preset): preset is (typeof MOTION_OVERLAY_PRESETS)[number] & { id: AudioReactiveMotionOverlayPresetId } =>
+    preset.behavior === "audio_reactive"
+);
+export const REACTIVE_OVERLAY_ANALYSIS_HZ = MOTION_OVERLAY_ANALYSIS_HZ;
 
-export function getCreatorReactiveOverlayPresetLabel(presetId: CreatorReactiveOverlayPresetId): string {
-  return getReactiveOverlayPresetLabel(presetId);
+export function getCreatorReactiveOverlayPresetLabel(presetId: CreatorReactiveOverlayPresetId) {
+  return getMotionOverlayPresetLabel(presetId);
 }
 
 export function createDefaultCreatorReactiveOverlay(input: {
@@ -68,82 +79,17 @@ export function createDefaultCreatorReactiveOverlay(input: {
   startOffsetSeconds?: number;
   durationSeconds?: number;
 }): CreatorReactiveOverlayItem {
-  const common = {
+  return createDefaultMotionOverlayItem({
     id: input.id,
-    startOffsetSeconds: round3(Math.max(0, input.startOffsetSeconds ?? 0)),
-    durationSeconds: round3(Math.max(0.4, input.durationSeconds ?? 3)),
-    positionXPercent: 50,
-    scale: 1,
-    opacity: 0.92,
-    sensitivity: 1,
-    smoothing: 0.62,
-  };
-
-  if (input.presetId === "pulse_ring") {
-    return {
-      ...common,
-      presetId: input.presetId,
-      positionYPercent: 28,
-      widthPercent: 24,
-      heightPercent: 24,
-      tintHex: "#FDE68A",
-      smoothing: 0.72,
-    };
-  }
-
-  if (input.presetId === "equalizer_bars") {
-    return {
-      ...common,
-      presetId: input.presetId,
-      positionYPercent: 72,
-      widthPercent: 56,
-      heightPercent: 18,
-      tintHex: "#A5F3FC",
-    };
-  }
-
-  return {
-    ...common,
     presetId: input.presetId,
-    positionYPercent: 72,
-    widthPercent: 72,
-    heightPercent: 18,
-    tintHex: "#7CE7FF",
-  };
+    startOffsetSeconds: input.startOffsetSeconds,
+    durationSeconds: input.durationSeconds,
+  }) as AudioReactiveMotionOverlayItem;
 }
 
 export function normalizeCreatorReactiveOverlayItem(input: unknown): CreatorReactiveOverlayItem | null {
-  if (!input || typeof input !== "object") return null;
-  const record = input as Record<string, unknown>;
-  const presetId =
-    record.presetId === "waveform_line" ||
-    record.presetId === "equalizer_bars" ||
-    record.presetId === "pulse_ring"
-      ? record.presetId
-      : null;
-  const id = typeof record.id === "string" && record.id.trim() ? record.id.trim() : null;
-  if (!presetId || !id) return null;
-
-  const fallback = createDefaultCreatorReactiveOverlay({ id, presetId });
-
-  return {
-    id,
-    presetId,
-    startOffsetSeconds: round3(clampNumber(Number(record.startOffsetSeconds ?? fallback.startOffsetSeconds), 0, 600)),
-    durationSeconds: round3(clampNumber(Number(record.durationSeconds ?? fallback.durationSeconds), 0.2, 600)),
-    positionXPercent: clampNumber(Number(record.positionXPercent ?? fallback.positionXPercent), 0, 100),
-    positionYPercent: clampNumber(Number(record.positionYPercent ?? fallback.positionYPercent), 0, 100),
-    widthPercent: clampNumber(Number(record.widthPercent ?? fallback.widthPercent), 4, 100),
-    heightPercent: clampNumber(Number(record.heightPercent ?? fallback.heightPercent), 4, 100),
-    scale: clampNumber(Number(record.scale ?? fallback.scale), 0.2, 3),
-    opacity: clampNumber(Number(record.opacity ?? fallback.opacity), 0, 1),
-    tintHex:
-      typeof record.tintHex === "string" && /^#[0-9a-f]{6}$/i.test(record.tintHex.trim())
-        ? record.tintHex.trim()
-        : fallback.tintHex,
-    sensitivity: clampNumber(Number(record.sensitivity ?? fallback.sensitivity), 0.2, 3),
-    smoothing: clampNumber(Number(record.smoothing ?? fallback.smoothing), 0, 0.95),
-  };
+  const overlay = normalizeMotionOverlayItem(input);
+  return isAudioReactiveMotionOverlayItem(overlay) ? overlay : null;
 }
 
 export function buildCreatorReactiveOverlayAudioAnalysis(input: {
@@ -179,17 +125,9 @@ export function buildCreatorReactiveOverlayAudioAnalysis(input: {
 }
 
 export function resolveCreatorReactiveOverlayExportFps(
-  overlays: readonly Pick<CreatorReactiveOverlayItem, "durationSeconds">[]
+  overlays: readonly Pick<CreatorReactiveOverlayItem, "durationSeconds" | "presetId" | "behavior">[]
 ) {
-  const longestDurationSeconds = overlays.reduce(
-    (max, overlay) => Math.max(max, Math.max(0, overlay.durationSeconds)),
-    0
-  );
-  if (longestDurationSeconds >= 30) return 6;
-  if (longestDurationSeconds >= 20) return 8;
-  if (longestDurationSeconds >= 10) return 10;
-  if (longestDurationSeconds >= 5) return 12;
-  return 15;
+  return resolveMotionOverlayExportFps(overlays);
 }
 
 export function resolveCreatorReactiveOverlayRect(input: {
@@ -197,11 +135,7 @@ export function resolveCreatorReactiveOverlayRect(input: {
   frameWidth: number;
   frameHeight: number;
 }) {
-  return resolveReactiveOverlayRect({
-    overlay: input.overlay,
-    frameWidth: input.frameWidth,
-    frameHeight: input.frameHeight,
-  });
+  return resolveMotionOverlayRect(input);
 }
 
 export function resolveCreatorReactiveOverlayFrame(input: {
@@ -210,14 +144,8 @@ export function resolveCreatorReactiveOverlayFrame(input: {
   analysis: CreatorReactiveAudioAnalysisTrack;
   projectTimeSeconds: number;
   localTimeSeconds: number;
-}): CreatorReactiveOverlayFrame {
-  return resolveReactiveOverlayFrame({
-    overlay: input.overlay,
-    rect: input.rect,
-    analysis: input.analysis,
-    projectTimeSeconds: input.projectTimeSeconds,
-    localTimeSeconds: input.localTimeSeconds,
-  });
+}) {
+  return resolveMotionOverlayFrame(input);
 }
 
 export async function renderCreatorReactiveOverlayFrameSequence(input: {
@@ -228,40 +156,7 @@ export async function renderCreatorReactiveOverlayFrameSequence(input: {
   fps?: number;
   signal?: AbortSignal;
 }): Promise<CreatorReactiveOverlayFrameSequence[]> {
-  const projectDurationSeconds = Math.max(
-    0.25,
-    ...input.overlays.map((overlay) => overlay.startOffsetSeconds + Math.max(0.25, overlay.durationSeconds))
-  );
-  return renderReactiveOverlayFrameSequence({
-    project: {
-      timeline: {
-        videoClips: [
-          {
-            id: "creator_reactive_overlay_probe",
-            assetId: "creator_reactive_overlay_probe",
-            label: "Creator Reactive Overlay Probe",
-            trimStartSeconds: 0,
-            trimEndSeconds: projectDurationSeconds,
-            canvas: {
-              zoom: 1,
-              panX: 0,
-              panY: 0,
-            },
-            volume: 1,
-            muted: false,
-            actions: {
-              reverse: false,
-            },
-          },
-        ],
-        videoClipGroups: [],
-        audioItems: [],
-        imageItems: [],
-        overlayItems: [...input.overlays],
-        playheadSeconds: 0,
-        zoomLevel: 1,
-      },
-    },
+  return renderMotionOverlayFrameSequence({
     overlayItems: input.overlays,
     analysis: input.analysis,
     outputWidth: input.frameWidth,
@@ -272,9 +167,9 @@ export async function renderCreatorReactiveOverlayFrameSequence(input: {
 }
 
 export function getCreatorReactiveOverlayRasterPixelArea(input: {
-  width: number;
-  height: number;
-  framesLength: number;
+  width?: number;
+  height?: number;
+  framesLength?: number;
 }) {
-  return Math.max(1, input.width) * Math.max(1, input.height) * Math.max(1, input.framesLength);
+  return getMotionOverlayRasterPixelArea(input);
 }

@@ -3,12 +3,17 @@ import {
   resolveCreatorSubtitleStyle,
 } from "../creator/subtitle-style";
 import { makeId } from "../history";
+import {
+  createDefaultMotionOverlayItem,
+  normalizeMotionOverlayItem,
+  type MotionOverlayPresetId,
+} from "../motion-overlays";
 import type {
   EditorAspectRatio,
   EditorAssetKind,
   EditorAssetRecord,
   EditorCanvasState,
-  EditorReactiveOverlayPresetId,
+  EditorMotionOverlayPresetId,
   EditorExportEngine,
   EditorExportRecord,
   EditorProjectRecord,
@@ -211,29 +216,18 @@ export function normalizeTimelineImageItem(
   };
 }
 
-function clampNumber(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
 export function normalizeTimelineOverlayItem(
   item: TimelineOverlayItem | (Partial<TimelineOverlayItem> & Pick<TimelineOverlayItem, "id" | "presetId">)
 ): TimelineOverlayItem {
-  return {
-    id: item.id,
-    presetId:
-      item.presetId === "equalizer_bars" || item.presetId === "pulse_ring" ? item.presetId : "waveform_line",
-    startOffsetSeconds: Number.isFinite(item.startOffsetSeconds) ? Math.max(0, Number(item.startOffsetSeconds)) : 0,
-    durationSeconds: Number.isFinite(item.durationSeconds) ? Math.max(0.25, Number(item.durationSeconds)) : 3,
-    positionXPercent: Number.isFinite(item.positionXPercent) ? clampNumber(Number(item.positionXPercent), 5, 95) : 50,
-    positionYPercent: Number.isFinite(item.positionYPercent) ? clampNumber(Number(item.positionYPercent), 5, 95) : 72,
-    widthPercent: Number.isFinite(item.widthPercent) ? clampNumber(Number(item.widthPercent), 8, 100) : 72,
-    heightPercent: Number.isFinite(item.heightPercent) ? clampNumber(Number(item.heightPercent), 6, 100) : 18,
-    scale: Number.isFinite(item.scale) ? clampNumber(Number(item.scale), 0.4, 3) : 1,
-    opacity: Number.isFinite(item.opacity) ? clampNumber(Number(item.opacity), 0.05, 1) : 0.95,
-    tintHex: typeof item.tintHex === "string" && /^#[0-9a-f]{6}$/i.test(item.tintHex.trim()) ? item.tintHex.trim() : "#7CE7FF",
-    sensitivity: Number.isFinite(item.sensitivity) ? clampNumber(Number(item.sensitivity), 0.2, 3) : 1,
-    smoothing: Number.isFinite(item.smoothing) ? clampNumber(Number(item.smoothing), 0, 0.98) : 0.62,
-  };
+  return (
+    normalizeMotionOverlayItem(item) ??
+    createDefaultMotionOverlayItem({
+      id: item.id,
+      presetId: "waveform_line",
+      startOffsetSeconds: Number(item.startOffsetSeconds ?? 0),
+      durationSeconds: Number(item.durationSeconds ?? 3),
+    })
+  );
 }
 
 export function createDefaultVideoClip(input: {
@@ -282,47 +276,16 @@ export function createDefaultImageTrackItem(input: {
 }
 
 export function createDefaultTimelineOverlayItem(input: {
-  presetId: EditorReactiveOverlayPresetId;
+  presetId: EditorMotionOverlayPresetId;
   startOffsetSeconds?: number;
   durationSeconds?: number;
 }): TimelineOverlayItem {
-  const base: TimelineOverlayItem = {
+  return createDefaultMotionOverlayItem({
     id: makeId("edoverlay"),
-    presetId: input.presetId,
-    startOffsetSeconds: Math.max(0, input.startOffsetSeconds ?? 0),
-    durationSeconds: Math.max(0.25, input.durationSeconds ?? 3),
-    positionXPercent: 50,
-    positionYPercent: 72,
-    widthPercent: 72,
-    heightPercent: 18,
-    scale: 1,
-    opacity: 0.95,
-    tintHex: "#7CE7FF",
-    sensitivity: 1,
-    smoothing: 0.62,
-  };
-
-  if (input.presetId === "equalizer_bars") {
-    return {
-      ...base,
-      widthPercent: 56,
-      heightPercent: 18,
-      tintHex: "#A5F3FC",
-    };
-  }
-
-  if (input.presetId === "pulse_ring") {
-    return {
-      ...base,
-      positionYPercent: 28,
-      widthPercent: 24,
-      heightPercent: 24,
-      tintHex: "#FDE68A",
-      smoothing: 0.72,
-    };
-  }
-
-  return base;
+    presetId: input.presetId as MotionOverlayPresetId,
+    startOffsetSeconds: input.startOffsetSeconds,
+    durationSeconds: input.durationSeconds,
+  });
 }
 
 export function createEmptyEditorProject(input?: {
@@ -427,6 +390,7 @@ export function createEditorAssetRecord(input: {
   sourceType: EditorAssetRecord["sourceType"];
   sourceMediaId?: string;
   sourceProjectId?: string;
+  externalSource?: EditorAssetRecord["externalSource"];
   captionSource: EditorAssetRecord["captionSource"];
   fileBlob?: File;
   id?: string;
@@ -437,7 +401,7 @@ export function createEditorAssetRecord(input: {
     id: input.id ?? makeId("editor_asset"),
     projectId: input.projectId,
     role: input.role ?? "support",
-    origin: input.origin ?? (input.sourceType === "history" ? "manual" : "upload"),
+    origin: input.origin ?? (input.sourceType === "history" ? "manual" : input.sourceType === "youtube" ? "youtube-import" : "upload"),
     sourceType: input.sourceType,
     kind: input.kind,
     filename: input.filename,
@@ -451,6 +415,7 @@ export function createEditorAssetRecord(input: {
     sourceAssetId: input.sourceAssetId,
     sourceMediaId: input.sourceMediaId,
     sourceProjectId: input.sourceProjectId,
+    externalSource: input.externalSource,
     createdAt: now,
     updatedAt: now,
     captionSource: input.captionSource,

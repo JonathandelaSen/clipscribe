@@ -2,10 +2,7 @@ import { buildEditorExportFilename } from "./export-output";
 import { filterEditorAssetsForExport } from "./export-capabilities";
 import {
   buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets,
-  renderReactiveOverlayFrameSequence,
-  resolveReactiveOverlayExportFps,
   type EditorReactiveAudioAnalysisTrack,
-  type ReactiveOverlayFrameSequence,
 } from "./reactive-overlays";
 import {
   EDITOR_SYSTEM_EXPORT_FORM_FIELDS,
@@ -23,6 +20,12 @@ import type {
   ResolvedEditorAsset,
 } from "./types";
 import { getEditorOutputDimensions } from "./core/aspect-ratio";
+import {
+  isAudioReactiveMotionOverlayItem,
+  renderMotionOverlayFrameSequence,
+  resolveMotionOverlayExportFps,
+  type MotionOverlayFrameSequence,
+} from "../motion-overlays";
 
 export interface SystemEditorExportClientResult {
   file: File;
@@ -111,9 +114,9 @@ export async function requestSystemEditorExport(input: {
   resolvedAssets: ResolvedEditorAsset[];
   resolution: EditorResolution;
   reactiveOverlayAnalysis?: EditorReactiveAudioAnalysisTrack | null;
-  reactiveOverlaySequences?: ReactiveOverlayFrameSequence[] | null;
+  reactiveOverlaySequences?: MotionOverlayFrameSequence[] | null;
   analysisReuseWaitMs?: number;
-  onReactiveOverlaySequencesPrepared?: (sequences: ReactiveOverlayFrameSequence[]) => void;
+  onReactiveOverlaySequencesPrepared?: (sequences: MotionOverlayFrameSequence[]) => void;
   signal?: AbortSignal;
   onServerProgress?: (progressPct: number) => void;
   onDebugLog?: (message: string) => void;
@@ -133,9 +136,13 @@ export async function requestSystemEditorExport(input: {
   let localOverlayPreparationMs = 0;
   let localOverlayRasterPixelArea = 0;
   let localOverlaySequenceCount = 0;
+  const motionOverlays = input.project.timeline.overlayItems;
+  const audioReactiveOverlayCount = motionOverlays.filter(isAudioReactiveMotionOverlayItem).length;
+  const autonomousOverlayCount = motionOverlays.length - audioReactiveOverlayCount;
+  const motionOverlayPresetIds = Array.from(new Set(motionOverlays.map((overlay) => overlay.presetId)));
 
   logDebug(
-    `Export started for ${input.project.name}: resolution=${input.resolution}, assets=${relevantAssets.length}, overlays=${input.project.timeline.overlayItems.length}.`
+    `Export started for ${input.project.name}: resolution=${input.resolution}, assets=${relevantAssets.length}, overlays=${motionOverlays.length}.`
   );
 
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.requestId, requestId);
@@ -154,28 +161,42 @@ export async function requestSystemEditorExport(input: {
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.assets, JSON.stringify(assetDescriptors));
   formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlays, "[]");
 
-  if (input.project.timeline.overlayItems.length > 0) {
+  if (motionOverlays.length > 0) {
     const overlayStartedAt = performance.now();
-    const reactiveOverlayExportFps = resolveReactiveOverlayExportFps(input.project.timeline.overlayItems);
+    const reactiveOverlayExportFps = resolveMotionOverlayExportFps(motionOverlays);
     logDebug(
-      `Preparing reactive overlays: count=${input.project.timeline.overlayItems.length}, fps=${reactiveOverlayExportFps}, analysisSource=final_mix.`
+      `Preparing motion overlays: count=${motionOverlays.length}, fps=${reactiveOverlayExportFps}, reactive=${audioReactiveOverlayCount}, autonomous=${autonomousOverlayCount}.`
     );
     const { width, height } = getEditorOutputDimensions(input.project.aspectRatio, input.resolution);
+    const analysisRequired = motionOverlays.some((overlay) => overlay.behavior === "audio_reactive");
+    if (
+      analysisRequired &&
+      !relevantAssets.some(
+        (entry) => entry.asset.kind === "audio" || (entry.asset.kind === "video" && entry.asset.hasAudio)
+      )
+    ) {
+      throw new Error("Audio-reactive motion overlays need at least one audio-capable asset in the timeline.");
+    }
     const analysis =
-      input.reactiveOverlayAnalysis ??
-      (await buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets({
-        project: input.project,
-        resolvedAssets: relevantAssets,
-        signal: input.signal,
-      }));
+      !analysisRequired
+        ? null
+        : input.reactiveOverlayAnalysis ??
+          (await buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets({
+            project: input.project,
+            resolvedAssets: relevantAssets,
+            signal: input.signal,
+          }));
     const overlaySequences =
       input.reactiveOverlaySequences ??
-      (await renderReactiveOverlayFrameSequence({
-        project: input.project,
-        overlayItems: input.project.timeline.overlayItems,
+      (await renderMotionOverlayFrameSequence({
+        overlayItems: motionOverlays,
         analysis,
         outputWidth: width,
         outputHeight: height,
+        projectDuration: Math.max(
+          ...motionOverlays.map((overlay) => overlay.startOffsetSeconds + Math.max(0.25, overlay.durationSeconds)),
+          0.25
+        ),
         fps: reactiveOverlayExportFps,
         signal: input.signal,
       }));
@@ -206,7 +227,7 @@ export async function requestSystemEditorExport(input: {
     localOverlaySequenceCount = overlaySequences.length;
     formData.set(EDITOR_SYSTEM_EXPORT_FORM_FIELDS.overlaySequences, JSON.stringify(sequenceDescriptors));
     localOverlayPreparationMs = Math.round(performance.now() - overlayStartedAt);
-    const overlayPrepMessage = `Reactive overlays prepared in ${localOverlayPreparationMs}ms: overlayCount=${input.project.timeline.overlayItems.length}, sequences=${overlaySequences.length}, fps=${reactiveOverlayExportFps}, analysisSource=final_mix, overlayRasterPixelArea=${localOverlayRasterPixelArea}px.`;
+    const overlayPrepMessage = `Motion overlays prepared in ${localOverlayPreparationMs}ms: overlayCount=${motionOverlays.length}, sequences=${overlaySequences.length}, fps=${reactiveOverlayExportFps}, reactive=${audioReactiveOverlayCount}, autonomous=${autonomousOverlayCount}, overlayRasterPixelArea=${localOverlayRasterPixelArea}px.`;
     localDebugNotes.push(overlayPrepMessage);
     logDebug(overlayPrepMessage);
   }
@@ -336,7 +357,12 @@ export async function requestSystemEditorExport(input: {
       total: totalMs,
     },
     counts: {
-      overlayCount: input.project.timeline.overlayItems.length,
+      overlayCount: motionOverlays.length,
+      motionOverlayCount: motionOverlays.length,
+      motionOverlaySequenceCount: localOverlaySequenceCount || metadata.counts?.motionOverlaySequenceCount,
+      motionOverlayPresetIds,
+      audioReactiveOverlayCount,
+      autonomousOverlayCount,
       atlasCount: metadata.counts?.atlasCount,
       sequenceCount: localOverlaySequenceCount || metadata.counts?.sequenceCount,
       overlayRasterPixelArea: localOverlayRasterPixelArea || metadata.counts?.overlayRasterPixelArea,

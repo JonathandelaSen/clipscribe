@@ -90,6 +90,11 @@ export interface CreatorSystemRenderInput {
     subtitleFrameCount: number;
     introOverlayFrameCount: number;
     outroOverlayFrameCount: number;
+    motionOverlayCount?: number;
+    motionOverlaySequenceCount?: number;
+    motionOverlayPresetIds?: string[];
+    audioReactiveOverlayCount?: number;
+    autonomousOverlayCount?: number;
     reactiveOverlayFrameCount?: number;
     reactiveOverlayCount?: number;
     reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];

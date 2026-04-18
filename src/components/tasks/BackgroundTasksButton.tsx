@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Clapperboard, Clock3, Copy, Film, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
+import { Check, Clapperboard, Clock3, Copy, Film, Link as LinkIcon, Loader2, Mic, Scissors, X, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBackgroundTasks, getBackgroundTaskStatusLabel } from "@/components/tasks/BackgroundTaskProvider";
@@ -19,6 +19,7 @@ const TASK_ICONS: Record<BackgroundTaskKind, LucideIcon> = {
   "timeline-bake": Scissors,
   "timeline-export": Film,
   "short-export": Clapperboard,
+  "youtube-import": LinkIcon,
 };
 
 function legacyCopyText(text: string): boolean {

@@ -57,8 +57,7 @@ import {
   secondsToClock,
   type CreatorGenerationSourceInput,
   type CreatorLLMProvider,
-  type CreatorReactiveOverlayItem,
-  type CreatorReactiveOverlayPresetId,
+  type CreatorMotionOverlayItem,
   type CreatorShortEditorState,
   type CreatorShortPlan,
   type CreatorShortsGenerateRequest,
@@ -122,14 +121,19 @@ import { buildCompletedCreatorShortRenderResponse } from "@/lib/creator/system-e
 import { requestSystemCreatorShortExport } from "@/lib/creator/system-export-client";
 import {
   buildCreatorReactiveOverlayAudioAnalysis,
-  CREATOR_REACTIVE_OVERLAY_PRESETS,
-  createDefaultCreatorReactiveOverlay,
-  getCreatorReactiveOverlayPresetLabel,
-  resolveCreatorReactiveOverlayFrame,
-  resolveCreatorReactiveOverlayRect,
   type CreatorReactiveAudioAnalysisTrack,
-  type CreatorReactiveOverlayFrame,
 } from "@/lib/creator/reactive-overlays";
+import {
+  MOTION_OVERLAY_PRESETS,
+  createDefaultMotionOverlayItem,
+  getMotionOverlayPresetLabel,
+  isAudioReactiveMotionOverlayItem,
+  resolveMotionOverlayFrame,
+  resolveMotionOverlayRect,
+  type AudioReactiveMotionOverlayPresetId,
+  type MotionOverlayPresetId,
+  type ResolvedMotionOverlayFrame,
+} from "@/lib/motion-overlays";
 import {
   CREATOR_SUBTITLE_STYLE_LABELS,
   cssRgbaFromHex,
@@ -1336,8 +1340,70 @@ async function readVideoMetadata(
 function ReactiveOverlayPreviewGraphic({
   frame,
 }: {
-  frame: CreatorReactiveOverlayFrame;
+  frame: ResolvedMotionOverlayFrame;
 }) {
+  if (frame.kind === "emoji_bounce" || frame.kind === "emoji_orbit") {
+    return (
+      <svg
+        width={frame.width}
+        height={frame.height}
+        viewBox={`0 0 ${frame.width} ${frame.height}`}
+        className="block h-full w-full overflow-visible"
+      >
+        {frame.kind === "emoji_orbit" ? (
+          <circle
+            cx={frame.width / 2}
+            cy={frame.height / 2}
+            r={frame.orbitRadius}
+            fill="none"
+            stroke={frame.glowColor}
+            strokeWidth={Math.max(1, frame.fontSize * 0.06)}
+            opacity={frame.trailOpacity}
+          />
+        ) : null}
+        <text
+          x={frame.centerX}
+          y={frame.centerY}
+          textAnchor="middle"
+          dominantBaseline="middle"
+          fontSize={frame.fontSize}
+          transform={`rotate(${frame.rotationDeg} ${frame.centerX} ${frame.centerY}) scale(${frame.glyphScale})`}
+          style={{ filter: `drop-shadow(0 0 ${Math.max(8, frame.fontSize * 0.14)}px ${frame.glowColor})` }}
+          opacity={frame.opacity}
+        >
+          {frame.emoji}
+        </text>
+      </svg>
+    );
+  }
+
+  if (frame.kind === "sparkle_drift") {
+    return (
+      <svg
+        width={frame.width}
+        height={frame.height}
+        viewBox={`0 0 ${frame.width} ${frame.height}`}
+        className="block h-full w-full overflow-visible"
+      >
+        {frame.particles.map((particle, index) => (
+          <text
+            key={`${index}_${particle.x}_${particle.y}`}
+            x={particle.x}
+            y={particle.y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={particle.size}
+            fill={particle.color}
+            opacity={frame.opacity * particle.opacity}
+            transform={`rotate(${particle.rotationDeg} ${particle.x} ${particle.y})`}
+          >
+            {particle.glyph}
+          </text>
+        ))}
+      </svg>
+    );
+  }
+
   if (frame.kind === "pulse_ring") {
     return (
       <svg
@@ -1601,7 +1667,7 @@ export function CreatorHub({
   const [outroOverlay, setOutroOverlay] = useState<CreatorTextOverlayState>(() =>
     getDefaultCreatorTextOverlayState("outro")
   );
-  const [reactiveOverlays, setReactiveOverlays] = useState<CreatorReactiveOverlayItem[]>([]);
+  const [reactiveOverlays, setReactiveOverlays] = useState<CreatorMotionOverlayItem[]>([]);
   const [selectedReactiveOverlayId, setSelectedReactiveOverlayId] = useState("");
   const [activeSavedShortProjectId, setActiveSavedShortProjectId] = useState<string>("");
   const [detachedShortSelection, setDetachedShortSelection] = useState<{ clip: CreatorViralClip; plan: CreatorShortPlan } | null>(null);
@@ -2272,7 +2338,8 @@ export function CreatorHub({
       showSafeZones,
       introOverlay,
       outroOverlay,
-      reactiveOverlays,
+      motionOverlays: reactiveOverlays,
+      reactiveOverlays: reactiveOverlays.filter(isAudioReactiveMotionOverlayItem),
       visualSource:
         hasVisualOverride && selectedVisualOverrideKind && visualSourceAssetId
           ? {
@@ -2451,7 +2518,7 @@ export function CreatorHub({
   );
 
   const updateReactiveOverlay = useCallback(
-    (overlayId: string, updater: (prev: CreatorReactiveOverlayItem) => CreatorReactiveOverlayItem) => {
+    (overlayId: string, updater: (prev: CreatorMotionOverlayItem) => CreatorMotionOverlayItem) => {
       setReactiveOverlays((current) =>
         current.map((overlay) => (overlay.id === overlayId ? updater(overlay) : overlay))
       );
@@ -2460,10 +2527,17 @@ export function CreatorHub({
   );
 
   const addReactiveOverlay = useCallback(
-    (presetId: CreatorReactiveOverlayPresetId) => {
+    (presetId: MotionOverlayPresetId) => {
       const clipDuration = editedClip?.durationSeconds ?? 3;
       const startOffsetSeconds = editedClip ? Math.max(0, currentTime - editedClip.startSeconds) : 0;
-      const nextOverlay = createDefaultCreatorReactiveOverlay({
+      if (
+        (presetId === "waveform_line" || presetId === "equalizer_bars" || presetId === "pulse_ring") &&
+        !mediaFile
+      ) {
+        toast.error("Audio-reactive overlays need a source clip with audio loaded in the editor.");
+        return;
+      }
+      const nextOverlay = createDefaultMotionOverlayItem({
         id: makeId("rxov"),
         presetId,
         startOffsetSeconds,
@@ -2472,7 +2546,7 @@ export function CreatorHub({
       setReactiveOverlays((current) => [...current, nextOverlay]);
       setSelectedReactiveOverlayId(nextOverlay.id);
     },
-    [currentTime, editedClip]
+    [currentTime, editedClip, mediaFile]
   );
 
   const removeReactiveOverlay = useCallback((overlayId: string) => {
@@ -2481,7 +2555,7 @@ export function CreatorHub({
   }, []);
 
   useEffect(() => {
-    if (!mediaFile || !editedClip || reactiveOverlays.length === 0) {
+    if (!mediaFile || !editedClip || !reactiveOverlays.some(isAudioReactiveMotionOverlayItem)) {
       setReactiveOverlayAnalysis(null);
       return;
     }
@@ -3107,8 +3181,8 @@ export function CreatorHub({
     setShowSafeZones(hydratedEditor.showSafeZones ?? true);
     setIntroOverlay(hydratedEditor.introOverlay ?? getDefaultCreatorTextOverlayState("intro"));
     setOutroOverlay(hydratedEditor.outroOverlay ?? getDefaultCreatorTextOverlayState("outro"));
-    setReactiveOverlays(hydratedEditor.reactiveOverlays ?? []);
-    setSelectedReactiveOverlayId(hydratedEditor.reactiveOverlays?.[0]?.id ?? "");
+    setReactiveOverlays(hydratedEditor.motionOverlays ?? hydratedEditor.reactiveOverlays ?? []);
+    setSelectedReactiveOverlayId(hydratedEditor.motionOverlays?.[0]?.id ?? hydratedEditor.reactiveOverlays?.[0]?.id ?? "");
     setVisualSourceMode(hydratedEditor.visualSource?.mode === "asset" ? "asset" : "original");
     setVisualSourceAssetId(hydratedEditor.visualSource?.mode === "asset" ? hydratedEditor.visualSource.assetId ?? "" : "");
   }, []);
@@ -3676,7 +3750,7 @@ export function CreatorHub({
   ]);
 
   const activePreviewReactiveOverlays = useMemo(() => {
-    if (!editedClip || !reactiveOverlayAnalysis || previewFrameSize.width <= 0 || previewFrameSize.height <= 0) {
+    if (!editedClip || previewFrameSize.width <= 0 || previewFrameSize.height <= 0) {
       return [];
     }
 
@@ -3687,15 +3761,15 @@ export function CreatorHub({
         return clipRelativeTime >= overlayStart && clipRelativeTime <= overlayEnd;
       })
       .map((overlay) => {
-        const rect = resolveCreatorReactiveOverlayRect({
+        const rect = resolveMotionOverlayRect({
           overlay,
           frameWidth: 1080,
           frameHeight: 1920,
         });
-        const frame = resolveCreatorReactiveOverlayFrame({
+        const frame = resolveMotionOverlayFrame({
           overlay,
           rect,
-          analysis: reactiveOverlayAnalysis,
+          analysis: overlay.behavior === "audio_reactive" ? reactiveOverlayAnalysis : null,
           projectTimeSeconds: clipRelativeTime,
           localTimeSeconds: Math.max(0, clipRelativeTime - overlay.startOffsetSeconds),
         });
@@ -5240,14 +5314,14 @@ export function CreatorHub({
                                   <div>
                                     <div className="flex items-center gap-2 text-sm font-semibold text-white/92">
                                       <Layers className="h-4 w-4 text-cyan-200" />
-                                      Reactive Motion Overlays
+                                      Motion Overlays
                                     </div>
                                     <div className="mt-1 text-[11px] leading-relaxed text-white/50">
-                                      Add small audio-reactive assets over static video or images. They render above the visual layer and below title/subtitle text.
+                                      Mix audio-reactive and autonomous overlays above the visual layer and below title and subtitle text.
                                     </div>
                                   </div>
                                   <div className="flex flex-wrap gap-2">
-                                    {CREATOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                                    {MOTION_OVERLAY_PRESETS.map((preset) => (
                                       <Button
                                         key={preset.id}
                                         type="button"
@@ -5282,7 +5356,7 @@ export function CreatorHub({
                                             <div className="flex items-start justify-between gap-3">
                                               <div>
                                                 <div className="text-sm font-semibold text-white/90">
-                                                  {index + 1}. {getCreatorReactiveOverlayPresetLabel(overlay.presetId)}
+                                                  {index + 1}. {getMotionOverlayPresetLabel(overlay.presetId)}
                                                 </div>
                                                 <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-white/38">
                                                   {overlay.startOffsetSeconds.toFixed(1)}s to {(overlay.startOffsetSeconds + overlay.durationSeconds).toFixed(1)}s
@@ -5306,7 +5380,7 @@ export function CreatorHub({
                                       })
                                     ) : (
                                       <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm leading-relaxed text-white/55">
-                                        No reactive overlays yet. Add one of the presets to bring movement into static shots.
+                                        No motion overlays yet. Add one of the presets to bring movement into the frame.
                                       </div>
                                     )}
                                   </div>
@@ -5316,10 +5390,10 @@ export function CreatorHub({
                                       <div className="flex items-start justify-between gap-4">
                                         <div>
                                           <div className="text-sm font-semibold text-white/92">
-                                            {getCreatorReactiveOverlayPresetLabel(selectedReactiveOverlay.presetId)}
+                                            {getMotionOverlayPresetLabel(selectedReactiveOverlay.presetId)}
                                           </div>
                                           <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">
-                                            Audio-reactive overlay
+                                            {selectedReactiveOverlay.behavior === "audio_reactive" ? "Audio-reactive overlay" : "Autonomous overlay"}
                                           </div>
                                         </div>
                                         <div className="rounded-full border border-cyan-300/20 bg-cyan-400/10 px-3 py-1 text-[10px] uppercase tracking-[0.24em] text-cyan-100">
@@ -5333,11 +5407,25 @@ export function CreatorHub({
                                           <Select
                                             value={selectedReactiveOverlay.presetId}
                                             onValueChange={(value) => {
-                                              if (value !== "waveform_line" && value !== "equalizer_bars" && value !== "pulse_ring") return;
+                                              if (
+                                                value !== "waveform_line" &&
+                                                value !== "equalizer_bars" &&
+                                                value !== "pulse_ring" &&
+                                                value !== "emoji_bounce" &&
+                                                value !== "emoji_orbit" &&
+                                                value !== "sparkle_drift"
+                                              ) return;
+                                              if (
+                                                !mediaFile &&
+                                                (value === "waveform_line" || value === "equalizer_bars" || value === "pulse_ring")
+                                              ) {
+                                                toast.error("Audio-reactive overlays need a source clip with audio loaded in the editor.");
+                                                return;
+                                              }
                                               updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
-                                                ...createDefaultCreatorReactiveOverlay({
+                                                ...createDefaultMotionOverlayItem({
                                                   id: prev.id,
-                                                  presetId: value,
+                                                  presetId: value as MotionOverlayPresetId,
                                                   startOffsetSeconds: prev.startOffsetSeconds,
                                                   durationSeconds: prev.durationSeconds,
                                                 }),
@@ -5350,7 +5438,7 @@ export function CreatorHub({
                                               <SelectValue />
                                             </SelectTrigger>
                                             <SelectContent className="border-white/10 bg-zinc-950 text-white">
-                                              {CREATOR_REACTIVE_OVERLAY_PRESETS.map((preset) => (
+                                              {MOTION_OVERLAY_PRESETS.map((preset) => (
                                                 <SelectItem key={preset.id} value={preset.id}>
                                                   {preset.label}
                                                 </SelectItem>
@@ -5373,6 +5461,23 @@ export function CreatorHub({
                                           />
                                         </label>
                                       </div>
+
+                                      {selectedReactiveOverlay.behavior === "autonomous" &&
+                                      (selectedReactiveOverlay.presetId === "emoji_bounce" || selectedReactiveOverlay.presetId === "emoji_orbit") ? (
+                                        <label className="text-xs text-white/70 block">
+                                          Emoji
+                                          <Input
+                                            value={selectedReactiveOverlay.emoji ?? ""}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                emoji: event.target.value,
+                                              }))
+                                            }
+                                            className="mt-1 border-white/10 bg-white/[0.04] text-white"
+                                          />
+                                        </label>
+                                      ) : null}
 
                                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                         <label className="text-xs text-white/70 block">
@@ -5502,41 +5607,80 @@ export function CreatorHub({
                                         }
                                         className="w-full"
                                       />
-                                      <label className="text-xs text-white/70 block">Sensitivity: {selectedReactiveOverlay.sensitivity.toFixed(2)}</label>
-                                      <input
-                                        type="range"
-                                        min={0.2}
-                                        max={3}
-                                        step={0.01}
-                                        value={selectedReactiveOverlay.sensitivity}
-                                        onChange={(event) =>
-                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
-                                            ...prev,
-                                            sensitivity: Number(event.target.value),
-                                          }))
-                                        }
-                                        className="w-full"
-                                      />
-                                      <label className="text-xs text-white/70 block">Smoothing: {selectedReactiveOverlay.smoothing.toFixed(2)}</label>
-                                      <input
-                                        type="range"
-                                        min={0}
-                                        max={0.95}
-                                        step={0.01}
-                                        value={selectedReactiveOverlay.smoothing}
-                                        onChange={(event) =>
-                                          updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
-                                            ...prev,
-                                            smoothing: Number(event.target.value),
-                                          }))
-                                        }
-                                        className="w-full"
-                                      />
+                                      {selectedReactiveOverlay.behavior === "audio_reactive" ? (
+                                        <>
+                                          <label className="text-xs text-white/70 block">Sensitivity: {selectedReactiveOverlay.sensitivity.toFixed(2)}</label>
+                                          <input
+                                            type="range"
+                                            min={0.2}
+                                            max={3}
+                                            step={0.01}
+                                            value={selectedReactiveOverlay.sensitivity}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                sensitivity: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="w-full"
+                                          />
+                                          <label className="text-xs text-white/70 block">Smoothing: {selectedReactiveOverlay.smoothing.toFixed(2)}</label>
+                                          <input
+                                            type="range"
+                                            min={0}
+                                            max={0.95}
+                                            step={0.01}
+                                            value={selectedReactiveOverlay.smoothing}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                smoothing: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="w-full"
+                                          />
+                                        </>
+                                      ) : (
+                                        <>
+                                          <label className="text-xs text-white/70 block">Loop duration: {selectedReactiveOverlay.loopDurationSeconds.toFixed(2)}s</label>
+                                          <input
+                                            type="range"
+                                            min={0.4}
+                                            max={8}
+                                            step={0.05}
+                                            value={selectedReactiveOverlay.loopDurationSeconds}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                loopDurationSeconds: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="w-full"
+                                          />
+                                          <label className="text-xs text-white/70 block">Motion amount: {selectedReactiveOverlay.motionAmount.toFixed(2)}</label>
+                                          <input
+                                            type="range"
+                                            min={0.1}
+                                            max={1.5}
+                                            step={0.01}
+                                            value={selectedReactiveOverlay.motionAmount}
+                                            onChange={(event) =>
+                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                ...prev,
+                                                motionAmount: Number(event.target.value),
+                                              }))
+                                            }
+                                            className="w-full"
+                                          />
+                                        </>
+                                      )}
 
                                       <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[11px] text-white/58">
-                                        {reactiveOverlayAnalysis
-                                          ? "Preview is driven by decoded source audio from the selected clip."
-                                          : "Preview analysis will appear once the source audio is decoded."}
+                                        {selectedReactiveOverlay.behavior === "audio_reactive"
+                                          ? reactiveOverlayAnalysis
+                                            ? "Preview is driven by decoded source audio from the selected clip."
+                                            : "Preview analysis will appear once the source audio is decoded."
+                                          : "This overlay loops deterministically, so preview and export use the same motion path."}
                                       </div>
                                     </div>
                                   ) : (

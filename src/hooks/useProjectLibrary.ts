@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { createEmptyEditorProject, createEditorAssetRecord } from "@/lib/editor/storage";
-import { readMediaMetadata } from "@/lib/editor/media";
 import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
+import { createProjectFromSourceFile } from "@/lib/projects/source-assets";
+import { requestProjectYouTubeImport } from "@/lib/projects/youtube-import-client";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type { ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
 
 const projectRepository = createDexieProjectRepository();
-
-function fileStem(name: string) {
-  return name.replace(/\.[^.]+$/, "");
-}
 
 export function useProjectLibrary() {
   const [projects, setProjects] = useState<ContentProjectRecord[]>([]);
@@ -54,37 +50,21 @@ export function useProjectLibrary() {
   }, [refresh]);
 
   const createProjectFromFile = useCallback(async (file: File) => {
-    const metadata = await readMediaMetadata(file);
-    const now = Date.now();
-    const project = createEmptyEditorProject({
-      now,
-      name: fileStem(file.name) || "Untitled Project",
-    }) as ContentProjectRecord;
-    const asset = createEditorAssetRecord({
-      projectId: project.id,
-      role: "source",
-      origin: "upload",
-      kind: metadata.kind === "image" ? "video" : metadata.kind,
-      filename: file.name,
-      mimeType:
-        file.type ||
-        (metadata.kind === "video"
-          ? "video/mp4"
-          : metadata.kind === "image"
-            ? "image/png"
-            : "audio/mpeg"),
-      sizeBytes: file.size,
-      durationSeconds: metadata.durationSeconds,
-      width: metadata.width,
-      height: metadata.height,
-      hasAudio: metadata.hasAudio,
-      sourceType: "upload",
-      captionSource: { kind: "none" },
-      fileBlob: file,
-      now,
+    const { project, asset } = await createProjectFromSourceFile({ file });
+
+    await projectRepository.putProject(project);
+    await projectRepository.bulkPutAssets([asset]);
+    await refresh();
+    notifyProjectLibraryUpdated();
+    return project;
+  }, [refresh]);
+
+  const createProjectFromYouTubeUrl = useCallback(async (url: string) => {
+    const imported = await requestProjectYouTubeImport({ url });
+    const { project, asset } = await createProjectFromSourceFile({
+      file: imported.file,
+      externalSource: imported.externalSource,
     });
-    project.assetIds = [asset.id];
-    project.activeSourceAssetId = asset.id;
 
     await projectRepository.putProject(project);
     await projectRepository.bulkPutAssets([asset]);
@@ -131,6 +111,7 @@ export function useProjectLibrary() {
     error,
     refresh,
     createProjectFromFile,
+    createProjectFromYouTubeUrl,
     saveProject,
     renameProject,
     deleteProject,

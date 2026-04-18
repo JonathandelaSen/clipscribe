@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { createEditorAssetRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
-import { readMediaMetadata } from "@/lib/editor/media";
+import { normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
-import { getActiveProjectSourceAsset, getSelectableProjectSourceAssets } from "@/lib/projects/source-assets";
+import {
+  createProjectAssetFromFile,
+  getActiveProjectSourceAsset,
+  getSelectableProjectSourceAssets,
+} from "@/lib/projects/source-assets";
+import { requestProjectYouTubeImport } from "@/lib/projects/youtube-import-client";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type {
   ContentProjectRecord,
@@ -143,41 +147,9 @@ export function useProjectWorkspace(projectId: string | undefined) {
     [project, saveProject]
   );
 
-  const addAssets = useCallback(
-    async (files: FileList | File[]) => {
-      if (!project) return [];
-      const list = Array.from(files);
-      const nextAssets: ProjectAssetRecord[] = [];
-      for (const file of list) {
-        const metadata = await readMediaMetadata(file);
-        nextAssets.push(
-          createEditorAssetRecord({
-            projectId: project.id,
-            role: metadata.kind === "image" ? "support" : "source",
-            origin: "upload",
-            kind: metadata.kind === "image" ? "image" : metadata.kind,
-            filename: file.name,
-            mimeType:
-              file.type ||
-              (metadata.kind === "video"
-                ? "video/mp4"
-                : metadata.kind === "image"
-                  ? "image/png"
-                  : "audio/mpeg"),
-            sizeBytes: file.size,
-            durationSeconds: metadata.durationSeconds,
-            width: metadata.width,
-            height: metadata.height,
-            hasAudio: metadata.hasAudio,
-            sourceType: "upload",
-            captionSource: { kind: "none" },
-            fileBlob: file,
-            now: Date.now(),
-          }) as ProjectAssetRecord
-        );
-      }
-
-      if (!nextAssets.length) return [];
+  const persistAddedAssets = useCallback(
+    async (nextAssets: ProjectAssetRecord[]) => {
+      if (!project || nextAssets.length === 0) return [];
 
       await projectRepository.bulkPutAssets(nextAssets);
       const nextActiveSourceAssetId =
@@ -194,6 +166,38 @@ export function useProjectWorkspace(projectId: string | undefined) {
       return nextAssets;
     },
     [project, refresh, saveProject]
+  );
+
+  const addAssets = useCallback(
+    async (files: FileList | File[]) => {
+      if (!project) return [];
+      const list = Array.from(files);
+      const nextAssets: ProjectAssetRecord[] = [];
+      for (const file of list) {
+        nextAssets.push(await createProjectAssetFromFile({ projectId: project.id, file }));
+      }
+
+      return persistAddedAssets(nextAssets);
+    },
+    [persistAddedAssets, project]
+  );
+
+  const addYouTubeAsset = useCallback(
+    async (url: string) => {
+      if (!project) return undefined;
+      const imported = await requestProjectYouTubeImport({
+        url,
+        projectId: project.id,
+      });
+      const asset = await createProjectAssetFromFile({
+        projectId: project.id,
+        file: imported.file,
+        externalSource: imported.externalSource,
+      });
+      await persistAddedAssets([asset]);
+      return asset;
+    },
+    [persistAddedAssets, project]
   );
 
   const renameAsset = useCallback(
@@ -261,6 +265,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
     saveYouTubeUpload,
     setActiveSourceAsset,
     addAssets,
+    addYouTubeAsset,
     renameAsset,
     deleteAsset,
   };

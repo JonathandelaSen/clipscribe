@@ -388,6 +388,11 @@ export async function renderEditorSystemExport(
       },
       counts: {
         overlayCount: input.project.timeline.overlayItems.length,
+        motionOverlayCount: input.project.timeline.overlayItems.length,
+        motionOverlaySequenceCount: preparedOverlaySequences.length,
+        motionOverlayPresetIds: input.project.timeline.overlayItems.map((item) => item.presetId),
+        audioReactiveOverlayCount: input.project.timeline.overlayItems.filter((item) => item.behavior === "audio_reactive").length,
+        autonomousOverlayCount: input.project.timeline.overlayItems.filter((item) => item.behavior === "autonomous").length,
         atlasCount: preparedOverlays.length,
         sequenceCount: preparedOverlaySequences.length,
         overlayRasterPixelArea,

@@ -1,98 +1,53 @@
 import {
+  MOTION_OVERLAY_ANALYSIS_HZ,
+  MOTION_OVERLAY_EXPORT_FPS,
+  MOTION_OVERLAY_PRESETS,
+  createDefaultMotionOverlayItem,
+  drawMotionOverlayFrameToContext,
+  getMotionOverlayPresetLabel,
+  getMotionOverlayRasterPixelArea,
+  isAudioReactiveMotionOverlayItem,
+  renderMotionOverlayFrameSequence,
+  resolveMotionOverlayExportFps,
+  resolveMotionOverlayFrame,
+  resolveMotionOverlayRect,
+  type AudioReactiveMotionOverlayPresetId,
+  type MotionOverlayAudioAnalysisTrack,
+  type MotionOverlayBar,
+  type MotionOverlayFrameSequence,
+  type MotionOverlayRect,
+  type MotionOverlayPresetDefinition,
+  type ResolvedMotionOverlayFrame,
+} from "../motion-overlays";
+import {
   getProjectDuration,
   getTimelineAudioPlacements,
   getTimelineClipPlacements,
 } from "./core/timeline";
 import type {
   EditorProjectRecord,
-  EditorReactiveOverlayPresetId,
   ResolvedEditorAsset,
   TimelineOverlayItem,
 } from "./types";
 
-export const REACTIVE_OVERLAY_ANALYSIS_HZ = 60;
-export const REACTIVE_OVERLAY_EXPORT_FPS = 30;
 const MAX_ATLAS_DIMENSION = 16000;
 
-export interface EditorReactiveOverlayPresetDefinition {
-  id: EditorReactiveOverlayPresetId;
-  label: string;
-  description: string;
+export const REACTIVE_OVERLAY_ANALYSIS_HZ = MOTION_OVERLAY_ANALYSIS_HZ;
+export const REACTIVE_OVERLAY_EXPORT_FPS = MOTION_OVERLAY_EXPORT_FPS;
+
+export interface EditorReactiveOverlayPresetDefinition extends MotionOverlayPresetDefinition {
+  id: AudioReactiveMotionOverlayPresetId;
 }
 
-export const EDITOR_REACTIVE_OVERLAY_PRESETS: readonly EditorReactiveOverlayPresetDefinition[] = [
-  {
-    id: "waveform_line",
-    label: "Waveform Line",
-    description: "A flowing line that ripples with the final mix.",
-  },
-  {
-    id: "equalizer_bars",
-    label: "Equalizer Bars",
-    description: "Stacked bars that bounce to the audible energy.",
-  },
-  {
-    id: "pulse_ring",
-    label: "Pulse Ring",
-    description: "A circular pulse that expands and contracts with the beat.",
-  },
-] as const;
+export const EDITOR_REACTIVE_OVERLAY_PRESETS: readonly EditorReactiveOverlayPresetDefinition[] = MOTION_OVERLAY_PRESETS.filter(
+  (preset): preset is EditorReactiveOverlayPresetDefinition => preset.behavior === "audio_reactive"
+);
 
-export interface EditorReactiveAudioAnalysisTrack {
-  durationSeconds: number;
-  sampleRateHz: number;
-  values: Float32Array;
-}
-
-export interface EditorReactiveOverlayRect {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-export interface EditorReactiveOverlayBar {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  radius: number;
-}
-
-export type ResolvedReactiveOverlayFrame =
-  | {
-      kind: "waveform_line";
-      width: number;
-      height: number;
-      opacity: number;
-      stroke: string;
-      strokeWidth: number;
-      path: string;
-      glowPath: string;
-    }
-  | {
-      kind: "equalizer_bars";
-      width: number;
-      height: number;
-      opacity: number;
-      fill: string;
-      glowFill: string;
-      bars: EditorReactiveOverlayBar[];
-    }
-  | {
-      kind: "pulse_ring";
-      width: number;
-      height: number;
-      opacity: number;
-      stroke: string;
-      glowFill: string;
-      centerX: number;
-      centerY: number;
-      radius: number;
-      strokeWidth: number;
-      innerRadius: number;
-      glowRadius: number;
-    };
+export type EditorReactiveAudioAnalysisTrack = MotionOverlayAudioAnalysisTrack;
+export type EditorReactiveOverlayRect = MotionOverlayRect;
+export type EditorReactiveOverlayBar = MotionOverlayBar;
+export type ReactiveOverlayFrameSequence = MotionOverlayFrameSequence;
+export type ResolvedReactiveOverlayFrame = ResolvedMotionOverlayFrame;
 
 export interface EditorReactiveOverlayAtlasFrame {
   pngBytes: Uint8Array;
@@ -103,59 +58,29 @@ export interface EditorReactiveOverlayAtlasFrame {
   width: number;
   height: number;
   cropExpression: string;
-  presetId: EditorReactiveOverlayPresetId;
+  presetId: AudioReactiveMotionOverlayPresetId;
 }
 
-export interface ReactiveOverlayFrameSequence {
-  /** Individual frame images for this sequence */
-  frames: Array<{ bytes: Uint8Array; filename: string }>;
-  /** FFmpeg framerate for this overlay sequence */
-  fps: number;
-  /** Timeline start time in seconds */
-  start: number;
-  /** Timeline end time in seconds */
-  end: number;
-  /** Position and size on the output frame */
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  /** Preset used */
-  presetId: EditorReactiveOverlayPresetId;
-  /** Format of the frames */
-  mimeType: "image/png" | "image/webp";
-}
-
-function clampNumber(value: number, min: number, max: number): number {
+function clampNumber(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function round3(value: number): number {
+function round3(value: number) {
   return Number(value.toFixed(3));
 }
 
-function hexToRgb(hex: string) {
-  const normalized = hex.replace("#", "").trim();
-  if (!/^[0-9a-f]{6}$/i.test(normalized)) {
-    return { r: 255, g: 255, b: 255 };
+function normalizeAnalysisValues(values: Float32Array) {
+  let maxValue = 0;
+  for (const value of values) {
+    if (value > maxValue) maxValue = value;
   }
-  return {
-    r: Number.parseInt(normalized.slice(0, 2), 16),
-    g: Number.parseInt(normalized.slice(2, 4), 16),
-    b: Number.parseInt(normalized.slice(4, 6), 16),
-  };
-}
-
-function rgba(hex: string, alpha: number) {
-  const { r, g, b } = hexToRgb(hex);
-  return `rgba(${r}, ${g}, ${b}, ${clampNumber(alpha, 0, 1).toFixed(3)})`;
-}
-
-function buildWavePath(points: Array<{ x: number; y: number }>) {
-  if (points.length === 0) return "";
-  return points
-    .map((point, index) => `${index === 0 ? "M" : "L"}${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
-    .join(" ");
+  if (maxValue <= Number.EPSILON) {
+    return values;
+  }
+  for (let index = 0; index < values.length; index += 1) {
+    values[index] = Number((values[index]! / maxValue).toFixed(4));
+  }
+  return values;
 }
 
 function createRasterCanvas(width: number, height: number): OffscreenCanvas | HTMLCanvasElement {
@@ -222,20 +147,6 @@ function measureAudioWindowEnergy(
   return Math.sqrt(sumSquares / Math.max(1, sampleEnd - sampleStart));
 }
 
-function normalizeAnalysisValues(values: Float32Array) {
-  let maxValue = 0;
-  for (const value of values) {
-    if (value > maxValue) maxValue = value;
-  }
-  if (maxValue <= Number.EPSILON) {
-    return values;
-  }
-  for (let index = 0; index < values.length; index += 1) {
-    values[index] = Number((values[index]! / maxValue).toFixed(4));
-  }
-  return values;
-}
-
 export function buildProjectReactiveOverlayAudioAnalysis(input: {
   project: Pick<EditorProjectRecord, "timeline">;
   decodedSamplesByAssetId: ReadonlyMap<string, Float32Array>;
@@ -299,44 +210,9 @@ export function buildProjectReactiveOverlayAudioAnalysis(input: {
 }
 
 export function resolveReactiveOverlayExportFps(
-  overlays: readonly Pick<TimelineOverlayItem, "presetId" | "durationSeconds">[]
+  overlays: readonly Pick<TimelineOverlayItem, "presetId" | "durationSeconds" | "behavior">[]
 ) {
-  const resolveOverlayFps = (overlay: Pick<TimelineOverlayItem, "presetId" | "durationSeconds">) => {
-    const durationSeconds = Math.max(0, overlay.durationSeconds);
-
-    if (overlay.presetId === "equalizer_bars") {
-      if (durationSeconds >= 300) return 3;
-      if (durationSeconds >= 120) return 4;
-      if (durationSeconds >= 60) return 5;
-      if (durationSeconds >= 30) return 6;
-      if (durationSeconds >= 20) return 8;
-      if (durationSeconds >= 10) return 10;
-      if (durationSeconds >= 5) return 12;
-      return 15;
-    }
-
-    if (overlay.presetId === "pulse_ring") {
-      if (durationSeconds >= 300) return 2;
-      if (durationSeconds >= 120) return 3;
-      if (durationSeconds >= 60) return 4;
-      if (durationSeconds >= 30) return 6;
-      if (durationSeconds >= 20) return 8;
-      if (durationSeconds >= 10) return 10;
-      if (durationSeconds >= 5) return 12;
-      return 15;
-    }
-
-    if (durationSeconds >= 300) return 1;
-    if (durationSeconds >= 120) return 2;
-    if (durationSeconds >= 60) return 4;
-    if (durationSeconds >= 30) return 6;
-    if (durationSeconds >= 20) return 8;
-    if (durationSeconds >= 10) return 10;
-    if (durationSeconds >= 5) return 12;
-    return 15;
-  };
-
-  return overlays.reduce((max, overlay) => Math.max(max, resolveOverlayFps(overlay)), 1);
+  return resolveMotionOverlayExportFps(overlays);
 }
 
 export async function buildProjectReactiveOverlayAudioAnalysisFromResolvedAssets(input: {
@@ -368,25 +244,8 @@ export function resolveReactiveOverlayRect(input: {
   overlay: TimelineOverlayItem;
   frameWidth: number;
   frameHeight: number;
-}): EditorReactiveOverlayRect {
-  const width = clampNumber(
-    Math.round((input.frameWidth * input.overlay.widthPercent * input.overlay.scale) / 100),
-    12,
-    input.frameWidth
-  );
-  const height = clampNumber(
-    Math.round((input.frameHeight * input.overlay.heightPercent * input.overlay.scale) / 100),
-    12,
-    input.frameHeight
-  );
-  const centerX = (input.frameWidth * input.overlay.positionXPercent) / 100;
-  const centerY = (input.frameHeight * input.overlay.positionYPercent) / 100;
-  return {
-    width,
-    height,
-    x: clampNumber(Math.round(centerX - width / 2), 0, Math.max(0, input.frameWidth - width)),
-    y: clampNumber(Math.round(centerY - height / 2), 0, Math.max(0, input.frameHeight - height)),
-  };
+}) {
+  return resolveMotionOverlayRect(input);
 }
 
 export function getReactiveOverlayAnalysisValueAtTime(
@@ -437,184 +296,15 @@ export function resolveReactiveOverlayFrame(input: {
   analysis: EditorReactiveAudioAnalysisTrack;
   projectTimeSeconds: number;
   localTimeSeconds: number;
-}): ResolvedReactiveOverlayFrame {
-  const width = Math.max(1, input.rect.width);
-  const height = Math.max(1, input.rect.height);
-  const energy = getReactiveOverlayEnergyAtTime({
-    analysis: input.analysis,
-    timeSeconds: input.projectTimeSeconds,
-    smoothing: input.overlay.smoothing,
-    sensitivity: input.overlay.sensitivity,
-  });
-  const opacity = clampNumber(input.overlay.opacity, 0.05, 1);
-
-  if (input.overlay.presetId === "pulse_ring") {
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const baseRadius = Math.min(width, height) * 0.18;
-    const radius = baseRadius + energy * Math.min(width, height) * 0.16;
-    const innerRadius = baseRadius * (0.35 + energy * 0.55);
-    return {
-      kind: "pulse_ring",
-      width,
-      height,
-      opacity,
-      stroke: rgba(input.overlay.tintHex, 0.96),
-      glowFill: rgba(input.overlay.tintHex, 0.18 + energy * 0.22),
-      centerX,
-      centerY,
-      radius,
-      innerRadius,
-      strokeWidth: Math.max(2, Math.round(Math.min(width, height) * (0.03 + energy * 0.015))),
-      glowRadius: radius + Math.min(width, height) * (0.08 + energy * 0.08),
-    };
-  }
-
-  if (input.overlay.presetId === "equalizer_bars") {
-    const barCount = 22;
-    const gap = width * 0.018;
-    const barWidth = (width - gap * (barCount - 1)) / barCount;
-    const bars: EditorReactiveOverlayBar[] = [];
-    for (let index = 0; index < barCount; index += 1) {
-      const bandTime = input.projectTimeSeconds - 0.18 + index * 0.012;
-      const bandEnergy = getReactiveOverlayEnergyAtTime({
-        analysis: input.analysis,
-        timeSeconds: bandTime,
-        smoothing: input.overlay.smoothing,
-        sensitivity: input.overlay.sensitivity,
-      });
-      const sway = 0.62 + 0.38 * Math.sin(input.localTimeSeconds * 7.5 + index * 0.8);
-      const barHeight = Math.max(height * 0.12, height * clampNumber(bandEnergy * sway, 0.08, 1));
-      bars.push({
-        x: index * (barWidth + gap),
-        y: height - barHeight,
-        width: barWidth,
-        height: barHeight,
-        radius: Math.min(barWidth / 2, 8),
-      });
-    }
-
-    return {
-      kind: "equalizer_bars",
-      width,
-      height,
-      opacity,
-      fill: rgba(input.overlay.tintHex, 0.88),
-      glowFill: rgba(input.overlay.tintHex, 0.22),
-      bars,
-    };
-  }
-
-  const pointCount = 48;
-  const historyWindowSeconds = 1.4;
-  const midY = height / 2;
-  const points = Array.from({ length: pointCount }, (_value, index) => {
-    const ratio = index / Math.max(1, pointCount - 1);
-    const sampleTime = input.projectTimeSeconds - historyWindowSeconds + historyWindowSeconds * ratio;
-    const sampleEnergy = getReactiveOverlayEnergyAtTime({
-      analysis: input.analysis,
-      timeSeconds: sampleTime,
-      smoothing: input.overlay.smoothing,
-      sensitivity: input.overlay.sensitivity,
-    });
-    const oscillation = Math.sin(sampleTime * 12 + index * 0.52);
-    const offset = sampleEnergy * oscillation * height * 0.38;
-    return {
-      x: ratio * width,
-      y: midY - offset,
-    };
-  });
-
-  return {
-    kind: "waveform_line",
-    width,
-    height,
-    opacity,
-    stroke: rgba(input.overlay.tintHex, 0.94),
-    strokeWidth: Math.max(2, Math.round(height * 0.06)),
-    path: buildWavePath(points),
-    glowPath: buildWavePath(points),
-  };
-}
-
-function drawRoundedRect(
-  ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
-  bar: EditorReactiveOverlayBar
-) {
-  ctx.beginPath();
-  const radius = Math.min(bar.radius, bar.width / 2, bar.height / 2);
-  ctx.moveTo(bar.x + radius, bar.y);
-  ctx.lineTo(bar.x + bar.width - radius, bar.y);
-  ctx.quadraticCurveTo(bar.x + bar.width, bar.y, bar.x + bar.width, bar.y + radius);
-  ctx.lineTo(bar.x + bar.width, bar.y + bar.height - radius);
-  ctx.quadraticCurveTo(bar.x + bar.width, bar.y + bar.height, bar.x + bar.width - radius, bar.y + bar.height);
-  ctx.lineTo(bar.x + radius, bar.y + bar.height);
-  ctx.quadraticCurveTo(bar.x, bar.y + bar.height, bar.x, bar.y + bar.height - radius);
-  ctx.lineTo(bar.x, bar.y + radius);
-  ctx.quadraticCurveTo(bar.x, bar.y, bar.x + radius, bar.y);
-  ctx.closePath();
+}) {
+  return resolveMotionOverlayFrame(input);
 }
 
 export function drawReactiveOverlayFrameToContext(
   ctx: OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D,
   frame: ResolvedReactiveOverlayFrame
 ) {
-  ctx.clearRect(0, 0, frame.width, frame.height);
-  ctx.globalAlpha = frame.opacity;
-
-  if (frame.kind === "pulse_ring") {
-    ctx.fillStyle = frame.glowFill;
-    ctx.beginPath();
-    ctx.arc(frame.centerX, frame.centerY, frame.glowRadius, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.strokeStyle = frame.stroke;
-    ctx.lineWidth = frame.strokeWidth;
-    ctx.beginPath();
-    ctx.arc(frame.centerX, frame.centerY, frame.radius, 0, Math.PI * 2);
-    ctx.stroke();
-
-    ctx.fillStyle = frame.stroke;
-    ctx.beginPath();
-    ctx.arc(frame.centerX, frame.centerY, frame.innerRadius, 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-
-  if (frame.kind === "equalizer_bars") {
-    ctx.fillStyle = frame.glowFill;
-    for (const bar of frame.bars) {
-      drawRoundedRect(ctx, {
-        ...bar,
-        y: Math.max(0, bar.y - 6),
-        height: Math.min(frame.height, bar.height + 6),
-      });
-      ctx.fill();
-    }
-    ctx.fillStyle = frame.fill;
-    for (const bar of frame.bars) {
-      drawRoundedRect(ctx, bar);
-      ctx.fill();
-    }
-    return;
-  }
-
-  ctx.save();
-  ctx.strokeStyle = frame.stroke;
-  ctx.globalAlpha = frame.opacity * 0.32;
-  ctx.lineWidth = frame.strokeWidth * 2.25;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.beginPath();
-  const glowPath = new Path2D(frame.glowPath);
-  ctx.stroke(glowPath);
-  ctx.restore();
-
-  ctx.strokeStyle = frame.stroke;
-  ctx.globalAlpha = frame.opacity;
-  ctx.lineWidth = frame.strokeWidth;
-  const path = new Path2D(frame.path);
-  ctx.stroke(path);
+  drawMotionOverlayFrameToContext(ctx, frame);
 }
 
 function buildAtlasCropExpression(
@@ -636,90 +326,17 @@ export async function renderReactiveOverlayFrameSequence(input: {
   fps?: number;
   signal?: AbortSignal;
 }): Promise<ReactiveOverlayFrameSequence[]> {
-  const fps = input.fps ?? REACTIVE_OVERLAY_EXPORT_FPS;
-  const sequences: ReactiveOverlayFrameSequence[] = [];
-  const projectDuration = Math.max(getProjectDuration(input.project), 0.25);
-
-  const preferredMimeType = "image/webp";
-  const quality = 0.85;
-
-  for (const overlay of input.overlayItems) {
-    throwIfAborted(input.signal);
-    const rect = resolveReactiveOverlayRect({
-      overlay,
-      frameWidth: input.outputWidth,
-      frameHeight: input.outputHeight,
-    });
-    const frameHeight = rect.height;
-    const frameWidth = rect.width;
-    const overlayStart = Math.max(0, overlay.startOffsetSeconds);
-    const overlayEnd = Math.min(projectDuration, overlay.startOffsetSeconds + Math.max(0.25, overlay.durationSeconds));
-    const frameCount = Math.max(1, Math.ceil((overlayEnd - overlayStart) * fps));
-
-    const frames: Array<{ bytes: Uint8Array; filename: string }> = [];
-
-    const frameCanvas = createRasterCanvas(frameWidth, frameHeight);
-    const frameCtx = frameCanvas.getContext("2d") as OffscreenCanvasRenderingContext2D | CanvasRenderingContext2D | null;
-    if (!frameCtx) {
-      throw new Error("Failed to create reactive overlay sequence context.");
-    }
-
-    let actualMimeType: "image/png" | "image/webp" = preferredMimeType;
-
-    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
-      throwIfAborted(input.signal);
-      const frameStart = overlayStart + frameIndex / fps;
-
-      frameCtx.clearRect(0, 0, frameWidth, frameHeight);
-
-      const resolved = resolveReactiveOverlayFrame({
-        overlay,
-        rect,
-        analysis: input.analysis,
-        projectTimeSeconds: frameStart,
-        localTimeSeconds: Math.max(0, frameStart - overlayStart),
-      });
-
-      drawReactiveOverlayFrameToContext(frameCtx, resolved);
-
-      let bytes: Uint8Array;
-      try {
-        bytes = await canvasToImageBytes(frameCanvas, actualMimeType, quality);
-      } catch {
-        // Fallback to PNG if WebP fails
-        if (actualMimeType === "image/webp") {
-          actualMimeType = "image/png";
-          bytes = await canvasToImageBytes(frameCanvas, actualMimeType, quality);
-        } else {
-          throw new Error("Failed to rasterize overlay frame");
-        }
-      }
-
-      const extension = actualMimeType === "image/webp" ? "webp" : "png";
-      const frameFilename = `frame_${String(frameIndex + 1).padStart(5, "0")}.${extension}`;
-      frames.push({ bytes, filename: frameFilename });
-    }
-
-    sequences.push({
-      frames,
-      fps,
-      start: overlayStart,
-      end: overlayEnd,
-      x: rect.x,
-      y: rect.y,
-      width: frameWidth,
-      height: frameHeight,
-      presetId: overlay.presetId,
-      mimeType: actualMimeType,
-    });
-  }
-
-  return sequences;
+  return renderMotionOverlayFrameSequence({
+    overlayItems: input.overlayItems.filter((overlay) => overlay.behavior === "audio_reactive"),
+    analysis: input.analysis,
+    outputWidth: input.outputWidth,
+    outputHeight: input.outputHeight,
+    projectDuration: getProjectDuration(input.project),
+    fps: input.fps,
+    signal: input.signal,
+  });
 }
 
-/**
- * @deprecated Use renderReactiveOverlayFrameSequence instead.
- */
 export async function renderReactiveOverlayAtlases(input: {
   project: Pick<EditorProjectRecord, "timeline">;
   overlayItems: readonly TimelineOverlayItem[];
@@ -733,7 +350,7 @@ export async function renderReactiveOverlayAtlases(input: {
   const atlasFrames: EditorReactiveOverlayAtlasFrame[] = [];
   const projectDuration = Math.max(getProjectDuration(input.project), 0.25);
 
-  for (const overlay of input.overlayItems) {
+  for (const overlay of input.overlayItems.filter(isAudioReactiveMotionOverlayItem)) {
     throwIfAborted(input.signal);
     const rect = resolveReactiveOverlayRect({
       overlay,
@@ -801,9 +418,18 @@ export async function renderReactiveOverlayAtlases(input: {
 export function getReactiveOverlayRasterPixelArea(
   frame: Pick<EditorReactiveOverlayAtlasFrame, "width" | "height">
 ) {
-  return Math.max(1, frame.width) * Math.max(1, frame.height);
+  return getMotionOverlayRasterPixelArea(frame);
 }
 
-export function getReactiveOverlayPresetLabel(presetId: EditorReactiveOverlayPresetId) {
-  return EDITOR_REACTIVE_OVERLAY_PRESETS.find((preset) => preset.id === presetId)?.label ?? "Reactive Overlay";
+export function getReactiveOverlayPresetLabel(presetId: AudioReactiveMotionOverlayPresetId) {
+  return getMotionOverlayPresetLabel(presetId);
+}
+
+export function createDefaultReactiveOverlayItem(input: {
+  id: string;
+  presetId: AudioReactiveMotionOverlayPresetId;
+  startOffsetSeconds?: number;
+  durationSeconds?: number;
+}) {
+  return createDefaultMotionOverlayItem(input);
 }

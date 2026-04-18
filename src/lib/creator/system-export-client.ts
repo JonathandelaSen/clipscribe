@@ -24,13 +24,11 @@ import { trimSourceForExport } from "@/lib/creator/source-trim";
 import { renderTextOverlayToPngFrames } from "@/lib/creator/text-overlay-canvas";
 import {
   buildCreatorReactiveOverlayAudioAnalysis,
-  getCreatorReactiveOverlayRasterPixelArea,
-  renderCreatorReactiveOverlayFrameSequence,
-  resolveCreatorReactiveOverlayExportFps,
-  type CreatorReactiveOverlayFrameSequence,
 } from "@/lib/creator/reactive-overlays";
 import { prepareSystemExportTimelineArtifacts } from "./system-export-timeline";
 import type {
+  CreatorMotionOverlayItem,
+  CreatorMotionOverlayPresetId,
   CreatorReactiveOverlayPresetId,
   CreatorShortEditorState,
   CreatorShortPlan,
@@ -41,6 +39,13 @@ import type {
   CreatorViralClip,
 } from "@/lib/creator/types";
 import { shiftSubtitleChunks, type SubtitleChunk } from "@/lib/history";
+import {
+  getMotionOverlayRasterPixelArea,
+  isAudioReactiveMotionOverlayItem,
+  renderMotionOverlayFrameSequence,
+  resolveMotionOverlayExportFps,
+  type MotionOverlayFrameSequence,
+} from "@/lib/motion-overlays";
 
 const OUTPUT_WIDTH = 1080;
 const OUTPUT_HEIGHT = 1920;
@@ -104,7 +109,7 @@ function getOverlayRasterAreaPct(input: {
 }
 
 function describeOverlayRenderPath(input: {
-  kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
+    kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "motion_overlay" | "subtitle_atlas" | "subtitle_frame";
   x?: number;
   y?: number;
   width?: number;
@@ -120,6 +125,9 @@ function describeOverlayRenderPath(input: {
   }
   if (input.kind === "reactive_overlay") {
     return "reactive_overlay_atlas";
+  }
+  if (input.kind === "motion_overlay") {
+    return "motion_overlay_png";
   }
   return input.kind ?? "overlay";
 }
@@ -395,39 +403,46 @@ export async function requestSystemCreatorShortExport(
     logDebug(`Outro overlay prepared: 0 frame(s) in ${outroOverlayRenderMs}ms.`);
   }
 
-  let reactiveOverlaySequences: CreatorReactiveOverlayFrameSequence[] = [];
+  const motionOverlays = (input.editor.motionOverlays ?? input.editor.reactiveOverlays ?? []) as CreatorMotionOverlayItem[];
+  const audioReactiveOverlays = motionOverlays.filter(isAudioReactiveMotionOverlayItem);
+  const autonomousOverlays = motionOverlays.filter((overlay) => overlay.behavior === "autonomous");
+  let motionOverlaySequences: MotionOverlayFrameSequence[] = [];
   let reactiveOverlayPreparationMs = 0;
-  let reactiveOverlayRasterPixelArea = 0;
-  let reactiveOverlayExportFps = 0;
-  const reactiveOverlayPresetIds = Array.from(
-    new Set(
-      (input.editor.reactiveOverlays ?? [])
-        .map((overlay) => overlay.presetId)
-        .filter((presetId): presetId is CreatorReactiveOverlayPresetId => typeof presetId === "string")
-    )
+  let motionOverlayRasterPixelArea = 0;
+  let motionOverlayExportFps = 0;
+  const motionOverlayPresetIds = Array.from(
+    new Set(motionOverlays.map((overlay) => overlay.presetId).filter((presetId): presetId is CreatorMotionOverlayPresetId => typeof presetId === "string"))
   );
-  if ((input.editor.reactiveOverlays?.length ?? 0) > 0) {
+  const reactiveOverlayPresetIds = motionOverlayPresetIds.filter(
+    (presetId): presetId is CreatorReactiveOverlayPresetId =>
+      presetId === "waveform_line" || presetId === "equalizer_bars" || presetId === "pulse_ring"
+  );
+  if (motionOverlays.length > 0) {
     const reactiveStartedAt = nowMs();
-    reactiveOverlayExportFps = resolveCreatorReactiveOverlayExportFps(input.editor.reactiveOverlays ?? []);
-    const { decodeAudio } = await import("@/lib/audio");
-    const decodedSamples = await decodeAudio(input.sourceFile);
-    throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
-    const reactiveAnalysis = buildCreatorReactiveOverlayAudioAnalysis({
-      clipStartSeconds: short.startSeconds,
-      clipDurationSeconds,
-      decodedSamples,
-    });
-    reactiveOverlaySequences = await renderCreatorReactiveOverlayFrameSequence({
-      overlays: input.editor.reactiveOverlays ?? [],
+    motionOverlayExportFps = resolveMotionOverlayExportFps(motionOverlays);
+    let reactiveAnalysis = null;
+    if (audioReactiveOverlays.length > 0) {
+      const { decodeAudio } = await import("@/lib/audio");
+      const decodedSamples = await decodeAudio(input.sourceFile);
+      throwIfBrowserRenderCanceled(input.renderLifecycle?.signal);
+      reactiveAnalysis = buildCreatorReactiveOverlayAudioAnalysis({
+        clipStartSeconds: short.startSeconds,
+        clipDurationSeconds,
+        decodedSamples,
+      });
+    }
+    motionOverlaySequences = await renderMotionOverlayFrameSequence({
+      overlayItems: motionOverlays,
       analysis: reactiveAnalysis,
-      frameWidth: OUTPUT_WIDTH,
-      frameHeight: OUTPUT_HEIGHT,
-      fps: reactiveOverlayExportFps,
+      outputWidth: OUTPUT_WIDTH,
+      outputHeight: OUTPUT_HEIGHT,
+      projectDuration: clipDurationSeconds,
+      fps: motionOverlayExportFps,
       signal: input.renderLifecycle?.signal,
     });
     reactiveOverlayPreparationMs = roundMs(nowMs() - reactiveStartedAt);
-    reactiveOverlayRasterPixelArea = reactiveOverlaySequences.reduce(
-      (total, seq) => total + getCreatorReactiveOverlayRasterPixelArea({
+    motionOverlayRasterPixelArea = motionOverlaySequences.reduce(
+      (total, seq) => total + getMotionOverlayRasterPixelArea({
         width: seq.width ?? OUTPUT_WIDTH,
         height: seq.height ?? OUTPUT_HEIGHT,
         framesLength: seq.frames.length,
@@ -436,12 +451,12 @@ export async function requestSystemCreatorShortExport(
     );
   }
   emitProgress(PROGRESS.reactiveReady);
-  if (reactiveOverlaySequences[0]) {
+  if (motionOverlaySequences[0]) {
     logDebug(
-      `Reactive overlays prepared: count=${input.editor.reactiveOverlays?.length ?? 0}, sequences=${reactiveOverlaySequences.length}, fps=${reactiveOverlayExportFps}, presets=${reactiveOverlayPresetIds.join(",") || "none"}, analysisSource=final_mix, prep=${reactiveOverlayPreparationMs}ms, raster=${reactiveOverlayRasterPixelArea}px.`
+      `Motion overlays prepared: count=${motionOverlays.length}, sequences=${motionOverlaySequences.length}, fps=${motionOverlayExportFps}, presets=${motionOverlayPresetIds.join(",") || "none"}, reactive=${audioReactiveOverlays.length}, autonomous=${autonomousOverlays.length}, prep=${reactiveOverlayPreparationMs}ms, raster=${motionOverlayRasterPixelArea}px.`
     );
   } else {
-    logDebug(`Reactive overlays prepared: 0 sequences(s) in ${reactiveOverlayPreparationMs}ms.`);
+    logDebug(`Motion overlays prepared: 0 sequence(s) in ${reactiveOverlayPreparationMs}ms.`);
   }
 
   const semanticSubtitles = timelineArtifacts.semanticSubtitles;
@@ -496,7 +511,7 @@ export async function requestSystemCreatorShortExport(
     overlayIndex++;
   };
 
-  for (const [seqIndex, seq] of reactiveOverlaySequences.entries()) {
+  for (const [seqIndex, seq] of motionOverlaySequences.entries()) {
     const fileFieldPrefix = `overlay_seq_${seqIndex}`;
     overlaySequenceDescriptors.push({
       fps: seq.fps,
@@ -530,7 +545,7 @@ export async function requestSystemCreatorShortExport(
   const overlayRasterPixelArea = overlayDescriptors.reduce(
     (total, overlay) => total + getOverlayRasterPixelArea(overlay),
     0
-  ) + reactiveOverlayRasterPixelArea;
+  ) + motionOverlayRasterPixelArea;
   const overlayRasterAreaPct = Number(
     ((overlayRasterPixelArea / (OUTPUT_WIDTH * OUTPUT_HEIGHT)) * 100).toFixed(2)
   );
@@ -538,7 +553,7 @@ export async function requestSystemCreatorShortExport(
   const clientTimingsBase = {
     introOverlayRender: introOverlayRenderMs,
     outroOverlayRender: outroOverlayRenderMs,
-    reactiveOverlayPreparation: reactiveOverlayPreparationMs,
+      reactiveOverlayPreparation: reactiveOverlayPreparationMs,
     subtitlePreparation: subtitlePreparationMs,
   } as const;
   const renderRequestId = createRenderRequestId();
@@ -572,8 +587,15 @@ export async function requestSystemCreatorShortExport(
       subtitleFrameCount: subtitleAtlases.length,
       introOverlayFrameCount: introOverlayFrames.length,
       outroOverlayFrameCount: outroOverlayFrames.length,
-      reactiveOverlayFrameCount: reactiveOverlaySequences.reduce((sum, s) => sum + s.frames.length, 0),
-      reactiveOverlayCount: input.editor.reactiveOverlays?.length ?? 0,
+      motionOverlayCount: motionOverlays.length,
+      motionOverlaySequenceCount: motionOverlaySequences.length,
+      motionOverlayPresetIds,
+      audioReactiveOverlayCount: audioReactiveOverlays.length,
+      autonomousOverlayCount: autonomousOverlays.length,
+      reactiveOverlayFrameCount: motionOverlaySequences
+        .filter((sequence) => sequence.behavior === "audio_reactive")
+        .reduce((sum, sequence) => sum + sequence.frames.length, 0),
+      reactiveOverlayCount: audioReactiveOverlays.length,
       reactiveOverlayPresetIds,
     },
     clientTimingsMs: clientTimingsBase,

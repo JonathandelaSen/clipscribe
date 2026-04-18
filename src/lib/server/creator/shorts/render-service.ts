@@ -135,6 +135,7 @@ function parseOverlayDescriptor(value: unknown, index: number): CreatorShortSyst
     value.kind === "intro_overlay" ||
     value.kind === "outro_overlay" ||
     value.kind === "reactive_overlay" ||
+    value.kind === "motion_overlay" ||
     value.kind === "subtitle_atlas" ||
     value.kind === "subtitle_frame"
       ? value.kind
@@ -675,6 +676,11 @@ export async function renderCreatorShortSystemExport(
         overlayRasterAreaPct,
         introOverlayCount: input.payload.overlaySummary.introOverlayFrameCount,
         outroOverlayCount: input.payload.overlaySummary.outroOverlayFrameCount,
+        motionOverlayCount: input.payload.overlaySummary.motionOverlayCount,
+        motionOverlaySequenceCount: input.payload.overlaySummary.motionOverlaySequenceCount,
+        motionOverlayPresetIds: input.payload.overlaySummary.motionOverlayPresetIds,
+        autonomousOverlayCount: input.payload.overlaySummary.autonomousOverlayCount,
+        audioReactiveOverlayCount: input.payload.overlaySummary.audioReactiveOverlayCount,
         reactiveOverlayCount: input.payload.overlaySummary.reactiveOverlayCount,
         reactiveOverlayFrameCount: input.payload.overlaySummary.reactiveOverlayFrameCount,
         reactiveOverlayPresetIds: input.payload.overlaySummary.reactiveOverlayPresetIds,

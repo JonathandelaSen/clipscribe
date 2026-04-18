@@ -2,6 +2,7 @@ import type { ShortExportGeometryResult } from "@/lib/creator/core/export-geomet
 import type { CreatorShortSemanticSubtitlePayload } from "@/lib/creator/semantic-subtitles";
 import type {
   CreatorReactiveOverlayPresetId,
+  CreatorMotionOverlayPresetId,
   CreatorShortSystemExportCounts,
   CreatorShortSystemExportTimingsMs,
   CreatorShortEditorState,
@@ -66,6 +67,11 @@ export interface CreatorShortSystemExportOverlaySummary {
   subtitleFrameCount: number;
   introOverlayFrameCount: number;
   outroOverlayFrameCount: number;
+  motionOverlayCount?: number;
+  motionOverlaySequenceCount?: number;
+  motionOverlayPresetIds?: CreatorMotionOverlayPresetId[];
+  audioReactiveOverlayCount?: number;
+  autonomousOverlayCount?: number;
   reactiveOverlayFrameCount?: number;
   reactiveOverlayCount?: number;
   reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];

@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Film, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { Film, Link as LinkIcon, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DragDropZone } from "@/components/DragDropZone";
+import { YouTubeImportDialog } from "@/components/projects/YouTubeImportDialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Toaster } from "@/components/ui/sonner";
+import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
 
 function formatRelativeDate(timestamp: number) {
@@ -23,6 +25,8 @@ function formatRelativeDate(timestamp: number) {
 
 export function ProjectLibraryHome() {
   const router = useRouter();
+  const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false);
+  const { startYouTubeImport } = useBackgroundTasks();
   const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createProjectFromFile, renameProject, deleteProject } = useProjectLibrary();
 
   useEffect(() => {
@@ -53,6 +57,17 @@ export function ProjectLibraryHome() {
     if (!confirmed) return;
     await deleteProject(projectId);
     toast.success("Proyecto eliminado");
+  };
+
+  const handleCreateProjectFromYouTube = async (url: string, signal: AbortSignal) => {
+    if (signal.aborted) return;
+    startYouTubeImport({
+      url,
+      onComplete: ({ projectId }) => {
+        toast.success("Proyecto importado desde YouTube");
+        router.push(`/projects/${projectId}`);
+      },
+    });
   };
 
   const handleRenameProject = async (projectId: string, currentName: string) => {
@@ -89,11 +104,19 @@ export function ProjectLibraryHome() {
 
         <section className="grid gap-6 xl:grid-cols-[1.1fr_1.4fr]">
           <Card className="border-white/10 bg-white/[0.03] text-white shadow-[0_18px_70px_rgba(0,0,0,0.38)]">
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between gap-4">
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Sparkles className="h-5 w-5 text-cyan-200" />
                 Crear Proyecto
               </CardTitle>
+              <Button
+                variant="outline"
+                className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                onClick={() => setIsYouTubeDialogOpen(true)}
+              >
+                <LinkIcon className="mr-2 h-4 w-4" />
+                Importar URL
+              </Button>
             </CardHeader>
             <CardContent>
               <DragDropZone onFileSelect={handleCreateProject} disabled={false} />
@@ -174,6 +197,14 @@ export function ProjectLibraryHome() {
           </Card>
         </section>
       </div>
+      <YouTubeImportDialog
+        open={isYouTubeDialogOpen}
+        onOpenChange={setIsYouTubeDialogOpen}
+        title="Crear proyecto desde YouTube"
+        description="Descarga el vídeo, lo normaliza a MP4 y lo guarda como source del proyecto."
+        confirmLabel="Importar y crear proyecto"
+        onImport={handleCreateProjectFromYouTube}
+      />
       <Toaster theme="dark" position="bottom-center" />
     </main>
   );

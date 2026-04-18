@@ -1,4 +1,12 @@
 import type { SubtitleChunk } from "@/lib/history";
+import type {
+  AudioReactiveMotionOverlayItem,
+  AudioReactiveMotionOverlayPresetId,
+  AutonomousMotionOverlayItem,
+  MotionOverlayBehavior,
+  MotionOverlayItem,
+  MotionOverlayPresetId,
+} from "@/lib/motion-overlays";
 
 export type CreatorAIProviderMode = "mock" | "openai" | "gemini";
 export type CreatorLLMFeature = "shorts" | "video_info";
@@ -318,7 +326,9 @@ export type CreatorSubtitleTextCase = "original" | "uppercase";
 export type CreatorSubtitleTimingMode = "segment" | "word" | "pair" | "triple";
 export type CreatorTextOverlayTextCase = "original" | "uppercase";
 export type CreatorTextOverlayPreset = "headline_bold" | "glass_card" | "neon_punch";
-export type CreatorReactiveOverlayPresetId = "waveform_line" | "equalizer_bars" | "pulse_ring";
+export type CreatorReactiveOverlayPresetId = AudioReactiveMotionOverlayPresetId;
+export type CreatorMotionOverlayPresetId = MotionOverlayPresetId;
+export type CreatorMotionOverlayBehavior = MotionOverlayBehavior;
 
 export interface CreatorSubtitleStyleSettings {
   preset: CreatorVerticalEditorPreset["subtitleStyle"];
@@ -367,21 +377,9 @@ export interface CreatorTextOverlayState {
   style?: Partial<CreatorTextOverlayStyleSettings>;
 }
 
-export interface CreatorReactiveOverlayItem {
-  id: string;
-  presetId: CreatorReactiveOverlayPresetId;
-  startOffsetSeconds: number;
-  durationSeconds: number;
-  positionXPercent: number;
-  positionYPercent: number;
-  widthPercent: number;
-  heightPercent: number;
-  scale: number;
-  opacity: number;
-  tintHex: string;
-  sensitivity: number;
-  smoothing: number;
-}
+export type CreatorReactiveOverlayItem = AudioReactiveMotionOverlayItem;
+export type CreatorAutonomousMotionOverlayItem = AutonomousMotionOverlayItem;
+export type CreatorMotionOverlayItem = MotionOverlayItem;
 
 export type CreatorShortVisualSourceMode = "original" | "asset";
 export type CreatorShortVisualAssetKind = "video" | "image";
@@ -405,6 +403,7 @@ export interface CreatorShortEditorState {
   subtitleStyle?: Partial<CreatorSubtitleStyleSettings>;
   introOverlay?: CreatorTextOverlayState;
   outroOverlay?: CreatorTextOverlayState;
+  motionOverlays?: CreatorMotionOverlayItem[];
   reactiveOverlays?: CreatorReactiveOverlayItem[];
   visualSource?: CreatorShortVisualSourceState;
 }
@@ -436,6 +435,7 @@ export type CreatorShortRasterOverlayKind =
   | "intro_overlay"
   | "outro_overlay"
   | "reactive_overlay"
+  | "motion_overlay"
   | "subtitle_atlas"
   | "subtitle_frame";
 
@@ -446,6 +446,11 @@ export interface CreatorShortSystemExportCounts {
   overlayRasterAreaPct: number;
   introOverlayCount: number;
   outroOverlayCount: number;
+  motionOverlayCount?: number;
+  motionOverlaySequenceCount?: number;
+  motionOverlayPresetIds?: CreatorMotionOverlayPresetId[];
+  audioReactiveOverlayCount?: number;
+  autonomousOverlayCount?: number;
   reactiveOverlayCount?: number;
   reactiveOverlayFrameCount?: number;
   reactiveOverlayPresetIds?: CreatorReactiveOverlayPresetId[];

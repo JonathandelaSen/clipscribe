@@ -20,6 +20,14 @@ import type {
   BackgroundTaskStatus,
 } from "@/lib/background-tasks/types";
 import { makeId } from "@/lib/history";
+import { notifyProjectLibraryUpdated } from "@/lib/projects/events";
+import { createProjectAssetFromFile, createProjectFromSourceFile } from "@/lib/projects/source-assets";
+import {
+  cancelProjectYouTubeImportTask,
+  downloadProjectYouTubeImportTaskFile,
+  getProjectYouTubeImportTask,
+  startProjectYouTubeImportTask,
+} from "@/lib/projects/youtube-import-client";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import { projectHistoryItemToTranscriptRecord } from "@/lib/transcriber/core/history-records";
 import { markInterruptedTranscriptsAsErrored } from "@/lib/transcriber/core/history-updates";
@@ -32,12 +40,14 @@ type ManagedTaskContext = {
   isCanceled: () => boolean;
 };
 
-type StartManagedTaskOptions = {
+type StartManagedTaskOptions<Result = void> = {
   kind: BackgroundTaskKind;
   title: string;
   message?: string;
   scope: BackgroundTaskScope;
-  run: (context: ManagedTaskContext) => Promise<void>;
+  run: (context: ManagedTaskContext) => Promise<Result>;
+  onComplete?: (result: Result) => void;
+  onError?: (error: Error) => void;
 };
 
 type StartTranscriptionOptions = {
@@ -54,6 +64,12 @@ type StartEditorTaskOptions = {
   run: (context: ManagedTaskContext) => Promise<void>;
 };
 
+type StartYouTubeImportOptions = {
+  url: string;
+  projectId?: string;
+  onComplete?: (result: { projectId: string; assetId: string; filename: string }) => void;
+};
+
 type BackgroundTaskHandle = {
   cancelRequested: boolean;
   cancel?: () => void;
@@ -68,6 +84,7 @@ type BackgroundTasksContextValue = {
   startTimelineExport: (options: StartEditorTaskOptions) => string;
   startTimelineBake: (options: StartEditorTaskOptions) => string;
   startShortExport: (options: StartEditorTaskOptions) => string;
+  startYouTubeImport: (options: StartYouTubeImportOptions) => string;
   cancelTask: (taskId: string) => void;
   dismissTask: (taskId: string) => void;
   getTaskForResource: (scope: BackgroundTaskScope & { kind?: BackgroundTaskKind }) => BackgroundTaskRecord | undefined;
@@ -144,7 +161,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
     dispatch({ type: "dismiss", taskId });
   }, []);
 
-  const startManagedTask = useCallback((options: StartManagedTaskOptions) => {
+  const startManagedTask = useCallback(<Result,>(options: StartManagedTaskOptions<Result>) => {
     const existingTask = findTaskForResource(tasksRef.current, {
       kind: options.kind,
       projectId: options.scope.projectId,
@@ -205,7 +222,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
 
     void Promise.resolve()
       .then(() => options.run(context))
-      .then(() => {
+      .then((result) => {
         if (handle.cancelRequested) return;
         dispatch({
           type: "complete",
@@ -217,12 +234,16 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
                 ? "Transcript ready"
                 : options.kind === "short-export"
                   ? "Short export ready"
+                  : options.kind === "youtube-import"
+                    ? "YouTube import ready"
                   : "Task complete",
           },
         });
+        options.onComplete?.(result);
       })
       .catch((error) => {
         if (handle.cancelRequested) return;
+        options.onError?.(error instanceof Error ? error : new Error("Task failed"));
         dispatch({
           type: "fail",
           taskId,
@@ -268,6 +289,121 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
           context.setCancel(task.cancel);
           await task.promise;
         },
+      });
+    },
+    [startManagedTask]
+  );
+
+  const startYouTubeImport = useCallback(
+    (options: StartYouTubeImportOptions) => {
+      setTaskDrawerOpen(true);
+      return startManagedTask({
+        kind: "youtube-import",
+        title: options.projectId ? "Importing YouTube video to project" : "Creating project from YouTube",
+        message: "Queued",
+        scope: {
+          projectId: options.projectId,
+        },
+        run: async (context) => {
+          const started = await startProjectYouTubeImportTask({
+            url: options.url,
+          });
+
+          const pollController = new AbortController();
+          context.setCancel(() => {
+            pollController.abort();
+            void cancelProjectYouTubeImportTask(started.taskId);
+          });
+
+          while (!pollController.signal.aborted) {
+            const task = await getProjectYouTubeImportTask(started.taskId, pollController.signal);
+            context.update({
+              status: task.status,
+              progress: task.progress,
+              message: task.message,
+              logLines: task.logLines,
+            });
+
+            if (task.status === "completed") {
+              break;
+            }
+            if (task.status === "failed") {
+              throw new Error(task.error || task.message || "YouTube import failed.");
+            }
+            if (task.status === "canceled") {
+              const error = new Error("YouTube import canceled.");
+              error.name = "AbortError";
+              throw error;
+            }
+
+            await new Promise<void>((resolve, reject) => {
+              const timeout = window.setTimeout(resolve, 500);
+              pollController.signal.addEventListener(
+                "abort",
+                () => {
+                  window.clearTimeout(timeout);
+                  const error = new Error("YouTube import canceled.");
+                  error.name = "AbortError";
+                  reject(error);
+                },
+                { once: true }
+              );
+            });
+          }
+
+          context.update({
+            status: "finalizing",
+            progress: 98,
+            message: options.projectId ? "Saving the imported asset into the project." : "Creating the new project from the imported video.",
+          });
+
+          const imported = await downloadProjectYouTubeImportTaskFile(started.taskId, pollController.signal);
+          const externalSource = {
+            ...imported.externalSource,
+            url: options.url,
+          };
+
+          if (options.projectId) {
+            const project = await projectRepositoryRef.current.getProject(options.projectId);
+            if (!project) {
+              throw new Error("Target project no longer exists.");
+            }
+
+            const asset = await createProjectAssetFromFile({
+              projectId: project.id,
+              file: imported.file,
+              externalSource,
+            });
+            await projectRepositoryRef.current.bulkPutAssets([asset]);
+            await projectRepositoryRef.current.putProject({
+              ...project,
+              assetIds: [...project.assetIds, asset.id],
+              activeSourceAssetId: project.activeSourceAssetId ?? asset.id,
+              updatedAt: Date.now(),
+              lastOpenedAt: Date.now(),
+            });
+            notifyProjectLibraryUpdated();
+            return {
+              projectId: project.id,
+              assetId: asset.id,
+              filename: asset.filename,
+            };
+          }
+
+          const { project, asset } = await createProjectFromSourceFile({
+            file: imported.file,
+            externalSource,
+          });
+          await projectRepositoryRef.current.putProject(project);
+          await projectRepositoryRef.current.bulkPutAssets([asset]);
+          notifyProjectLibraryUpdated();
+          return {
+            projectId: project.id,
+            assetId: asset.id,
+            filename: asset.filename,
+          };
+        },
+        onComplete: options.onComplete,
       });
     },
     [startManagedTask]
@@ -332,6 +468,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
       startTimelineExport,
       startTimelineBake,
       startShortExport,
+      startYouTubeImport,
       cancelTask,
       dismissTask,
       getTaskForResource,
@@ -344,6 +481,7 @@ export function BackgroundTaskProvider({ children }: { children: React.ReactNode
       startTimelineExport,
       startTimelineBake,
       startShortExport,
+      startYouTubeImport,
       cancelTask,
       dismissTask,
       getTaskForResource,

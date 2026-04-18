@@ -26,7 +26,7 @@ export type ContentProjectRecord = EditorProjectRecord & {
 };
 
 export type ProjectAssetRole = "source" | "derived" | "support";
-export type ProjectAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio";
+export type ProjectAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio" | "youtube-import";
 
 export interface ProjectAssetRecord extends EditorAssetRecord {
   role: ProjectAssetRole;

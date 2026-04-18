@@ -1,4 +1,5 @@
 import type {
+  CreatorMotionOverlayItem,
   CreatorShortEditorState,
   CreatorShortPlan,
   CreatorSuggestedShort,
@@ -6,8 +7,8 @@ import type {
   CreatorTextOverlayPreset,
   CreatorTextOverlayState,
 } from "@/lib/creator/types";
+import { normalizeMotionOverlayItem } from "@/lib/motion-overlays";
 import type { CreatorShortProjectOrigin } from "@/lib/creator/storage";
-import { normalizeCreatorReactiveOverlayItem } from "../reactive-overlays";
 
 export type CreatorTextOverlaySlot = "intro" | "outro";
 
@@ -157,6 +158,10 @@ export function hydrateCreatorShortEditorState(
     typeof input?.zoom === "number" && Number.isFinite(input.zoom)
       ? Math.min(4, Math.max(1, input.zoom))
       : 1.15;
+  const motionOverlays = (Array.isArray(input?.motionOverlays) ? input.motionOverlays : input?.reactiveOverlays ?? [])
+    .map((overlay) => normalizeMotionOverlayItem(overlay))
+    .filter((overlay): overlay is CreatorMotionOverlayItem => overlay != null);
+
   return {
     zoom,
     panX:
@@ -192,11 +197,8 @@ export function hydrateCreatorShortEditorState(
       input?.subtitleStyle && typeof input.subtitleStyle === "object" ? input.subtitleStyle : {},
     introOverlay: hydrateCreatorTextOverlayState("intro", input?.introOverlay, options),
     outroOverlay: hydrateCreatorTextOverlayState("outro", input?.outroOverlay, options),
-    reactiveOverlays: Array.isArray(input?.reactiveOverlays)
-      ? input.reactiveOverlays
-          .map((overlay) => normalizeCreatorReactiveOverlayItem(overlay))
-          .filter((overlay): overlay is NonNullable<typeof overlay> => overlay != null)
-      : [],
+    motionOverlays,
+    reactiveOverlays: motionOverlays.filter((overlay) => overlay.behavior === "audio_reactive"),
     visualSource:
       input?.visualSource?.mode === "asset" && typeof input.visualSource.assetId === "string" && input.visualSource.assetId.trim()
         ? {

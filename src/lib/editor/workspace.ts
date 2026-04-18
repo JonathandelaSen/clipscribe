@@ -1,7 +1,7 @@
 import { ensureProjectSelection } from "./core/timeline";
 import { normalizeEditorProjectBundlePath } from "./bundle";
 import { normalizeLegacyEditorProjectRecord, serializeEditorProjectForPersistence } from "./storage";
-import type { CaptionSourceRef, EditorAssetRecord, EditorProjectRecord } from "./types";
+import type { CaptionSourceRef, EditorAssetRecord, EditorExternalSourceRef, EditorProjectRecord } from "./types";
 
 const EDITOR_PROJECT_WORKSPACE_SCHEMA_VERSION = 1 as const;
 
@@ -98,6 +98,26 @@ function normalizeCaptionSource(raw: unknown, label: string): CaptionSourceRef {
   throw new Error(`${label}.kind "${kind}" is not supported.`);
 }
 
+function normalizeExternalSource(raw: unknown, label: string): EditorExternalSourceRef | undefined {
+  if (raw == null) return undefined;
+  if (!isRecord(raw)) {
+    throw new Error(`${label} must be an object.`);
+  }
+
+  const kind = String(raw.kind ?? "");
+  if (kind === "youtube") {
+    return {
+      kind,
+      url: readRequiredString(raw.url, `${label}.url`),
+      videoId: readRequiredString(raw.videoId, `${label}.videoId`),
+      title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim() : undefined,
+      channelTitle: typeof raw.channelTitle === "string" && raw.channelTitle.trim() ? raw.channelTitle.trim() : undefined,
+    };
+  }
+
+  throw new Error(`${label}.kind "${kind}" is not supported.`);
+}
+
 function normalizeWorkspaceAsset(
   raw: unknown,
   index: number,
@@ -112,9 +132,10 @@ function normalizeWorkspaceAsset(
     throw new Error(`assets[${index + 1}].kind must be "video", "audio", or "image".`);
   }
 
-  const sourceType = raw.sourceType === "upload" || raw.sourceType === "history" ? raw.sourceType : null;
+  const sourceType =
+    raw.sourceType === "upload" || raw.sourceType === "history" || raw.sourceType === "youtube" ? raw.sourceType : null;
   if (!sourceType) {
-    throw new Error(`assets[${index + 1}].sourceType must be "upload" or "history".`);
+    throw new Error(`assets[${index + 1}].sourceType must be "upload", "history", or "youtube".`);
   }
 
   return {
@@ -125,7 +146,12 @@ function normalizeWorkspaceAsset(
         : projectId,
     role: raw.role === "source" || raw.role === "derived" || raw.role === "support" ? raw.role : "support",
     origin:
-      raw.origin === "upload" || raw.origin === "short-export" || raw.origin === "timeline-export" || raw.origin === "manual"
+      raw.origin === "upload" ||
+      raw.origin === "short-export" ||
+      raw.origin === "timeline-export" ||
+      raw.origin === "manual" ||
+      raw.origin === "ai-audio" ||
+      raw.origin === "youtube-import"
         ? raw.origin
         : "manual",
     sourceType,
@@ -141,6 +167,7 @@ function normalizeWorkspaceAsset(
     sourceAssetId: typeof raw.sourceAssetId === "string" && raw.sourceAssetId.trim() ? raw.sourceAssetId.trim() : undefined,
     sourceMediaId: typeof raw.sourceMediaId === "string" && raw.sourceMediaId.trim() ? raw.sourceMediaId.trim() : undefined,
     sourceProjectId: typeof raw.sourceProjectId === "string" && raw.sourceProjectId.trim() ? raw.sourceProjectId.trim() : undefined,
+    externalSource: normalizeExternalSource(raw.externalSource, `assets[${index + 1}].externalSource`),
     createdAt: readFiniteNumber(raw.createdAt, `assets[${index + 1}].createdAt`),
     updatedAt: readFiniteNumber(raw.updatedAt, `assets[${index + 1}].updatedAt`),
     captionSource: normalizeCaptionSource(raw.captionSource, `assets[${index + 1}].captionSource`),

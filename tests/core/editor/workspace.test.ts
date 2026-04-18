@@ -167,3 +167,53 @@ test("parseEditorProjectWorkspace rejects asset paths that escape the workspace 
     /must stay inside the project workspace/
   );
 });
+
+test("parseEditorProjectWorkspace keeps YouTube import metadata on assets", () => {
+  const project = createEmptyEditorProject({
+    id: "project_youtube",
+    now: 500,
+  });
+
+  const workspace = parseEditorProjectWorkspace(
+    JSON.stringify({
+      schemaVersion: 1,
+      createdAt: 501,
+      project,
+      assets: [
+        {
+          id: "asset_youtube",
+          projectId: project.id,
+          role: "source",
+          origin: "youtube-import",
+          sourceType: "youtube",
+          kind: "video",
+          filename: "clip.mp4",
+          mimeType: "video/mp4",
+          sizeBytes: 512,
+          durationSeconds: 14,
+          createdAt: 500,
+          updatedAt: 500,
+          captionSource: { kind: "none" },
+          externalSource: {
+            kind: "youtube",
+            url: "https://www.youtube.com/watch?v=abc123",
+            videoId: "abc123",
+            title: "Imported Clip",
+            channelTitle: "ClipScribe",
+          },
+          path: "media/clip.mp4",
+        },
+      ],
+    })
+  );
+
+  assert.equal(workspace.assets[0]?.sourceType, "youtube");
+  assert.equal(workspace.assets[0]?.origin, "youtube-import");
+  assert.deepEqual(workspace.assets[0]?.externalSource, {
+    kind: "youtube",
+    url: "https://www.youtube.com/watch?v=abc123",
+    videoId: "abc123",
+    title: "Imported Clip",
+    channelTitle: "ClipScribe",
+  });
+});

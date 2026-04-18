@@ -4,16 +4,21 @@ import type {
   CreatorSubtitleTimingMode,
   CreatorVerticalEditorPreset,
 } from "../creator/types";
+import type {
+  AudioReactiveMotionOverlayPresetId,
+  MotionOverlayItem,
+  MotionOverlayPresetId,
+} from "../motion-overlays";
 
 export type EditorAspectRatio = "16:9" | "9:16" | "1:1" | "4:5";
 export type EditorResolution = "720p" | "1080p" | "4K";
 export type EditorProjectStatus = "draft" | "exporting" | "error";
 export type EditorExportStatus = "completed" | "failed";
 export type EditorExportEngine = "system";
-export type EditorAssetSource = "history" | "upload";
+export type EditorAssetSource = "history" | "upload" | "youtube";
 export type EditorAssetKind = "video" | "audio" | "image";
 export type EditorAssetRole = "source" | "derived" | "support";
-export type EditorAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio";
+export type EditorAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio" | "youtube-import";
 
 export type EditorSubtitlePreset = CreatorVerticalEditorPreset["subtitleStyle"];
 export const EDITOR_SUBTITLE_TRACK_ID = "subtitle-track";
@@ -105,23 +110,9 @@ export interface TimelineImageItem {
   canvas: EditorCanvasState;
 }
 
-export type EditorReactiveOverlayPresetId = "waveform_line" | "equalizer_bars" | "pulse_ring";
-
-export interface TimelineOverlayItem {
-  id: string;
-  presetId: EditorReactiveOverlayPresetId;
-  startOffsetSeconds: number;
-  durationSeconds: number;
-  positionXPercent: number;
-  positionYPercent: number;
-  widthPercent: number;
-  heightPercent: number;
-  scale: number;
-  opacity: number;
-  tintHex: string;
-  sensitivity: number;
-  smoothing: number;
-}
+export type EditorReactiveOverlayPresetId = AudioReactiveMotionOverlayPresetId;
+export type EditorMotionOverlayPresetId = MotionOverlayPresetId;
+export type TimelineOverlayItem = MotionOverlayItem;
 
 export type TimelineSelectionKind = "video" | "video-group" | "audio" | "image" | "overlay" | "subtitle";
 
@@ -184,6 +175,15 @@ export interface EditorProjectRecord {
   lastError?: string;
 }
 
+export type EditorExternalSourceRef =
+  | {
+      kind: "youtube";
+      url: string;
+      videoId: string;
+      title?: string;
+      channelTitle?: string;
+    };
+
 export interface EditorAssetRecord {
   id: string;
   projectId: string;
@@ -202,6 +202,7 @@ export interface EditorAssetRecord {
   sourceAssetId?: string;
   sourceMediaId?: string;
   sourceProjectId?: string;
+  externalSource?: EditorExternalSourceRef;
   createdAt: number;
   updatedAt: number;
   captionSource: CaptionSourceRef;
@@ -283,6 +284,11 @@ export interface EditorExportTimingsMs {
 
 export interface EditorExportCounts {
   overlayCount?: number;
+  motionOverlayCount?: number;
+  motionOverlaySequenceCount?: number;
+  motionOverlayPresetIds?: MotionOverlayPresetId[];
+  audioReactiveOverlayCount?: number;
+  autonomousOverlayCount?: number;
   atlasCount?: number;
   sequenceCount?: number;
   overlayRasterPixelArea?: number;
