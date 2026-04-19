@@ -85,6 +85,7 @@ The shorts workflow focuses on repurposing a longer source into platform-native 
 - Viral clip suggestion generation from transcript-aware inputs.
 - Dedicated short editor with framing controls and creative tuning.
 - Subtitle style controls and text overlay customization.
+- Export-ready previews with diagnostics and rendering progress.
 - Saved shorts library so generated ideas can become durable assets.
 
 <!-- Replace with screenshot: Shorts Forge clip workflow -->
@@ -93,20 +94,7 @@ The shorts workflow focuses on repurposing a longer source into platform-native 
 ![Shorts Forge clip workflow](docs/readme/shorts_2.png)
 ![Shorts Forge clip workflow](docs/readme/shorts_3.png)
 
-### 6. Shorts Export / Preview 🎥
-
-One of the most technically important parts of the app is that shorts preview and export are treated as the same product problem. The goal is not just to render a short, but to maintain trust that what the user previews is what the export pipeline will produce.
-
-- Canonical framing logic for preview and export parity.
-- Export diagnostics and rendering progress for creator-facing feedback.
-- Browser and system-backed export paths depending on capability.
-- Subtitle timing and overlay behavior designed for real export workflows.
-
-<!-- Replace with screenshot: Shorts export and preview parity -->
-
-![Shorts export and preview parity](docs/readme/05-shorts-export.png)
-
-### 7. Voiceover Workspace 🎙️
+### 6. Voiceover Workspace 🎙️
 
 The voiceover workflow extends the platform beyond transcription and editing into AI-generated narration. It supports script drafting, usage estimation, generation, replay, and reuse of voice outputs as first-class project assets.
 
@@ -117,9 +105,10 @@ The voiceover workflow extends the platform beyond transcription and editing int
 
 <!-- Replace with screenshot: Voiceover workspace -->
 
-![Voiceover workspace](docs/readme/07-voiceover-workspace.png)
+![Voiceover workspace](docs/readme/voiceover_1.png)
+![Voiceover workspace](docs/readme/voiceover_2.png)
 
-### 8. YouTube Publish 📡
+### 7. YouTube Publish 📡
 
 Publishing is treated as part of the product, not an afterthought. ClipScribe can turn project assets or exports into YouTube-ready drafts, help prefill metadata from prior AI runs, and track the history of completed uploads.
 
@@ -130,21 +119,12 @@ Publishing is treated as part of the product, not an afterthought. ClipScribe ca
 
 <!-- Replace with screenshot: YouTube publish workflow -->
 
-![YouTube publish workflow](docs/readme/08-youtube-publish.png)
-
-## Why This Project Is Technically Interesting ⚙️
-
-ClipScribe is intentionally broader than a transcription demo. It combines AI feature orchestration, project-scoped data modeling, export pipelines, and external publishing flows in one cohesive product.
-
-- AI is embedded across the workflow, from metadata generation and short ideation to voiceover, packaging, and publishing preparation.
-- Creator AI runs through a shared runtime, while feature services remain responsible for prompt building, validation, response mapping, and feature-specific behavior.
-- Shorts framing uses canonical geometry inputs so preview and export derive from the same layout logic instead of browser-only measurements.
-- Export supports both browser and system render paths depending on runtime capabilities and workflow needs.
-- Provider adapters stay separate from feature logic while executions trace provider, model, prompt version, usage, and estimated cost when inferable.
-
-<!-- Replace with diagram: compact architecture overview -->
-
-![ClipScribe architecture overview](docs/readme/architecture-overview.png)
+![YouTube publish workflow](docs/readme/publish_1.png)
+![YouTube publish workflow](docs/readme/publish_2.png)
+![YouTube publish workflow](docs/readme/publish_3.png)
+![YouTube publish workflow](docs/readme/publish_4.png)
+![YouTube publish workflow](docs/readme/publish_5.png)
+![YouTube publish workflow](docs/readme/publish_6.png)
 
 ## Stack And Integrations 🧱
 
@@ -179,6 +159,19 @@ ClipScribe is intentionally broader than a transcription demo. It combines AI fe
 | Gemini API                                                             | Creator AI text generation (`shorts` default) | Server  |
 | ElevenLabs API                                                         | Voiceover / TTS                               | Server  |
 | YouTube Data API v3                                                    | Video publishing                              | Server  |
+
+## AI Run Evals 🧪
+
+ClipScribe treats AI outputs as product-critical artifacts, so Creator AI runs are evaluated and traced instead of being handled as opaque API calls.
+
+- Every tracked AI run records provider, model, prompt version, token usage, API key source, input summary, and estimated cost when inferable.
+- Eval coverage checks both OpenAI and Gemini paths so provider migrations do not silently break metadata or shorts workflows.
+- Regression tests verify that prompt versions, usage parsing, pricing metadata, and stored run records remain auditable over time.
+- The AI runs workbench makes generation history inspectable, helping debug prompt changes and compare outputs across models.
+
+![AI Runs Workbench](docs/readme/ai_runs_workbench_1.png)
+![AI Runs Workbench](docs/readme/ai_runs_workbench_2.png)
+![AI Runs Workbench](docs/readme/ai_runs_workbench_3.png)
 
 ## Getting Started 🚀
 
