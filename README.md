@@ -4,14 +4,6 @@ ClipScribe is an AI-driven creator workstation for turning raw video and audio i
 
 It is built around a connected content workflow where AI helps drive repurposing, packaging, editing, and publishing instead of being treated as an isolated text-generation feature.
 
-<!-- Replace with demo video: 45-90s guided platform walkthrough -->
-
-[Watch product walkthrough](docs/readme/hero-demo.mp4)
-
-<!-- Replace with poster image: hero cover / platform overview -->
-
-![ClipScribe hero cover](docs/readme/hero-cover.png)
-
 ## What ClipScribe Does
 
 - Imports creator source material from local files or YouTube into a project-centered workspace. 🎬
@@ -242,13 +234,6 @@ npm run export:timeline-project -- --project ./projects/my-short.clipscribe-proj
 ```bash
 npm run create-and-export:timeline-project
 ```
-
-## Future Improvements 🌱
-
-- Add a polished end-to-end demo video with narration and callouts for the full creator workflow.
-- Expand README architecture visuals with a single diagram for project storage, AI runtime, and export paths.
-- Add benchmark snapshots for short export and timeline export performance.
-- Document evaluation fixtures and regression contracts more explicitly for the Creator AI runtime.
 
 ## License
 
