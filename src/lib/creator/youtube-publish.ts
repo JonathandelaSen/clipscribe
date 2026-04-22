@@ -183,22 +183,13 @@ export function buildVideoInfoTagsInput(result: Pick<CreatorVideoInfoGenerateRes
 }
 
 export function resolveYouTubeShortEligibility(input: YouTubePublishVideoTraits): YouTubeShortEligibility {
-  if (input.exportKind === "short") {
-    return {
-      eligible: true,
-      isVerticalOrSquare: true,
-      durationWithinLimit: true,
-      durationSeconds: input.durationSeconds,
-      width: input.width,
-      height: input.height,
-    };
-  }
-
   const width = Number.isFinite(input.width) ? input.width : undefined;
   const height = Number.isFinite(input.height) ? input.height : undefined;
   const durationSeconds = Number.isFinite(input.durationSeconds) ? input.durationSeconds : undefined;
-  const isVerticalOrSquare = Boolean(width && height && height >= width);
-  const durationWithinLimit = typeof durationSeconds === "number" && durationSeconds <= YOUTUBE_SHORTS_MAX_DURATION_SECONDS;
+  const isShortExport = input.exportKind === "short";
+  const isVerticalOrSquare = width && height ? height >= width : isShortExport;
+  const durationWithinLimit =
+    typeof durationSeconds === "number" ? durationSeconds <= YOUTUBE_SHORTS_MAX_DURATION_SECONDS : isShortExport;
 
   return {
     eligible: isVerticalOrSquare && durationWithinLimit,

@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   exportCreatorShortWithSystemFfmpeg,
+  type CreatorSystemRenderInput,
   type CreatorSystemRenderOverlayInput,
 } from "../../../src/lib/server/creator/shorts/system-render";
 import { buildCanonicalShortExportGeometry } from "../../../src/lib/creator/core/export-geometry";
@@ -40,7 +41,7 @@ function createShort(): CreatorSuggestedShort {
   };
 }
 
-function createRenderInput(tempDir: string) {
+function createRenderInput(tempDir: string): CreatorSystemRenderInput {
   return {
     sourceFilePath: "/media/source.mp4",
     sourceFilename: "source.mp4",
@@ -263,6 +264,58 @@ test("exportCreatorShortWithSystemFfmpeg externalizes oversized filter graphs in
       const script = await readFile(scriptPath!, "utf8");
       assert.match(script, /\[1:v\]setpts=PTS-STARTPTS\[overlay_input_0\]/);
       assert.match(script, /overlay=x=0:y=921:enable='between/);
+      await writeFile(input.outputPath, Buffer.alloc(2048, 1));
+      return {
+        code: 0,
+        stdout: "",
+        stderr: "",
+      };
+    },
+  });
+});
+
+test("exportCreatorShortWithSystemFfmpeg shifts motion overlay sequences to their clip-relative start", async (t) => {
+  const tempDir = await createTempDirectory();
+  t.after(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const input = createRenderInput(tempDir);
+  input.overlaySequences = [
+    {
+      directoryPath: "/media/bars",
+      filenamePattern: "frame_%05d.webp",
+      fps: 15,
+      start: 6.25,
+      end: 10.25,
+      x: 238,
+      y: 1210,
+      width: 604,
+      height: 346,
+      mimeType: "image/webp",
+    },
+  ];
+  input.subtitleTrackPath = path.join(tempDir, "subtitles.ass");
+  input.subtitleBurnedIn = true;
+  input.overlaySummary.motionOverlayCount = 1;
+  input.overlaySummary.motionOverlaySequenceCount = 1;
+
+  await exportCreatorShortWithSystemFfmpeg({
+    ...input,
+    commandRunner: async (_, args) => {
+      if (!args.includes(input.outputPath)) {
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+        };
+      }
+      const filterIndex = args.indexOf("-filter_complex");
+      assert.notEqual(filterIndex, -1, args.join(" "));
+      const filterGraph = args[filterIndex + 1] ?? "";
+      assert.match(filterGraph, /\[1:v\]setpts=PTS-STARTPTS\+6\.250\/TB\[overlay_seq_in_0\]/);
+      assert.match(filterGraph, /overlay=x=238:y=1210:enable='between\(t,6\.250,10\.250\)':eof_action=pass/);
+      assert.match(filterGraph, /ass=/);
       await writeFile(input.outputPath, Buffer.alloc(2048, 1));
       return {
         code: 0,

@@ -204,6 +204,7 @@ import type {
   TimelineVideoClip,
 } from "@/lib/editor/types";
 import { parseSrt } from "@/lib/srt";
+import { notifyProjectLibraryUpdated } from "@/lib/projects/events";
 import { createDexieEditorRepository } from "@/lib/repositories/editor-repo";
 import { cn } from "@/lib/utils";
 
@@ -4216,6 +4217,7 @@ export function TimelineEditorWorkspace({ projectId }: { projectId: string }) {
             now
           );
           await editorRepositoryRef.current.putProject(nextProject);
+          notifyProjectLibraryUpdated();
           if (task.isCanceled()) return;
 
           if (mountedRef.current) {

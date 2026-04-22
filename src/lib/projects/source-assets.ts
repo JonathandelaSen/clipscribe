@@ -1,6 +1,7 @@
 import { createEditorAssetRecord, createEmptyEditorProject } from "@/lib/editor/storage";
 import type { EditorExternalSourceRef } from "@/lib/editor/types";
 import { readMediaMetadata } from "@/lib/editor/media";
+import { sortHistoryItems, type HistoryItem } from "@/lib/history";
 import type { ContentProjectRecord, ProjectAssetRecord } from "@/lib/projects/types";
 
 function fileStem(name: string) {
@@ -96,6 +97,37 @@ export function getSelectableProjectSourceAssets(
   assets: ProjectAssetRecord[]
 ): ProjectAssetRecord[] {
   return assets.filter(isSelectableProjectSourceAsset);
+}
+
+export type ProjectSourceHistoryItem = HistoryItem & { projectId?: string };
+
+export function projectSourceAssetToHistoryItem(asset: ProjectAssetRecord): ProjectSourceHistoryItem {
+  return {
+    id: asset.id,
+    mediaId: asset.id,
+    filename: asset.filename,
+    createdAt: asset.createdAt,
+    updatedAt: asset.updatedAt,
+    timestamp: asset.updatedAt ?? asset.createdAt,
+    activeTranscriptVersionId: undefined,
+    transcripts: [],
+    projectId: asset.projectId,
+  };
+}
+
+export function mergeProjectSourceAssetsWithHistory(
+  history: ProjectSourceHistoryItem[],
+  assets: ProjectAssetRecord[]
+): ProjectSourceHistoryItem[] {
+  const itemsById = new Map(history.map((item) => [item.id, item]));
+
+  for (const asset of getSelectableProjectSourceAssets(assets)) {
+    if (!itemsById.has(asset.id)) {
+      itemsById.set(asset.id, projectSourceAssetToHistoryItem(asset));
+    }
+  }
+
+  return sortHistoryItems([...itemsById.values()]) as ProjectSourceHistoryItem[];
 }
 
 export function getSelectableProjectVisualAssets(

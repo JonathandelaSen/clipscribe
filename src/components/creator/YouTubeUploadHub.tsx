@@ -202,6 +202,34 @@ function formatVideoShape(width?: number, height?: number) {
   return `${width}x${height}`;
 }
 
+function buildShortEligibilityMessage(input: {
+  eligible: boolean;
+  isVerticalOrSquare: boolean;
+  durationWithinLimit: boolean;
+  durationSeconds?: number;
+  width?: number;
+  height?: number;
+}) {
+  const shapeLabel = formatVideoShape(input.width, input.height);
+  const durationLabel = formatDurationSeconds(input.durationSeconds);
+
+  if (input.eligible) {
+    return `Eligible for a Shorts-first upload: ${shapeLabel} and ${durationLabel}.`;
+  }
+
+  const problems: string[] = [];
+  if (!input.isVerticalOrSquare) {
+    problems.push(`the file must be square or vertical, but it is ${shapeLabel}`);
+  }
+  if (!input.durationWithinLimit) {
+    problems.push(`the file must be ${YOUTUBE_SHORTS_MAX_DURATION_SECONDS / 60} minutes or shorter, but it is ${durationLabel}`);
+  }
+
+  return problems.length > 0
+    ? `YouTube will treat this as a regular video: ${problems.join("; ")}.`
+    : "YouTube needs a square or vertical file no longer than 3 minutes to classify it as a Short.";
+}
+
 function formatPublishedDate(value: string | undefined) {
   if (!value) return "Unknown publish date";
   const parsed = new Date(value);
@@ -826,14 +854,7 @@ export function YouTubeUploadHub({
   }, [relatedVideoSelection, relatedVideos]);
 
   const shortEligibilityMessage = useMemo(() => {
-    const shapeLabel = formatVideoShape(shortEligibility.width, shortEligibility.height);
-    const durationLabel = formatDurationSeconds(shortEligibility.durationSeconds);
-
-    if (shortEligibility.eligible) {
-      return `Eligible for a Shorts-first upload: ${shapeLabel} and ${durationLabel}.`;
-    }
-
-    return null;
+    return buildShortEligibilityMessage(shortEligibility);
   }, [shortEligibility]);
 
   const isShortPublishBlocked = publishIntent === "short" && !shortEligibility.eligible;
@@ -1361,7 +1382,7 @@ export function YouTubeUploadHub({
                       >
                         <div className="text-sm font-semibold">Short</div>
                         <div className="mt-1 text-xs text-current/70">
-                          Use Shorts-friendly defaults and require a square or vertical file under {YOUTUBE_SHORTS_MAX_DURATION_SECONDS} seconds.
+                          Use Shorts-friendly defaults and require a square or vertical file up to {YOUTUBE_SHORTS_MAX_DURATION_SECONDS} seconds.
                         </div>
                       </button>
                       <button

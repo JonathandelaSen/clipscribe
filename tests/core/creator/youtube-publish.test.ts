@@ -293,12 +293,39 @@ test("appendChapterBlockToDescription appends chapters once and preserves existi
   assert.equal(deduped.description, next.description);
 });
 
-test("resolveYouTubeShortEligibility uses export kind or vertical/square plus duration", () => {
+test("resolveYouTubeShortEligibility requires known short exports to still fit YouTube rules", () => {
+  assert.deepEqual(
+    resolveYouTubeShortEligibility({
+      exportKind: "short",
+    }),
+    {
+      eligible: true,
+      isVerticalOrSquare: true,
+      durationWithinLimit: true,
+      durationSeconds: undefined,
+      width: undefined,
+      height: undefined,
+    }
+  );
+
   assert.equal(
     resolveYouTubeShortEligibility({
       exportKind: "short",
+      width: 1080,
+      height: 1920,
+      durationSeconds: YOUTUBE_SHORTS_MAX_DURATION_SECONDS + 1,
     }).eligible,
-    true
+    false
+  );
+
+  assert.equal(
+    resolveYouTubeShortEligibility({
+      exportKind: "short",
+      width: 1920,
+      height: 1080,
+      durationSeconds: 30,
+    }).eligible,
+    false
   );
 
   assert.deepEqual(
@@ -339,8 +366,11 @@ test("inferYouTubePublishIntent defaults to short only for eligible sources", ()
   assert.equal(
     inferYouTubePublishIntent({
       exportKind: "short",
+      width: 1080,
+      height: 1920,
+      durationSeconds: YOUTUBE_SHORTS_MAX_DURATION_SECONDS + 1,
     }),
-    "short"
+    "standard"
   );
   assert.equal(
     inferYouTubePublishIntent({

@@ -4,6 +4,7 @@ import {
 } from "./semantic-subtitles";
 import type {
   CreatorShortEditorState,
+  CreatorShortRasterOverlayKind,
   CreatorSuggestedShort,
 } from "./types";
 import type { SubtitleChunk } from "../history";
@@ -13,7 +14,7 @@ type OverlayFrame = {
   start: number;
   end: number;
   vfsPath: string;
-  kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
+  kind?: CreatorShortRasterOverlayKind;
   x?: number;
   y?: number;
   width?: number;

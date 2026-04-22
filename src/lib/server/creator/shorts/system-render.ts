@@ -496,7 +496,8 @@ function buildOverlayFilterGraph(input: {
     const inputLabel = `${seqStartIndex + index}:v`;
     const inLabel = `overlay_seq_in_${index}`;
     const outLabel = `overlay_seq_${index}`;
-    filterParts.push(`[${inputLabel}]setpts=PTS-STARTPTS[${inLabel}]`);
+    const sequenceStartOffset = Math.max(0, seq.start).toFixed(3);
+    filterParts.push(`[${inputLabel}]setpts=PTS-STARTPTS+${sequenceStartOffset}/TB[${inLabel}]`);
     filterParts.push(
       `[${currentLabel}][${inLabel}]overlay=x=${seq.x}:y=${seq.y}:enable='between(t,${seq.start.toFixed(3)},${seq.end.toFixed(3)})':eof_action=pass[${outLabel}]`
     );
@@ -1031,7 +1032,8 @@ export async function exportCreatorShortWithSystemFfmpeg(
         } else {
           const detectedEncoder = await detectVideoEncoder(commandName);
           encoderAttempts =
-            detectedEncoder.isHardwareAccelerated && input.overlays.length > 0
+            detectedEncoder.isHardwareAccelerated &&
+            (input.overlays.length > 0 || (input.overlaySequences?.length ?? 0) > 0)
               ? [detectedEncoder, getCreatorSoftwareFallbackEncoder()]
               : [detectedEncoder];
         }
@@ -1048,6 +1050,7 @@ export async function exportCreatorShortWithSystemFfmpeg(
             sourceVideoSize: input.sourceVideoSize,
             geometry: input.geometry,
             overlays: input.overlays,
+            overlaySequences: input.overlaySequences,
             subtitleBurnedIn: input.subtitleBurnedIn,
             subtitleTrackPath: input.subtitleTrackPath,
             sourcePlaybackMode: input.sourcePlaybackMode,
@@ -1099,7 +1102,7 @@ export async function exportCreatorShortWithSystemFfmpeg(
             !input.commandRunner &&
             input.sourcePlaybackMode !== "still" &&
             videoEncoder.isHardwareAccelerated &&
-            input.overlays.length > 0
+            (input.overlays.length > 0 || (input.overlaySequences?.length ?? 0) > 0)
               ? setInterval(async () => {
                   let outputBytes = 0;
                   try {

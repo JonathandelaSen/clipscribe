@@ -32,6 +32,7 @@ import type {
   CreatorReactiveOverlayPresetId,
   CreatorShortEditorState,
   CreatorShortPlan,
+  CreatorShortRasterOverlayKind,
   CreatorShortRenderResponse,
   CreatorSuggestedShort,
   CreatorShortSystemExportCounts,
@@ -485,7 +486,7 @@ export async function requestSystemCreatorShortExport(
     start: number;
     end: number;
     cropExpression?: string;
-    kind?: "intro_overlay" | "outro_overlay" | "reactive_overlay" | "subtitle_atlas" | "subtitle_frame";
+    kind?: CreatorShortRasterOverlayKind;
     x?: number;
     y?: number;
     width?: number;
@@ -523,17 +524,18 @@ export async function requestSystemCreatorShortExport(
       y: typeof seq.y === "number" ? Math.max(0, Math.round(seq.y)) : 0,
       width: typeof seq.width === "number" ? Math.max(1, Math.round(seq.width)) : OUTPUT_WIDTH,
       height: typeof seq.height === "number" ? Math.max(1, Math.round(seq.height)) : OUTPUT_HEIGHT,
-      mimeType: "image/webp",
+      mimeType: seq.mimeType,
     });
 
     for (let frameIndex = 0; frameIndex < seq.frames.length; frameIndex++) {
       const frameBuffer = seq.frames[frameIndex]?.bytes;
       if (!frameBuffer) continue;
-      const frameName = `${fileFieldPrefix}_${frameIndex}.webp`;
+      const extension = seq.mimeType === "image/webp" ? "webp" : "png";
+      const frameName = `${fileFieldPrefix}_${frameIndex}.${extension}`;
       formData.set(
         `${fileFieldPrefix}_${frameIndex}`,
         // @ts-expect-error File constructor is available in browser context where this runs
-        new File([frameBuffer], frameName, { type: "image/webp" }),
+        new File([frameBuffer], frameName, { type: seq.mimeType }),
         frameName
       );
     }

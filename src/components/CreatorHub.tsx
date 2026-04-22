@@ -161,7 +161,12 @@ import { useCreatorShortsLibrary } from "@/hooks/useCreatorShortsLibrary";
 import { useCreatorTextFeatureConfig } from "@/hooks/useCreatorTextFeatureConfig";
 import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { PROJECT_LIBRARY_UPDATED_EVENT } from "@/lib/projects/events";
-import { getSelectableProjectVisualAssets } from "@/lib/projects/source-assets";
+import {
+  getSelectableProjectSourceAssets,
+  getSelectableProjectVisualAssets,
+  mergeProjectSourceAssetsWithHistory,
+  projectSourceAssetToHistoryItem,
+} from "@/lib/projects/source-assets";
 import type { ProjectAssetRecord } from "@/lib/projects/types";
 import { cn } from "@/lib/utils";
 
@@ -281,6 +286,10 @@ function subtitleVersionLabel(subtitle: SubtitleVersion): string {
   return `S${subtitle.versionNumber} • ${subtitle.language.toUpperCase()} • ${subtitle.kind} • ${subtitle.shiftSeconds >= 0 ? "+" : ""}${subtitle.shiftSeconds}s`;
 }
 
+function sourceChoiceTranscriptLabel(transcriptCount: number): string {
+  if (transcriptCount <= 0) return "no transcripts yet";
+  return `${transcriptCount} transcript${transcriptCount === 1 ? "" : "s"}`;
+}
 
 function buildYouTubeTimestamps(chapters: { timeSeconds: number; label: string }[]): string {
   return chapters
@@ -1693,6 +1702,8 @@ export function CreatorHub({
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [isMediaPreviewLoading, setIsMediaPreviewLoading] = useState(false);
   const [isVideoMedia, setIsVideoMedia] = useState(false);
+  const [projectSourceAssets, setProjectSourceAssets] = useState<ProjectAssetRecord[]>([]);
+  const [isLoadingProjectSourceAssets, setIsLoadingProjectSourceAssets] = useState(false);
   const [projectVisualAssets, setProjectVisualAssets] = useState<ProjectAssetRecord[]>([]);
   const [visualSourceMode, setVisualSourceMode] = useState<"original" | "asset">("original");
   const [visualSourceAssetId, setVisualSourceAssetId] = useState("");
@@ -1745,31 +1756,108 @@ export function CreatorHub({
     }
   }, [activeTool, lockedTool]);
 
+  const refreshProjectSourceAssets = useCallback(async () => {
+    if (!projectId) {
+      setProjectSourceAssets([]);
+      setIsLoadingProjectSourceAssets(false);
+      return;
+    }
+
+    setIsLoadingProjectSourceAssets(true);
+    try {
+      const assets = await db.projectAssets.where("projectId").equals(projectId).toArray();
+      setProjectSourceAssets(
+        getSelectableProjectSourceAssets(assets as ProjectAssetRecord[])
+          .filter((asset) => !!asset.fileBlob)
+          .sort((left, right) => (right.updatedAt ?? right.createdAt) - (left.updatedAt ?? left.createdAt))
+      );
+    } catch (error) {
+      console.error("Failed to load source assets for creator hub", error);
+      setProjectSourceAssets([]);
+    } finally {
+      setIsLoadingProjectSourceAssets(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void refreshProjectSourceAssets();
+  }, [refreshProjectSourceAssets]);
+
+  useEffect(() => {
+    const handleProjectLibraryUpdated = () => {
+      void refreshProjectSourceAssets();
+    };
+
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleProjectLibraryUpdated);
+    };
+  }, [refreshProjectSourceAssets]);
+
   useEffect(() => {
     if (!initialSourceAssetId) return;
     setSelectedProjectId(initialSourceAssetId);
   }, [initialSourceAssetId]);
 
+  const sourceChoices = useMemo(() => {
+    const merged = mergeProjectSourceAssetsWithHistory(
+      history as Array<HistoryItem & { projectId?: string }>,
+      projectSourceAssets
+    );
+
+    if (!sourceAssetFallback || merged.some((item) => item.id === sourceAssetFallback.id)) {
+      return merged;
+    }
+
+    return mergeProjectSourceAssetsWithHistory(merged, [
+      {
+        id: sourceAssetFallback.id,
+        projectId: sourceAssetFallback.projectId ?? projectId ?? "",
+        role: "source",
+        origin: "upload",
+        kind: "audio",
+        filename: sourceAssetFallback.filename,
+        mimeType: "application/octet-stream",
+        sizeBytes: 0,
+        durationSeconds: sourceAssetFallback.durationSeconds,
+        sourceType: "upload",
+        captionSource: { kind: "none" },
+        createdAt: 0,
+        updatedAt: 0,
+        fileBlob: undefined,
+      } as ProjectAssetRecord,
+    ]);
+  }, [history, projectId, projectSourceAssets, sourceAssetFallback]);
+
   const selectedProject = useMemo(() => {
-    if (history.length) {
-      return history.find((item) => item.id === selectedProjectId) ?? history[0];
+    if (sourceChoices.length) {
+      return sourceChoices.find((item) => item.id === selectedProjectId) ?? sourceChoices[0];
     }
     if (!sourceAssetFallback) return undefined;
     if (selectedProjectId && selectedProjectId !== sourceAssetFallback.id) return undefined;
-    return {
+    return projectSourceAssetToHistoryItem({
       id: sourceAssetFallback.id,
-      mediaId: sourceAssetFallback.id,
+      projectId: sourceAssetFallback.projectId ?? projectId ?? "",
+      role: "source",
+      origin: "upload",
+      kind: "audio",
       filename: sourceAssetFallback.filename,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      timestamp: Date.now(),
-      activeTranscriptVersionId: undefined,
-      transcripts: [],
-      projectId: sourceAssetFallback.projectId ?? projectId,
-    } as HistoryItem & { projectId?: string };
-  }, [history, projectId, selectedProjectId, sourceAssetFallback]);
+      mimeType: "application/octet-stream",
+      sizeBytes: 0,
+      durationSeconds: sourceAssetFallback.durationSeconds,
+      sourceType: "upload",
+      captionSource: { kind: "none" },
+      createdAt: 0,
+      updatedAt: 0,
+      fileBlob: undefined,
+    } as ProjectAssetRecord);
+  }, [projectId, selectedProjectId, sourceAssetFallback, sourceChoices]);
   const selectedProjectRootId = (selectedProject as (HistoryItem & { projectId?: string }) | undefined)?.projectId ?? selectedProject?.id;
   const selectedSourceAssetId = selectedProject?.id;
+  const selectedSourceAssetRecord = useMemo(
+    () => projectSourceAssets.find((asset) => asset.id === selectedSourceAssetId),
+    [projectSourceAssets, selectedSourceAssetId]
+  );
   const projectVisualAssetsById = useMemo(
     () => new Map(projectVisualAssets.map((asset) => [asset.id, asset])),
     [projectVisualAssets]
@@ -1891,8 +1979,8 @@ export function CreatorHub({
     if (selectedProject && selectedTranscript) {
       return getTranscriptDurationSeconds(selectedProject, selectedTranscript.id);
     }
-    return sourceAssetFallback?.durationSeconds;
-  }, [selectedProject, selectedTranscript, sourceAssetFallback?.durationSeconds]);
+    return selectedSourceAssetRecord?.durationSeconds ?? sourceAssetFallback?.durationSeconds;
+  }, [selectedProject, selectedSourceAssetRecord?.durationSeconds, selectedTranscript, sourceAssetFallback?.durationSeconds]);
 
   const manualFallbackClip = useMemo(() => {
     if (!selectedProject) return undefined;
@@ -3958,15 +4046,15 @@ export function CreatorHub({
                       setSelectedTranscriptId("");
                       setSelectedSubtitleId("");
                     }}
-                    disabled={isLoadingHistory || history.length === 0}
+                    disabled={isLoadingHistory || isLoadingProjectSourceAssets || sourceChoices.length === 0}
                   >
                     <SelectTrigger className="w-full bg-white/5 border-white/10 text-white/90">
                       <SelectValue placeholder={sourceSelectorPlaceholder} />
                     </SelectTrigger>
                     <SelectContent className="bg-zinc-950 border-white/10 text-white/90">
-                      {history.map((item) => (
+                      {sourceChoices.map((item) => (
                         <SelectItem key={item.id} value={item.id} className="focus:bg-cyan-500/20 cursor-pointer">
-                          {item.filename} ({item.transcripts.length} transcript{item.transcripts.length === 1 ? "" : "s"})
+                          {item.filename} ({sourceChoiceTranscriptLabel(item.transcripts.length)})
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -4227,7 +4315,14 @@ export function CreatorHub({
                         </Tooltip>
                       </TooltipProvider>
                     )}
-                    <Button variant="ghost" onClick={() => void refresh()} className="bg-white/5 hover:bg-white/10 text-white/80">
+                    <Button
+                      variant="ghost"
+                      onClick={() => {
+                        void refresh();
+                        void refreshProjectSourceAssets();
+                      }}
+                      className="bg-white/5 hover:bg-white/10 text-white/80"
+                    >
                       Refresh Media Library
                     </Button>
                     {activeAnalysisMeta && (
@@ -4246,7 +4341,7 @@ export function CreatorHub({
                     <AlertDescription className="text-red-100/85">{analyzeErrorDetails.body}</AlertDescription>
                   </Alert>
                 )}
-                {!historyError && !isLoadingHistory && history.length === 0 && (
+                {!historyError && !isLoadingHistory && !isLoadingProjectSourceAssets && sourceChoices.length === 0 && (
                   <div className="text-sm text-amber-200/90 bg-amber-500/10 border border-amber-500/20 rounded-lg p-3">
                     No transcription projects found yet. Transcribe a file first, then come back to build creator assets.
                   </div>
@@ -4523,13 +4618,36 @@ export function CreatorHub({
                   </Card>
 
                   <Card 
-                    className="bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden"
+                    className={cn(
+                      "bg-white/[0.03] border-white/10 text-white shadow-xl backdrop-blur-xl cursor-pointer hover:bg-white/5 transition-colors group relative overflow-hidden",
+                      isGeneratingShorts && "cursor-progress border-fuchsia-300/40 bg-white/[0.07] hover:bg-white/[0.07]"
+                    )}
                     onClick={handleOpenAiMagicClips}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleOpenAiMagicClips();
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-busy={isGeneratingShorts}
+                    aria-disabled={isGeneratingShorts}
                   >
-                    <div className="absolute inset-0 bg-gradient-to-br from-fuchsia-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div
+                      className={cn(
+                        "absolute inset-0 bg-gradient-to-br from-fuchsia-500/10 to-orange-500/10 opacity-0 group-hover:opacity-100 transition-opacity",
+                        isGeneratingShorts && "opacity-100"
+                      )}
+                    />
                     <CardHeader>
                       <CardTitle className="text-2xl font-bold flex items-center gap-2">
-                        ✨ AI Magic Clips
+                        {isGeneratingShorts ? (
+                          <Loader2 className="w-6 h-6 animate-spin text-fuchsia-200" />
+                        ) : (
+                          "✨"
+                        )}
+                        {isGeneratingShorts ? "Generating..." : "AI Magic Clips"}
                       </CardTitle>
                     </CardHeader>
                   </Card>

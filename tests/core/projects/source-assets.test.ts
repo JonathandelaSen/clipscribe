@@ -8,6 +8,7 @@ import {
   getSelectableProjectVisualAssets,
   isSelectableProjectSourceAsset,
   isSelectableProjectVisualAsset,
+  mergeProjectSourceAssetsWithHistory,
 } from "../../../src/lib/projects/source-assets";
 import type { ProjectAssetRecord } from "../../../src/lib/projects/types";
 
@@ -78,6 +79,63 @@ test("selectable project sources include audio and video but exclude images", ()
   assert.deepEqual(
     getSelectableProjectSourceAssets(assets).map((asset) => asset.id),
     ["asset_audio", "asset_video"]
+  );
+});
+
+test("source history options include exported videos that do not have transcripts yet", () => {
+  const transcriptBackedAudio = createAsset({
+    id: "asset_audio",
+    kind: "audio",
+    createdAt: 200,
+  });
+  const exportedVideo = createAsset({
+    id: "asset_export",
+    kind: "video",
+    role: "derived",
+    origin: "timeline-export",
+    createdAt: 300,
+  });
+  const supportImage = createAsset({
+    id: "asset_image",
+    kind: "image",
+    role: "support",
+    createdAt: 400,
+  });
+
+  const merged = mergeProjectSourceAssetsWithHistory(
+    [
+      {
+        id: transcriptBackedAudio.id,
+        mediaId: transcriptBackedAudio.id,
+        filename: transcriptBackedAudio.filename,
+        createdAt: transcriptBackedAudio.createdAt,
+        updatedAt: transcriptBackedAudio.updatedAt,
+        timestamp: transcriptBackedAudio.updatedAt,
+        transcripts: [
+          {
+            id: "tx_1",
+            versionNumber: 1,
+            label: "Transcript",
+            status: "completed",
+            createdAt: 200,
+            updatedAt: 200,
+            requestedLanguage: "es",
+            transcript: "Hola",
+            subtitles: [],
+          },
+        ],
+        projectId: transcriptBackedAudio.projectId,
+      },
+    ],
+    [transcriptBackedAudio, exportedVideo, supportImage]
+  );
+
+  assert.deepEqual(
+    merged.map((item) => [item.id, item.transcripts.length]),
+    [
+      ["asset_export", 0],
+      ["asset_audio", 1],
+    ]
   );
 });
 
