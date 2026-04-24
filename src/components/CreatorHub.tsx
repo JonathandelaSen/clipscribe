@@ -1,11 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type SyntheticEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode, type SyntheticEvent } from "react";
 import Link from "next/link";
 import {
+  AlignHorizontalJustifyCenter,
+  AlignHorizontalJustifyEnd,
+  AlignHorizontalJustifyStart,
   ArrowLeft,
   CalendarClock,
+  ChevronsLeft,
+  ChevronsRight,
   Clapperboard,
+  CornerDownLeft,
   Copy,
   Download,
   FileVideo,
@@ -17,11 +23,19 @@ import {
   Layers,
   Lightbulb,
   Loader2,
+  Maximize2,
+  MoveHorizontal,
   Pause,
   Play,
+  RotateCcw,
   Rocket,
   Save,
+  SkipBack,
+  SkipForward,
   Sparkles,
+  StepBack,
+  StepForward,
+  TimerReset,
   Trash2,
   TriangleAlert,
   Volume2,
@@ -87,6 +101,14 @@ import {
   resolveShortFramePanLimits,
   scaleShortFramePanToViewport,
 } from "@/lib/creator/core/short-frame-layout";
+import {
+  applyClipRelativeTimingAction,
+  createClipRelativeTimingFromPlayheadToEnd,
+  formatShortTimecode,
+  parseShortTimecode,
+  type ClipRelativeTimingAction,
+  type ClipRelativeTimingWindow,
+} from "@/lib/creator/core/timecode";
 import {
   getCreatorTextOverlayFallbackPreset,
   getCreatorTextOverlayFontSize,
@@ -378,6 +400,208 @@ function getCreatorApiKeySourceLabel(apiKeySource?: "header" | "env"): string {
   return "Key missing";
 }
 
+type TimecodeInputTone = "emerald" | "orange" | "cyan" | "white";
+
+const timecodeInputToneClass: Record<TimecodeInputTone, string> = {
+  emerald: "text-emerald-100 focus:border-emerald-400/50 focus:bg-emerald-400/10",
+  orange: "text-orange-100 focus:border-orange-400/50 focus:bg-orange-400/10",
+  cyan: "text-cyan-100 focus:border-cyan-400/50 focus:bg-cyan-400/10",
+  white: "text-white focus:border-white/30 focus:bg-white/10",
+};
+
+function TimecodeInput({
+  valueSeconds,
+  onCommit,
+  label,
+  tone = "white",
+}: {
+  valueSeconds: number;
+  onCommit: (valueSeconds: number) => void;
+  label: string;
+  tone?: TimecodeInputTone;
+}) {
+  const formattedValue = formatShortTimecode(valueSeconds);
+  const [draftState, setDraftState] = useState({
+    valueSeconds,
+    draft: formattedValue,
+    isInvalid: false,
+  });
+  const isSyncedToValue = Object.is(draftState.valueSeconds, valueSeconds);
+  const draft = isSyncedToValue ? draftState.draft : formattedValue;
+  const isInvalid = isSyncedToValue ? draftState.isInvalid : false;
+
+  if (!isSyncedToValue) {
+    setDraftState({
+      valueSeconds,
+      draft: formattedValue,
+      isInvalid: false,
+    });
+  }
+
+  const commit = useCallback(() => {
+    const parsed = parseShortTimecode(draft);
+    if (parsed == null) {
+      setDraftState({
+        valueSeconds,
+        draft: formatShortTimecode(valueSeconds),
+        isInvalid: true,
+      });
+      return;
+    }
+    setDraftState({
+      valueSeconds,
+      draft: formatShortTimecode(parsed),
+      isInvalid: false,
+    });
+    onCommit(parsed);
+  }, [draft, onCommit, valueSeconds]);
+
+  const handleKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Enter") {
+        event.currentTarget.blur();
+        commit();
+      }
+      if (event.key === "Escape") {
+        setDraftState({
+          valueSeconds,
+          draft: formatShortTimecode(valueSeconds),
+          isInvalid: false,
+        });
+        event.currentTarget.blur();
+      }
+    },
+    [commit, valueSeconds]
+  );
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={draft}
+      aria-label={label}
+      onChange={(event) => {
+        setDraftState({
+          valueSeconds,
+          draft: event.target.value,
+          isInvalid: false,
+        });
+      }}
+      onBlur={commit}
+      onKeyDown={handleKeyDown}
+      className={cn(
+        "w-full rounded-lg border bg-white/5 py-2 pl-3 pr-20 text-left text-sm font-medium tabular-nums shadow-inner transition-colors placeholder:text-white/25 focus:outline-none",
+        isInvalid ? "border-red-400/60 text-red-100 focus:border-red-300" : "border-white/10",
+        timecodeInputToneClass[tone]
+      )}
+      placeholder="0:00.0"
+      title="Use MM:SS.s, a bare minute value such as 1.5, or explicit seconds such as 90s."
+    />
+  );
+}
+
+function IconTooltipButton({
+  label,
+  onClick,
+  disabled,
+  children,
+  className,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <TooltipProvider delayDuration={120}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label={label}
+              title={label}
+              disabled={disabled}
+              onClick={onClick}
+              className={cn(
+                "border border-white/10 bg-white/5 text-white/72 hover:border-white/20 hover:bg-white/10 hover:text-white",
+                className
+              )}
+            >
+              {children}
+            </Button>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+}
+
+const timingQuickActions: Array<{
+  action: ClipRelativeTimingAction;
+  label: string;
+  icon: typeof SkipBack;
+}> = [
+  { action: "start_at_clip_start", label: "Start at clip start", icon: SkipBack },
+  { action: "start_at_playhead", label: "Start at playhead", icon: StepForward },
+  { action: "end_at_playhead", label: "End at playhead", icon: StepBack },
+  { action: "until_end", label: "Until end", icon: SkipForward },
+  { action: "full_clip", label: "Full clip", icon: Maximize2 },
+];
+
+function TimingQuickControls({
+  value,
+  clipDurationSeconds,
+  playheadOffsetSeconds,
+  minDurationSeconds = 0.2,
+  onChange,
+  onReset,
+}: {
+  value: ClipRelativeTimingWindow;
+  clipDurationSeconds: number;
+  playheadOffsetSeconds: number;
+  minDurationSeconds?: number;
+  onChange: (next: ClipRelativeTimingWindow) => void;
+  onReset?: () => void;
+}) {
+  const applyAction = useCallback(
+    (action: ClipRelativeTimingAction) => {
+      onChange(
+        applyClipRelativeTimingAction({
+          action,
+          current: value,
+          clipDurationSeconds,
+          playheadOffsetSeconds,
+          minDurationSeconds,
+        })
+      );
+    },
+    [clipDurationSeconds, minDurationSeconds, onChange, playheadOffsetSeconds, value]
+  );
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {timingQuickActions.map((item) => {
+        const Icon = item.icon;
+        return (
+          <IconTooltipButton key={item.action} label={item.label} onClick={() => applyAction(item.action)}>
+            <Icon className="h-4 w-4" />
+          </IconTooltipButton>
+        );
+      })}
+      {onReset ? (
+        <IconTooltipButton label="Reset timing" onClick={onReset} className="text-amber-100/80 hover:text-amber-50">
+          <TimerReset className="h-4 w-4" />
+        </IconTooltipButton>
+      ) : null}
+    </div>
+  );
+}
+
 function SubtitlePreviewText({
   text,
   subtitleStyle,
@@ -489,18 +713,24 @@ function TextOverlayEditorCard({
   overlay,
   resolvedStyle,
   effectiveWindow,
+  clipDurationSeconds,
+  playheadOffsetSeconds,
   referenceText,
   onChange,
   onResetToSuggestion,
+  onResetTiming,
 }: {
   title: string;
   slot: CreatorTextOverlaySlot;
   overlay: CreatorTextOverlayState;
   resolvedStyle: CreatorTextOverlayStyleSettings;
   effectiveWindow: CreatorResolvedTextOverlayWindow;
+  clipDurationSeconds: number;
+  playheadOffsetSeconds: number;
   referenceText?: string;
   onChange: (updater: (prev: CreatorTextOverlayState) => CreatorTextOverlayState) => void;
   onResetToSuggestion?: () => void;
+  onResetTiming?: () => void;
 }) {
   return (
     <div className="rounded-2xl border border-white/10 bg-black/25 p-4 space-y-4">
@@ -547,42 +777,65 @@ function TextOverlayEditorCard({
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <label className="text-xs text-white/70 block">
           Start offset
-          <Input
-            type="number"
-            min={0}
-            step={0.1}
-            value={overlay.startOffsetSeconds}
-            onChange={(event) =>
-              onChange((prev) => ({
-                ...prev,
-                startOffsetSeconds: Number(event.target.value),
-              }))
-            }
-            className="mt-1 border-white/10 bg-white/[0.04] text-white"
-          />
+          <div className="relative mt-1">
+            <TimecodeInput
+              label={`${title} start offset`}
+              valueSeconds={overlay.startOffsetSeconds}
+              onCommit={(value) =>
+                onChange((prev) => ({
+                  ...prev,
+                  startOffsetSeconds: value,
+                }))
+              }
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-white/35 pointer-events-none">
+              mm:ss
+            </span>
+          </div>
         </label>
         <label className="text-xs text-white/70 block">
           Duration
-          <Input
-            type="number"
-            min={0}
-            step={0.1}
-            value={overlay.durationSeconds}
-            onChange={(event) =>
-              onChange((prev) => ({
-                ...prev,
-                durationSeconds: Number(event.target.value),
-              }))
-            }
-            className="mt-1 border-white/10 bg-white/[0.04] text-white"
-          />
+          <div className="relative mt-1">
+            <TimecodeInput
+              label={`${title} duration`}
+              valueSeconds={overlay.durationSeconds}
+              onCommit={(value) =>
+                onChange((prev) => ({
+                  ...prev,
+                  durationSeconds: value,
+                }))
+              }
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-white/35 pointer-events-none">
+              mm:ss
+            </span>
+          </div>
         </label>
       </div>
 
-      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 text-[11px] text-white/60">
-        Effective timing: {effectiveWindow.enabled
-          ? `${effectiveWindow.startOffsetSeconds.toFixed(1)}s → ${effectiveWindow.endOffsetSeconds.toFixed(1)}s`
-          : "Disabled or empty"}
+      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 space-y-3">
+        <div className="text-[11px] text-white/60">
+          Effective timing: {effectiveWindow.enabled
+            ? `${formatShortTimecode(effectiveWindow.startOffsetSeconds)} → ${formatShortTimecode(effectiveWindow.endOffsetSeconds)}`
+            : "Disabled or empty"}
+        </div>
+        <TimingQuickControls
+          value={{
+            startOffsetSeconds: overlay.startOffsetSeconds,
+            durationSeconds: overlay.durationSeconds,
+          }}
+          clipDurationSeconds={clipDurationSeconds}
+          playheadOffsetSeconds={playheadOffsetSeconds}
+          minDurationSeconds={0.2}
+          onChange={(next) =>
+            onChange((prev) => ({
+              ...prev,
+              startOffsetSeconds: next.startOffsetSeconds,
+              durationSeconds: next.durationSeconds,
+            }))
+          }
+          onReset={onResetTiming}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -1025,7 +1278,7 @@ function AiSuggestionPreviewCard({
                 <div className="truncate text-base font-semibold text-white/92">{project.plan.title}</div>
               </div>
               <div className="text-right text-[11px] uppercase tracking-[0.24em] text-white/40">
-                {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                {formatShortTimecode(project.clip.startSeconds)} → {formatShortTimecode(project.clip.endSeconds)}
               </div>
             </div>
 
@@ -1093,10 +1346,10 @@ function AiSuggestionPreviewCard({
                   <div className="flex h-full flex-col justify-between">
                     <div className="flex items-center justify-between gap-3">
                       <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/55">
-                        {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                        {formatShortTimecode(project.clip.startSeconds)} → {formatShortTimecode(project.clip.endSeconds)}
                       </span>
                       <span className="rounded-full border border-white/10 bg-black/25 px-2.5 py-1 text-[10px] uppercase tracking-[0.24em] text-white/45">
-                        {project.clip.durationSeconds.toFixed(1)}s
+                        {formatShortTimecode(project.clip.durationSeconds)}
                       </span>
                     </div>
                     <div className="space-y-2">
@@ -1117,8 +1370,8 @@ function AiSuggestionPreviewCard({
 
               <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/35 to-transparent px-4 pb-3 pt-8">
                 <div className="flex items-center justify-between gap-3 text-[11px] text-white/65">
-                  <span>{secondsToClock(Math.max(0, displayCurrentTime - project.clip.startSeconds))}</span>
-                  <span>{secondsToClock(project.clip.durationSeconds)}</span>
+                  <span>{formatShortTimecode(Math.max(0, displayCurrentTime - project.clip.startSeconds))}</span>
+                  <span>{formatShortTimecode(project.clip.durationSeconds)}</span>
                 </div>
                 <div
                   className={cn(
@@ -1175,13 +1428,13 @@ function AiSuggestionPreviewCard({
             <div className="text-[11px] uppercase tracking-[0.24em] text-white/38">Clip stats</div>
             <div className="mt-2 flex flex-wrap gap-2 text-xs text-white/70">
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                Start {secondsToClock(project.clip.startSeconds)}
+                Start {formatShortTimecode(project.clip.startSeconds)}
               </span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                End {secondsToClock(project.clip.endSeconds)}
+                End {formatShortTimecode(project.clip.endSeconds)}
               </span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
-                Duration {project.clip.durationSeconds.toFixed(1)}s
+                Duration {formatShortTimecode(project.clip.durationSeconds)}
               </span>
               <span className="rounded-full border border-white/10 bg-black/20 px-3 py-1">
                 Score {project.clip.score}
@@ -2526,7 +2779,7 @@ export function CreatorHub({
 
   const autoGeneratedShortProjectName = useMemo(() => {
     if (!editedClip || !selectedPlan) return "";
-    return `${secondsToClock(editedClip.startSeconds)} - ${secondsToClock(editedClip.endSeconds)}`;
+    return `${formatShortTimecode(editedClip.startSeconds)} - ${formatShortTimecode(editedClip.endSeconds)}`;
   }, [editedClip, selectedPlan]);
 
   const setEditedClipStartSeconds = useCallback(
@@ -2561,6 +2814,32 @@ export function CreatorHub({
     [editedClip, setEditedClipDurationSeconds]
   );
 
+  const adjustEditedClipStartSeconds = useCallback(
+    (deltaSeconds: number) => {
+      if (!editedClip || !Number.isFinite(deltaSeconds)) return;
+      setEditedClipStartSeconds(editedClip.startSeconds + deltaSeconds);
+    },
+    [editedClip, setEditedClipStartSeconds]
+  );
+
+  const adjustEditedClipEndSeconds = useCallback(
+    (deltaSeconds: number) => {
+      if (!editedClip || !Number.isFinite(deltaSeconds)) return;
+      setEditedClipEndSeconds(editedClip.endSeconds + deltaSeconds);
+    },
+    [editedClip, setEditedClipEndSeconds]
+  );
+
+  const setEditedClipStartToPlayhead = useCallback(() => {
+    if (!editedClip) return;
+    setEditedClipStartSeconds(currentTime);
+  }, [currentTime, editedClip, setEditedClipStartSeconds]);
+
+  const setEditedClipEndToPlayhead = useCallback(() => {
+    if (!editedClip) return;
+    setEditedClipEndSeconds(currentTime);
+  }, [currentTime, editedClip, setEditedClipEndSeconds]);
+
   const updateTextOverlay = useCallback(
     (
       slot: CreatorTextOverlaySlot,
@@ -2586,6 +2865,23 @@ export function CreatorHub({
       updateTextOverlay(slot, () => next);
     },
     [editedClip, selectedPlan, updateTextOverlay]
+  );
+
+  const resetTextOverlayTiming = useCallback(
+    (slot: CreatorTextOverlaySlot) => {
+      if (!selectedPlan || !editedClip) return;
+      const defaults = getDefaultCreatorTextOverlayState(slot, {
+        origin: activeSavedShortProject?.origin ?? "manual",
+        plan: selectedPlan,
+        clipDurationSeconds: editedClip.durationSeconds,
+      });
+      updateTextOverlay(slot, (prev) => ({
+        ...prev,
+        startOffsetSeconds: defaults.startOffsetSeconds,
+        durationSeconds: defaults.durationSeconds,
+      }));
+    },
+    [activeSavedShortProject?.origin, editedClip, selectedPlan, updateTextOverlay]
   );
 
   useEffect(() => {
@@ -2617,7 +2913,11 @@ export function CreatorHub({
   const addReactiveOverlay = useCallback(
     (presetId: MotionOverlayPresetId) => {
       const clipDuration = editedClip?.durationSeconds ?? 3;
-      const startOffsetSeconds = editedClip ? Math.max(0, currentTime - editedClip.startSeconds) : 0;
+      const timing = createClipRelativeTimingFromPlayheadToEnd({
+        clipDurationSeconds: clipDuration,
+        playheadOffsetSeconds: editedClip ? currentTime - editedClip.startSeconds : 0,
+        minDurationSeconds: 1.4,
+      });
       if (
         (presetId === "waveform_line" || presetId === "equalizer_bars" || presetId === "pulse_ring") &&
         !mediaFile
@@ -2628,8 +2928,8 @@ export function CreatorHub({
       const nextOverlay = createDefaultMotionOverlayItem({
         id: makeId("rxov"),
         presetId,
-        startOffsetSeconds,
-        durationSeconds: Math.min(4, Math.max(1.4, clipDuration - startOffsetSeconds || clipDuration)),
+        startOffsetSeconds: timing.startOffsetSeconds,
+        durationSeconds: timing.durationSeconds,
       });
       setReactiveOverlays((current) => [...current, nextOverlay]);
       setSelectedReactiveOverlayId(nextOverlay.id);
@@ -4678,7 +4978,7 @@ export function CreatorHub({
                                 <div className="text-base font-semibold text-white/90 line-clamp-2 leading-snug">{project.name}</div>
                               </div>
                               <div className="text-xs text-white/50 font-medium mb-4">
-                                {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                                {formatShortTimecode(project.clip.startSeconds)} → {formatShortTimecode(project.clip.endSeconds)}
                               </div>
                               <div className="flex items-center justify-between pt-3 border-t border-white/5">
                                 <div className="text-[11px] text-white/40">{new Date(project.updatedAt).toLocaleDateString()}</div>
@@ -4789,7 +5089,7 @@ export function CreatorHub({
                                   <div className="text-sm font-semibold text-white/90 truncate mb-1">{project.name}</div>
                                   <div className="flex items-center justify-between gap-2">
                                     <div className="text-[11px] text-white/55">
-                                      {secondsToClock(project.clip.startSeconds)} → {secondsToClock(project.clip.endSeconds)}
+                                      {formatShortTimecode(project.clip.startSeconds)} → {formatShortTimecode(project.clip.endSeconds)}
                                     </div>
                                     {isActive && <div className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />}
                                   </div>
@@ -5035,7 +5335,7 @@ export function CreatorHub({
                                 </div>
                                 {editedClip && (
                                   <div className="text-[11px] text-white/60 tabular-nums">
-                                    {secondsToClock(Math.max(0, currentTime - editedClip.startSeconds))} / {secondsToClock(editedClip.durationSeconds)}
+                                    {formatShortTimecode(Math.max(0, currentTime - editedClip.startSeconds))} / {formatShortTimecode(editedClip.durationSeconds)}
                                   </div>
                                 )}
                               </div>
@@ -5045,8 +5345,8 @@ export function CreatorHub({
 
                         {editedClip && (
                           <div className="rounded-xl border border-white/10 bg-black/20 p-3 text-xs text-white/70 space-y-1">
-                            <div>Clip: {secondsToClock(editedClip.startSeconds)} → {secondsToClock(editedClip.endSeconds)}</div>
-                            <div>Duration: {editedClip.durationSeconds.toFixed(1)}s</div>
+                            <div>Clip: {formatShortTimecode(editedClip.startSeconds)} → {formatShortTimecode(editedClip.endSeconds)}</div>
+                            <div>Duration: {formatShortTimecode(editedClip.durationSeconds)}</div>
                             <div>Score: {selectedClip?.score ?? "n/a"}</div>
                             <div>Subtitle source: {selectedSubtitle ? subtitleVersionLabel(selectedSubtitle) : "None"}</div>
                             <div>Subtitle style: {CREATOR_SUBTITLE_STYLE_LABELS[resolvedSubtitleStyle.preset]}</div>
@@ -5103,7 +5403,7 @@ export function CreatorHub({
                       </div>
 
                       <div className="space-y-4 min-w-0">
-                        <Tabs defaultValue="subtitles" className="w-full">
+                        <Tabs defaultValue="framing" className="w-full">
                           <TabsList className="grid w-full grid-cols-2 gap-1 overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-1.5 shadow-2xl h-auto mb-6 relative min-[1180px]:grid-cols-4">
                             <div className="absolute inset-0 bg-gradient-to-r from-fuchsia-500/5 via-cyan-500/5 to-transparent pointer-events-none" />
                             <TabsTrigger value="framing" className="min-w-0 py-3 rounded-xl data-[state=active]:bg-[linear-gradient(135deg,rgba(52,211,153,0.15),rgba(255,255,255,0.01))] data-[state=active]:border-emerald-400/30 data-[state=active]:text-emerald-50 text-white/50 hover:text-white/80 transition-all border border-transparent data-[state=active]:shadow-[0_0_15px_rgba(52,211,153,0.15)] font-medium tracking-wide relative">
@@ -5231,125 +5531,158 @@ export function CreatorHub({
                               </div>
                             {editedClip && (
                               <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-5">
-                                <div className="space-y-3">
-                                  <div className="flex items-center justify-between gap-3">
-                                    <label className="text-xs uppercase tracking-widest text-emerald-300/80 font-medium w-20">Start</label>
-                                    <div className="relative flex-1">
-                                      <input
-                                        type="number"
-                                        min={0}
-                                        step={0.1}
-                                        value={editedClip.startSeconds}
-                                        onChange={(e) => {
-                                          const value = Number(e.target.value);
-                                          if (!Number.isFinite(value)) return;
-                                          setEditedClipStartSeconds(value);
-                                        }}
-                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-emerald-100 shadow-inner focus:outline-none focus:border-emerald-400/50 focus:bg-emerald-400/10 transition-colors"
-                                      />
-                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
-                                    </div>
-                                  </div>
-                                  
-                                  <div className="flex items-center justify-between gap-3">
-                                    <label className="text-xs uppercase tracking-widest text-orange-300/80 font-medium w-20">End</label>
-                                    <div className="relative flex-1">
-                                      <input
-                                        type="number"
-                                        min={1}
-                                        step={0.1}
-                                        value={editedClip.endSeconds}
-                                        onChange={(e) => {
-                                          const value = Number(e.target.value);
-                                          if (!Number.isFinite(value)) return;
-                                          setEditedClipEndSeconds(value);
-                                        }}
-                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-orange-100 shadow-inner focus:outline-none focus:border-orange-400/50 focus:bg-orange-400/10 transition-colors"
-                                      />
-                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
+                                <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                                  {[
+                                    {
+                                      label: "Start",
+                                      tone: "emerald" as const,
+                                      value: editedClip.startSeconds,
+                                      onCommit: setEditedClipStartSeconds,
+                                    },
+                                    {
+                                      label: "End",
+                                      tone: "orange" as const,
+                                      value: editedClip.endSeconds,
+                                      onCommit: setEditedClipEndSeconds,
+                                    },
+                                    {
+                                      label: "Duration",
+                                      tone: "cyan" as const,
+                                      value: editedClip.durationSeconds,
+                                      onCommit: setEditedClipDurationSeconds,
+                                    },
+                                  ].map((item) => (
+                                    <label key={item.label} className="text-xs text-white/70 block">
+                                      <span className="uppercase tracking-widest font-medium">{item.label}</span>
+                                      <div className="relative mt-1">
+                                        <TimecodeInput
+                                          label={`${item.label} timecode`}
+                                          tone={item.tone}
+                                          valueSeconds={item.value}
+                                          onCommit={item.onCommit}
+                                        />
+                                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-white/35 pointer-events-none">
+                                          mm:ss
+                                        </span>
+                                      </div>
+                                    </label>
+                                  ))}
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 border-t border-white/5 pt-4 xl:grid-cols-2">
+                                  <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                                    <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-200/60">Start handle</div>
+                                    <div className="flex flex-wrap gap-2">
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipStartSeconds(-5)}>
+                                        <ChevronsLeft className="h-3.5 w-3.5" /> 5s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipStartSeconds(-1)}>
+                                        <StepBack className="h-3.5 w-3.5" /> 1s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipStartSeconds(1)}>
+                                        <StepForward className="h-3.5 w-3.5" /> 1s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipStartSeconds(5)}>
+                                        <ChevronsRight className="h-3.5 w-3.5" /> 5s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-emerald-400/10 px-2 text-xs text-emerald-100 hover:bg-emerald-400/15" onClick={setEditedClipStartToPlayhead}>
+                                        <CornerDownLeft className="h-3.5 w-3.5" /> Playhead
+                                      </Button>
                                     </div>
                                   </div>
 
-                                  <div className="flex items-center justify-between gap-3">
-                                    <label className="text-xs uppercase tracking-widest text-cyan-300/80 font-medium w-20">Duration</label>
-                                    <div className="relative flex-1">
-                                      <input
-                                        type="number"
-                                        min={1}
-                                        step={0.1}
-                                        value={editedClip.durationSeconds}
-                                        onChange={(e) => {
-                                          const value = Number(e.target.value);
-                                          if (!Number.isFinite(value)) return;
-                                          setEditedClipDurationSeconds(value);
-                                        }}
-                                        className="w-full bg-white/5 border border-white/10 rounded-lg py-2 pl-3 pr-6 text-left text-sm font-medium text-cyan-100 shadow-inner focus:outline-none focus:border-cyan-400/50 focus:bg-cyan-400/10 transition-colors"
-                                      />
-                                      <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-white/30 pointer-events-none">sec</span>
+                                  <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+                                    <div className="text-[11px] uppercase tracking-[0.22em] text-orange-200/60">End handle</div>
+                                    <div className="flex flex-wrap gap-2">
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipEndSeconds(-5)}>
+                                        <ChevronsLeft className="h-3.5 w-3.5" /> 5s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipEndSeconds(-1)}>
+                                        <StepBack className="h-3.5 w-3.5" /> 1s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipEndSeconds(1)}>
+                                        <StepForward className="h-3.5 w-3.5" /> 1s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-white/5 px-2 text-xs text-white/75 hover:bg-white/10" onClick={() => adjustEditedClipEndSeconds(5)}>
+                                        <ChevronsRight className="h-3.5 w-3.5" /> 5s
+                                      </Button>
+                                      <Button type="button" size="sm" variant="ghost" className="bg-orange-400/10 px-2 text-xs text-orange-100 hover:bg-orange-400/15" onClick={setEditedClipEndToPlayhead}>
+                                        <CornerDownLeft className="h-3.5 w-3.5" /> Playhead
+                                      </Button>
                                     </div>
                                   </div>
                                 </div>
 
-                                <div className="flex flex-wrap justify-center gap-2 pt-4 border-t border-white/5">
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(-5)}>
-                                    -5s
-                                  </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(-1)}>
-                                    -1s
-                                  </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(0.5)}>
-                                    +0.5s
-                                  </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(1)}>
-                                    +1s
-                                  </Button>
-                                  <Button type="button" size="sm" variant="ghost" className="h-8 px-4 text-xs font-medium rounded-full bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-white/70 transition-colors" onClick={() => adjustEditedClipDurationSeconds(5)}>
-                                    +5s
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div className="flex flex-wrap gap-2">
+                                    {[-5, -1, 0.5, 1, 5].map((delta) => (
+                                      <Button key={delta} type="button" size="sm" variant="ghost" className="h-8 rounded-full border border-white/10 bg-white/5 px-3 text-xs text-white/70 hover:bg-white/10" onClick={() => adjustEditedClipDurationSeconds(delta)}>
+                                        {delta > 0 ? `+${delta}s` : `${delta}s`}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="bg-white/5 text-white/80 hover:bg-white/10"
+                                    onClick={() => {
+                                      setTrimStartNudge(0);
+                                      setTrimEndNudge(0);
+                                    }}
+                                  >
+                                    <RotateCcw className="h-4 w-4" />
+                                    Reset trim
                                   </Button>
                                 </div>
                                 {typeof sourceDurationSeconds === "number" && Number.isFinite(sourceDurationSeconds) && (
-                                  <div className="text-[11px] text-white/45">Source duration: {sourceDurationSeconds.toFixed(1)}s (trim is clamped to this length)</div>
+                                  <div className="text-[11px] text-white/45">Source duration: {formatShortTimecode(sourceDurationSeconds)} (trim is clamped to this length)</div>
                                 )}
                               </div>
                             )}
-                            <label className="text-xs text-white/70 block">Start nudge: {trimStartNudge.toFixed(1)}s</label>
-                            <input
-                              type="range"
-                              min={-300}
-                              max={300}
-                              step={0.1}
-                              value={trimStartNudge}
-                                  onChange={(e) => {
-                                    setTrimStartNudge(Number(e.target.value));
-                                  }}
-                                  className="w-full"
-                                />
-                            <label className="text-xs text-white/70 block">End nudge: {trimEndNudge.toFixed(1)}s</label>
-                            <input
-                              type="range"
-                              min={-300}
-                              max={300}
-                              step={0.1}
-                              value={trimEndNudge}
-                                  onChange={(e) => {
-                                    setTrimEndNudge(Number(e.target.value));
-                                  }}
-                                  className="w-full"
-                                />
-                            <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
-                            <input type="range" min={1.0} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(clampShortZoomForUi(Number(e.target.value)))} className="w-full" />
-                            <label className="text-xs text-white/70 block">Pan X: {Math.round(panX)}px</label>
-                            <input
-                              type="range"
-                              min={shortPanLimits.minPanX}
-                              max={shortPanLimits.maxPanX}
-                              step={1}
-                              value={clampNumber(panX, shortPanLimits.minPanX, shortPanLimits.maxPanX)}
-                              onChange={(e) => {
-                                setPanX(clampNumber(Number(e.target.value), shortPanLimits.minPanX, shortPanLimits.maxPanX));
-                              }}
-                              className="w-full"
-                            />
+
+                            <div className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-4">
+                              <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 text-sm font-semibold text-white/90">
+                                  <MoveHorizontal className="h-4 w-4 text-emerald-200" />
+                                  Frame crop
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                  <IconTooltipButton label="Show left edge" onClick={() => setPanX(shortPanLimits.maxPanX)}>
+                                    <AlignHorizontalJustifyStart className="h-4 w-4" />
+                                  </IconTooltipButton>
+                                  <IconTooltipButton label="Center crop" onClick={() => setPanX(0)}>
+                                    <AlignHorizontalJustifyCenter className="h-4 w-4" />
+                                  </IconTooltipButton>
+                                  <IconTooltipButton label="Show right edge" onClick={() => setPanX(shortPanLimits.minPanX)}>
+                                    <AlignHorizontalJustifyEnd className="h-4 w-4" />
+                                  </IconTooltipButton>
+                                  <IconTooltipButton
+                                    label="Reset framing"
+                                    onClick={() => {
+                                      setZoom(1.15);
+                                      setPanX(0);
+                                    }}
+                                  >
+                                    <RotateCcw className="h-4 w-4" />
+                                  </IconTooltipButton>
+                                </div>
+                              </div>
+                              <label className="text-xs text-white/70 block">Zoom: {zoom.toFixed(2)}x</label>
+                              <input type="range" min={1.0} max={4.0} step={0.01} value={zoom} onChange={(e) => setZoom(clampShortZoomForUi(Number(e.target.value)))} className="w-full" />
+                              <label className="text-xs text-white/70 block">Horizontal crop: {Math.round(panX)}px</label>
+                              <input
+                                type="range"
+                                min={shortPanLimits.minPanX}
+                                max={shortPanLimits.maxPanX}
+                                step={1}
+                                value={clampNumber(panX, shortPanLimits.minPanX, shortPanLimits.maxPanX)}
+                                onChange={(e) => {
+                                  setPanX(clampNumber(Number(e.target.value), shortPanLimits.minPanX, shortPanLimits.maxPanX));
+                                }}
+                                className="w-full"
+                              />
+                            </div>
                             </div>
                           </TabsContent>
 
@@ -5407,11 +5740,14 @@ export function CreatorHub({
                                   overlay={introOverlay}
                                   resolvedStyle={resolvedIntroOverlayStyle}
                                   effectiveWindow={resolvedIntroOverlayWindow}
+                                  clipDurationSeconds={editedClip?.durationSeconds ?? 0}
+                                  playheadOffsetSeconds={clipRelativeTime}
                                   referenceText={hasAiReferenceMetadata ? selectedPlan?.title : undefined}
                                   onChange={(updater) => updateTextOverlay("intro", updater)}
                                   onResetToSuggestion={
                                     hasAiReferenceMetadata ? () => resetTextOverlayToSuggestion("intro") : undefined
                                   }
+                                  onResetTiming={() => resetTextOverlayTiming("intro")}
                                 />
                                 <TextOverlayEditorCard
                                   title="Outro Card"
@@ -5419,11 +5755,14 @@ export function CreatorHub({
                                   overlay={outroOverlay}
                                   resolvedStyle={resolvedOutroOverlayStyle}
                                   effectiveWindow={resolvedOutroOverlayWindow}
+                                  clipDurationSeconds={editedClip?.durationSeconds ?? 0}
+                                  playheadOffsetSeconds={clipRelativeTime}
                                   referenceText={hasAiReferenceMetadata ? selectedPlan?.endCardText : undefined}
                                   onChange={(updater) => updateTextOverlay("outro", updater)}
                                   onResetToSuggestion={
                                     hasAiReferenceMetadata ? () => resetTextOverlayToSuggestion("outro") : undefined
                                   }
+                                  onResetTiming={() => resetTextOverlayTiming("outro")}
                                 />
                               </div>
 
@@ -5477,7 +5816,7 @@ export function CreatorHub({
                                                   {index + 1}. {getMotionOverlayPresetLabel(overlay.presetId)}
                                                 </div>
                                                 <div className="mt-1 text-[11px] uppercase tracking-[0.22em] text-white/38">
-                                                  {overlay.startOffsetSeconds.toFixed(1)}s to {(overlay.startOffsetSeconds + overlay.durationSeconds).toFixed(1)}s
+                                                  {formatShortTimecode(overlay.startOffsetSeconds)} to {formatShortTimecode(overlay.startOffsetSeconds + overlay.durationSeconds)}
                                                 </div>
                                               </div>
                                               <Button
@@ -5600,36 +5939,76 @@ export function CreatorHub({
                                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                         <label className="text-xs text-white/70 block">
                                           Start offset
-                                          <Input
-                                            type="number"
-                                            min={0}
-                                            step={0.1}
-                                            value={selectedReactiveOverlay.startOffsetSeconds}
-                                            onChange={(event) =>
-                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
-                                                ...prev,
-                                                startOffsetSeconds: Number(event.target.value),
-                                              }))
-                                            }
-                                            className="mt-1 border-white/10 bg-white/[0.04] text-white"
-                                          />
+                                          <div className="relative mt-1">
+                                            <TimecodeInput
+                                              label="Motion overlay start offset"
+                                              valueSeconds={selectedReactiveOverlay.startOffsetSeconds}
+                                              onCommit={(value) =>
+                                                updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                  ...prev,
+                                                  startOffsetSeconds: value,
+                                                }))
+                                              }
+                                            />
+                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-white/35 pointer-events-none">
+                                              mm:ss
+                                            </span>
+                                          </div>
                                         </label>
                                         <label className="text-xs text-white/70 block">
                                           Duration
-                                          <Input
-                                            type="number"
-                                            min={0.2}
-                                            step={0.1}
-                                            value={selectedReactiveOverlay.durationSeconds}
-                                            onChange={(event) =>
-                                              updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
-                                                ...prev,
-                                                durationSeconds: Number(event.target.value),
-                                              }))
-                                            }
-                                            className="mt-1 border-white/10 bg-white/[0.04] text-white"
-                                          />
+                                          <div className="relative mt-1">
+                                            <TimecodeInput
+                                              label="Motion overlay duration"
+                                              valueSeconds={selectedReactiveOverlay.durationSeconds}
+                                              onCommit={(value) =>
+                                                updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                                  ...prev,
+                                                  durationSeconds: value,
+                                                }))
+                                              }
+                                            />
+                                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] text-white/35 pointer-events-none">
+                                              mm:ss
+                                            </span>
+                                          </div>
                                         </label>
+                                      </div>
+
+                                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3 space-y-3">
+                                        <div className="text-[11px] text-white/58">
+                                          Effective timing: {formatShortTimecode(selectedReactiveOverlay.startOffsetSeconds)} → {formatShortTimecode(selectedReactiveOverlay.startOffsetSeconds + selectedReactiveOverlay.durationSeconds)}
+                                        </div>
+                                        <TimingQuickControls
+                                          value={{
+                                            startOffsetSeconds: selectedReactiveOverlay.startOffsetSeconds,
+                                            durationSeconds: selectedReactiveOverlay.durationSeconds,
+                                          }}
+                                          clipDurationSeconds={editedClip?.durationSeconds ?? 0}
+                                          playheadOffsetSeconds={clipRelativeTime}
+                                          minDurationSeconds={0.2}
+                                          onChange={(next) =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => ({
+                                              ...prev,
+                                              startOffsetSeconds: next.startOffsetSeconds,
+                                              durationSeconds: next.durationSeconds,
+                                            }))
+                                          }
+                                          onReset={() =>
+                                            updateReactiveOverlay(selectedReactiveOverlay.id, (prev) => {
+                                              const timing = createClipRelativeTimingFromPlayheadToEnd({
+                                                clipDurationSeconds: editedClip?.durationSeconds ?? prev.durationSeconds,
+                                                playheadOffsetSeconds: clipRelativeTime,
+                                                minDurationSeconds: 1.4,
+                                              });
+                                              return {
+                                                ...prev,
+                                                startOffsetSeconds: timing.startOffsetSeconds,
+                                                durationSeconds: timing.durationSeconds,
+                                              };
+                                            })
+                                          }
+                                        />
                                       </div>
 
                                       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

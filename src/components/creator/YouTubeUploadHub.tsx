@@ -1090,7 +1090,11 @@ export function YouTubeUploadHub({
         });
         await onUploadSuccess?.(record);
       }
-      toast.success("YouTube upload finished");
+      if (currentDraft.relatedVideo) {
+        toast.warning("Upload finished. Set the related video manually in YouTube Studio; the upload API cannot apply it.");
+      } else {
+        toast.success("YouTube upload finished");
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "YouTube upload failed.";
       setUploadError(message);
@@ -1912,9 +1916,9 @@ export function YouTubeUploadHub({
                         <div className="grid gap-3 rounded-2xl border border-cyan-400/20 bg-cyan-400/8 p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div>
-                              <Label className="text-zinc-100">Related video for this Short</Label>
+                              <Label className="text-zinc-100">Related video target for Studio</Label>
                               <div className="mt-1 text-xs leading-relaxed text-cyan-50/75">
-                                ClipScribe can store the target video and let you choose it from your channel library. The final Shorts related-video link still needs to be confirmed in YouTube Studio because the public upload API does not expose that field.
+                                The public YouTube upload API cannot set Shorts related videos. ClipScribe saves this target for the upload summary, but YouTube Studio will still show &quot;None&quot; until you set it there.
                               </div>
                             </div>
                             {relatedVideoSelection ? (
@@ -1944,7 +1948,7 @@ export function YouTubeUploadHub({
                               <SelectValue
                                 placeholder={
                                   session?.connected
-                                    ? "Choose a public or unlisted channel video"
+                                    ? "Choose a Studio target from your channel"
                                     : "Connect YouTube first"
                                 }
                               />
@@ -1990,7 +1994,7 @@ export function YouTubeUploadHub({
                           ) : session?.connected ? (
                             <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-4 text-sm text-zinc-400">
                               {relatedVideoOptions.length > 0
-                                ? "Pick a target video if you want to continue the viewer journey from the Short into a longer video, another Short, or a live replay."
+                                ? "Pick the target you want to set manually in YouTube Studio after the Short uploads."
                                 : "No public or unlisted channel videos were returned for this account yet."}
                             </div>
                           ) : null}
@@ -2464,9 +2468,9 @@ export function YouTubeUploadHub({
                     {currentDraft.relatedVideo ? (
                       <Alert className="border-cyan-400/25 bg-cyan-400/10 text-cyan-50">
                         <Link2 className="h-4 w-4" />
-                        <AlertTitle>Finish the related-video link in Studio</AlertTitle>
+                        <AlertTitle>Set the related video in Studio</AlertTitle>
                         <AlertDescription className="text-cyan-50/80">
-                          The Short is uploaded. To match YouTube Studio behavior, open the new upload in Studio and choose <strong>{currentDraft.relatedVideo.title}</strong> as the related video.
+                          YouTube will show this Short&apos;s related video as &quot;None&quot; until you open the uploaded Short in Studio and choose <strong>{currentDraft.relatedVideo.title}</strong>.
                         </AlertDescription>
                       </Alert>
                     ) : null}
@@ -2602,7 +2606,7 @@ export function YouTubeUploadHub({
                     </div>
                     {publishIntent === "short" ? (
                       <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
-                        <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Related video</div>
+                        <div className="text-xs uppercase tracking-[0.22em] text-zinc-500">Studio related-video target</div>
                         {currentDraft.relatedVideo ? (
                           <div className="mt-3 space-y-3">
                             <div>
@@ -2656,7 +2660,7 @@ export function YouTubeUploadHub({
                       { label: "Recording date", value: formatDateInput(recordingDate) },
                       { label: "Publish at", value: formatDateTimeInput(publishAt) },
                       ...(publishIntent === "short"
-                        ? [{ label: "Related video", value: currentDraft.relatedVideo?.title || "Not set" }]
+                        ? [{ label: "Studio target", value: currentDraft.relatedVideo?.title || "Not set" }]
                         : []),
                     ].map((item) => (
                       <div
@@ -2734,9 +2738,9 @@ export function YouTubeUploadHub({
                 {currentDraft.relatedVideo ? (
                   <Alert className="border-cyan-400/25 bg-cyan-400/10 text-cyan-50">
                     <Link2 className="h-4 w-4" />
-                    <AlertTitle>Related video prepared for Studio</AlertTitle>
+                    <AlertTitle>Manual Studio step required</AlertTitle>
                     <AlertDescription className="text-cyan-50/80">
-                      After the Short finishes uploading, open it in YouTube Studio and set the related video to <strong>{currentDraft.relatedVideo.title}</strong>. ClipScribe stores the selection, but the public upload API still does not expose this Shorts-specific field.
+                      After the Short uploads, YouTube will still show the related video as &quot;None&quot; until you open it in Studio and set it to <strong>{currentDraft.relatedVideo.title}</strong>.
                     </AlertDescription>
                   </Alert>
                 ) : null}

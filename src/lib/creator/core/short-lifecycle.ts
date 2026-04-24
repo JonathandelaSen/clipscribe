@@ -72,6 +72,8 @@ export function findExistingShortProjectRecord(
     if (byId) return byId;
   }
 
+  if (options.origin === "manual") return undefined;
+
   return records.find(
     (record) =>
       (options.origin == null || record.origin === options.origin) &&
