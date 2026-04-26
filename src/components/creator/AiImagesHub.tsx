@@ -5,7 +5,6 @@ import NextImage from "next/image";
 import {
   AlertTriangle,
   Check,
-  Copy,
   Download,
   ExternalLink,
   Image as ImageIcon,
@@ -34,7 +33,6 @@ import {
   selectImagePromptCustomizationSnapshot,
   type VideoInfoPromptEditorMode,
 } from "@/lib/creator/prompt-customization";
-import { buildCreatorImagePrompt } from "@/lib/server/creator/images/prompt";
 import { buildCreatorTextProviderHeaders } from "@/lib/creator/user-ai-settings";
 import {
   buildProjectImageRecord,
@@ -62,6 +60,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -75,6 +74,20 @@ const IMAGE_PROMPT_SLOT_LABELS: Record<CreatorImagePromptSlot, string> = {
 const ASPECT_RATIOS: CreatorImageAspectRatio[] = ["1:1", "16:9", "9:16", "4:5", "3:4"];
 const QUALITIES: CreatorImageQuality[] = ["auto", "low", "medium", "high"];
 const FORMATS: CreatorImageFormat[] = ["png", "jpeg", "webp"];
+
+type ImageViewerState = {
+  src: string;
+  objectUrl?: string;
+  filename: string;
+  provider?: string;
+  model?: string;
+  prompt?: string;
+  aspectRatio?: string;
+  size?: string;
+  quality?: string;
+  outputFormat?: string;
+  generatedAt?: number;
+};
 
 function cloneImagePromptProfile(profile: CreatorImagePromptProfile | undefined): CreatorImagePromptProfile {
   return sanitizeImagePromptProfile(profile) ?? createEmptyImagePromptProfile();
@@ -206,15 +219,6 @@ function getCreatorProviderKeyPlaceholder(provider: CreatorLLMProvider): string 
   return provider === "gemini" ? "AIza..." : "sk-proj-...";
 }
 
-async function copyText(text: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success(`${label} copied`);
-  } catch {
-    toast.error(`Couldn't copy ${label.toLowerCase()}`);
-  }
-}
-
 function base64ToFile(base64: string, filename: string, mimeType: string): File {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -247,7 +251,98 @@ function downloadFile(file: File, filename = file.name) {
   });
 }
 
-function AssetImagePreview({ file, alt }: { file?: File; alt: string }) {
+function GenerationInfoGrid({
+  provider,
+  model,
+  prompt,
+  aspectRatio,
+  size,
+  quality,
+  outputFormat,
+  generatedAt,
+}: Omit<ImageViewerState, "src" | "objectUrl" | "filename">) {
+  const items = [
+    ["Provider", provider],
+    ["Model", model],
+    ["Ratio", aspectRatio],
+    ["Size", size],
+    ["Quality", quality],
+    ["Format", outputFormat],
+    ["Generated", generatedAt ? formatRelativeDate(generatedAt) : undefined],
+  ];
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-x-5 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+        {items.map(([label, value]) => (
+          <div key={label} className="min-w-0 border-b border-white/8 pb-2">
+            <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">{label}</div>
+            <div className="mt-1 break-words text-sm text-white/85">{value ?? "n/a"}</div>
+          </div>
+        ))}
+      </div>
+      <div className="border-b border-white/8 pb-2">
+        <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Prompt</div>
+        <div className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-white/85">
+          {prompt?.trim() ? prompt : "n/a"}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GenerationInfoPanel(props: Omit<ImageViewerState, "src" | "objectUrl" | "filename">) {
+  return (
+    <div className="space-y-5">
+      <div>
+        <div className="text-xs font-medium uppercase tracking-[0.22em] text-white/40">Generation info</div>
+        <div className="mt-3">
+          <GenerationInfoGrid {...props} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GenerationMetaRow({
+  provider,
+  model,
+  aspectRatio,
+  quality,
+  outputFormat,
+}: Pick<ImageViewerState, "provider" | "model" | "aspectRatio" | "quality" | "outputFormat">) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {provider ? (
+        <Badge className="border-emerald-300/20 bg-emerald-400/10 text-[10px] text-emerald-100">
+          {provider}
+        </Badge>
+      ) : null}
+      {model ? (
+        <Badge className="max-w-full truncate border-white/10 bg-white/5 text-[10px] text-white/70">
+          {model}
+        </Badge>
+      ) : null}
+      {aspectRatio ? (
+        <Badge className="border-cyan-300/20 bg-cyan-400/10 text-[10px] text-cyan-100">
+          {aspectRatio}
+        </Badge>
+      ) : null}
+      {quality ? (
+        <Badge className="border-white/10 bg-white/5 text-[10px] text-white/60">
+          {quality}
+        </Badge>
+      ) : null}
+      {outputFormat ? (
+        <Badge className="border-white/10 bg-white/5 text-[10px] text-white/60">
+          {outputFormat.toUpperCase()}
+        </Badge>
+      ) : null}
+    </div>
+  );
+}
+
+function AssetImagePreview({ file, alt, onOpen }: { file?: File; alt: string; onOpen?: () => void }) {
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -260,19 +355,26 @@ function AssetImagePreview({ file, alt }: { file?: File; alt: string }) {
 
   if (!file) {
     return (
-      <div className="flex aspect-video w-full items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/30 text-xs text-white/35">
+      <div className="flex h-52 w-full items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/30 text-xs text-white/35">
         Preview unavailable
       </div>
     );
   }
 
   return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      ref={imageRef}
-      alt={alt}
-      className="aspect-video w-full rounded-xl object-cover"
-    />
+    <button
+      type="button"
+      onClick={onOpen}
+      disabled={!onOpen}
+      className="block w-full overflow-hidden rounded-xl bg-zinc-950 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        ref={imageRef}
+        alt={alt}
+        className="h-52 w-full object-contain transition-transform hover:scale-[1.02]"
+      />
+    </button>
   );
 }
 
@@ -324,6 +426,7 @@ export function AiImagesHub({
   const [outputFormat, setOutputFormat] = useState<CreatorImageFormat>("png");
   const [count, setCount] = useState("1");
   const [promptEditorMode, setPromptEditorMode] = useState<VideoInfoPromptEditorMode>("global");
+  const [viewer, setViewer] = useState<ImageViewerState | null>(null);
   const [globalPromptProfileDraft, setGlobalPromptProfileDraft] = useState<CreatorImagePromptProfile>(
     createEmptyImagePromptProfile()
   );
@@ -339,6 +442,14 @@ export function AiImagesHub({
   useEffect(() => {
     setGlobalPromptProfileDraft(cloneImagePromptProfile(imagePromptProfile));
   }, [imagePromptProfile]);
+
+  useEffect(() => {
+    return () => {
+      if (viewer?.objectUrl) {
+        URL.revokeObjectURL(viewer.objectUrl);
+      }
+    };
+  }, [viewer?.objectUrl]);
 
   const resolvedProvider = imagesFeatureSettings?.provider ?? imageConfig?.provider ?? "openai";
   const resolvedModel = useMemo(() => {
@@ -419,11 +530,6 @@ export function AiImagesHub({
     }),
     [activePromptSnapshot, aspectRatio, brief, count, outputFormat, project.id, quality, resolvedModel, resolvedProvider]
   );
-
-  const promptPreview = useMemo(() => buildCreatorImagePrompt(buildImageRequest(activePromptSnapshot)), [
-    activePromptSnapshot,
-    buildImageRequest,
-  ]);
 
   const imageHistory = useMemo(() => resolveProjectImageHistory(project), [project]);
   const assetsById = useMemo(() => new Map(assets.map((asset) => [asset.id, asset])), [assets]);
@@ -534,6 +640,30 @@ export function AiImagesHub({
       toast.success("Image generation removed from history");
     },
     [imageHistory, project, saveProject]
+  );
+
+  const openViewerFromFile = useCallback((file: File, metadata: Omit<ImageViewerState, "src" | "objectUrl" | "filename">) => {
+    const url = URL.createObjectURL(file);
+    setViewer({
+      ...metadata,
+      src: url,
+      objectUrl: url,
+      filename: file.name,
+    });
+  }, []);
+
+  const openViewerFromBase64 = useCallback(
+    (
+      image: { base64: string; mimeType: string; filename: string },
+      metadata: Omit<ImageViewerState, "src" | "objectUrl" | "filename">
+    ) => {
+      setViewer({
+        ...metadata,
+        src: `data:${image.mimeType};base64,${image.base64}`,
+        filename: image.filename,
+      });
+    },
+    []
   );
 
   const isGenerateDisabled = !brief.trim() || !hasResolvedApiKey || isGeneratingImages;
@@ -648,81 +778,63 @@ export function AiImagesHub({
             </div>
           </div>
 
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="space-y-4 rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-              <div className="text-sm font-semibold text-white">Image brief</div>
-              <Textarea
-                value={brief}
-                onChange={(event) => setBrief(event.target.value)}
-                placeholder="Describe the image to generate"
-                className="min-h-40 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
-              />
-              <div className="grid gap-3 sm:grid-cols-4">
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Frame</div>
-                  <Select value={aspectRatio} onValueChange={(value) => setAspectRatio(value as CreatorImageAspectRatio)}>
-                    <SelectTrigger className="border-white/10 bg-black/25 text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-white/10 bg-zinc-950 text-white">
-                      {ASPECT_RATIOS.map((value) => (
-                        <SelectItem key={value} value={value}>{value}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Quality</div>
-                  <Select value={quality} onValueChange={(value) => setQuality(value as CreatorImageQuality)}>
-                    <SelectTrigger className="border-white/10 bg-black/25 text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-white/10 bg-zinc-950 text-white">
-                      {QUALITIES.map((value) => (
-                        <SelectItem key={value} value={value}>{value}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Format</div>
-                  <Select value={outputFormat} onValueChange={(value) => setOutputFormat(value as CreatorImageFormat)}>
-                    <SelectTrigger className="border-white/10 bg-black/25 text-white">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent className="border-white/10 bg-zinc-950 text-white">
-                      {FORMATS.map((value) => (
-                        <SelectItem key={value} value={value}>{value.toUpperCase()}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Count</div>
-                  <Input
-                    value={count}
-                    onChange={(event) => setCount(event.target.value)}
-                    inputMode="numeric"
-                    className="border-white/10 bg-black/25 text-white"
-                  />
-                </div>
+          <div className="space-y-4 rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
+            <div className="text-sm font-semibold text-white">Image brief</div>
+            <Textarea
+              value={brief}
+              onChange={(event) => setBrief(event.target.value)}
+              placeholder="Describe the image to generate"
+              className="min-h-40 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
+            />
+            <div className="grid gap-3 sm:grid-cols-4">
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Frame</div>
+                <Select value={aspectRatio} onValueChange={(value) => setAspectRatio(value as CreatorImageAspectRatio)}>
+                  <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                    {ASPECT_RATIOS.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            </div>
-
-            <div className="rounded-[1.6rem] border border-white/8 bg-black/20 p-5">
-              <div className="text-sm font-semibold text-white">Effective prompt</div>
-              <pre className="mt-4 max-h-[320px] overflow-auto whitespace-pre-wrap rounded-2xl border border-white/8 bg-black/25 p-4 text-xs leading-relaxed text-zinc-200">
-                {promptPreview}
-              </pre>
-              <Button
-                type="button"
-                variant="ghost"
-                className="mt-3 border border-white/10 bg-white/5 text-white hover:bg-white/10"
-                onClick={() => void copyText(promptPreview, "Prompt")}
-              >
-                <Copy className="mr-2 h-4 w-4" />
-                Copy
-              </Button>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Quality</div>
+                <Select value={quality} onValueChange={(value) => setQuality(value as CreatorImageQuality)}>
+                  <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                    {QUALITIES.map((value) => (
+                      <SelectItem key={value} value={value}>{value}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Format</div>
+                <Select value={outputFormat} onValueChange={(value) => setOutputFormat(value as CreatorImageFormat)}>
+                  <SelectTrigger className="border-white/10 bg-black/25 text-white">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="border-white/10 bg-zinc-950 text-white">
+                    {FORMATS.map((value) => (
+                      <SelectItem key={value} value={value}>{value.toUpperCase()}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Count</div>
+                <Input
+                  value={count}
+                  onChange={(event) => setCount(event.target.value)}
+                  inputMode="numeric"
+                  className="border-white/10 bg-black/25 text-white"
+                />
+              </div>
             </div>
           </div>
 
@@ -880,19 +992,43 @@ export function AiImagesHub({
               Latest Images
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid gap-4 p-6 sm:grid-cols-2 xl:grid-cols-4">
+          <CardContent className="grid grid-cols-[repeat(auto-fill,minmax(220px,340px))] gap-4 p-6">
             {imageResult.images.map((image) => (
                 <div key={image.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/25">
-                  <NextImage
-                    src={`data:${image.mimeType};base64,${image.base64}`}
-                    alt={image.revisedPrompt || imageResult.prompt}
-                    width={512}
-                    height={512}
-                    unoptimized
-                    className="aspect-square w-full object-cover"
-                  />
+                  <button
+                    type="button"
+                    className="block w-full overflow-hidden bg-zinc-950 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                    onClick={() =>
+                      openViewerFromBase64(image, {
+                        provider: imageResult.providerMode,
+                        model: imageResult.model,
+                        prompt: imageResult.promptPreview,
+                        aspectRatio: imageResult.aspectRatio,
+                        size: imageResult.size,
+                        quality: imageResult.quality,
+                        outputFormat: imageResult.outputFormat,
+                        generatedAt: imageResult.generatedAt,
+                      })
+                    }
+                  >
+                    <NextImage
+                      src={`data:${image.mimeType};base64,${image.base64}`}
+                      alt={image.revisedPrompt || imageResult.prompt}
+                      width={512}
+                      height={512}
+                      unoptimized
+                      className="h-56 w-full object-contain transition-transform hover:scale-[1.02]"
+                    />
+                  </button>
                   <div className="space-y-3 p-3">
                     <div className="break-all text-xs text-white/55">{image.filename}</div>
+                    <GenerationMetaRow
+                      provider={imageResult.providerMode}
+                      model={imageResult.model}
+                      aspectRatio={imageResult.aspectRatio}
+                      quality={imageResult.quality}
+                      outputFormat={imageResult.outputFormat}
+                    />
                     <div className="grid grid-cols-2 gap-2">
                       <Button
                         type="button"
@@ -945,14 +1081,49 @@ export function AiImagesHub({
                         {record.assetIds.length} asset{record.assetIds.length === 1 ? "" : "s"}
                       </Badge>
                     </div>
-                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    <div className="mt-3">
+                      <GenerationInfoGrid
+                        provider={record.inputSummary.provider}
+                        model={record.inputSummary.model}
+                        prompt={record.inputSummary.promptPreview}
+                        aspectRatio={record.inputSummary.aspectRatio}
+                        size={record.inputSummary.size}
+                        quality={record.inputSummary.quality}
+                        outputFormat={record.inputSummary.outputFormat}
+                        generatedAt={record.generatedAt}
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(220px,340px))] gap-3">
                       {record.assetIds.map((assetId) => {
                         const asset = assetsById.get(assetId);
                         const imageFile = asset?.fileBlob;
+                        const imageMetadata = {
+                          provider: record.inputSummary.provider,
+                          model: record.inputSummary.model,
+                          prompt: record.inputSummary.promptPreview,
+                          aspectRatio: record.inputSummary.aspectRatio,
+                          size: record.inputSummary.size,
+                          quality: record.inputSummary.quality,
+                          outputFormat: record.inputSummary.outputFormat,
+                          generatedAt: record.generatedAt,
+                        };
                         return (
                           <div key={assetId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
-                            <AssetImagePreview file={imageFile} alt={asset?.filename ?? "Generated image"} />
+                            <AssetImagePreview
+                              file={imageFile}
+                              alt={asset?.filename ?? "Generated image"}
+                              onOpen={imageFile ? () => openViewerFromFile(imageFile, imageMetadata) : undefined}
+                            />
                             <div className="mt-2 truncate text-xs text-white/70">{asset?.filename ?? assetId}</div>
+                            <div className="mt-2">
+                              <GenerationMetaRow
+                                provider={record.inputSummary.provider}
+                                model={record.inputSummary.model}
+                                aspectRatio={record.inputSummary.aspectRatio}
+                                quality={record.inputSummary.quality}
+                                outputFormat={record.inputSummary.outputFormat}
+                              />
+                            </div>
                             <div className="mt-2 grid grid-cols-2 gap-2">
                               <Button
                                 type="button"
@@ -996,6 +1167,74 @@ export function AiImagesHub({
           </CardContent>
         </Card>
       ) : null}
+
+      <Dialog open={!!viewer} onOpenChange={(open) => !open && setViewer(null)}>
+        <DialogContent className="h-[calc(100vh-1.5rem)] !w-[calc(100vw-1.5rem)] !max-w-none overflow-hidden border-white/10 bg-zinc-950 p-0 text-white sm:!max-w-none">
+          {viewer ? (
+            <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_minmax(280px,42vh)] xl:grid-cols-[minmax(0,1fr)_390px] xl:grid-rows-1">
+              <div className="flex min-h-0 items-center justify-center bg-black p-2 sm:p-3">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={viewer.src}
+                  alt={viewer.filename}
+                  className="max-h-full max-w-full object-contain"
+                />
+              </div>
+              <aside className="min-h-0 overflow-y-auto border-t border-white/10 bg-zinc-950 p-5 pr-12 xl:border-l xl:border-t-0">
+                <div className="space-y-5">
+                  <DialogHeader className="min-w-0 text-left">
+                    <DialogTitle className="break-all text-base text-white">{viewer.filename}</DialogTitle>
+                  </DialogHeader>
+                  <GenerationMetaRow
+                    provider={viewer.provider}
+                    model={viewer.model}
+                    aspectRatio={viewer.aspectRatio}
+                    quality={viewer.quality}
+                    outputFormat={viewer.outputFormat}
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
+                      onClick={() => window.open(viewer.src, "_blank", "noopener,noreferrer")}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      Open
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
+                      onClick={() => {
+                        const anchor = document.createElement("a");
+                        anchor.href = viewer.src;
+                        anchor.download = viewer.filename;
+                        document.body.append(anchor);
+                        anchor.click();
+                        anchor.remove();
+                      }}
+                    >
+                      <Download className="mr-2 h-4 w-4" />
+                      Download
+                    </Button>
+                  </div>
+                  <GenerationInfoPanel
+                    provider={viewer.provider}
+                    model={viewer.model}
+                    prompt={viewer.prompt}
+                    aspectRatio={viewer.aspectRatio}
+                    size={viewer.size}
+                    quality={viewer.quality}
+                    outputFormat={viewer.outputFormat}
+                    generatedAt={viewer.generatedAt}
+                  />
+                </div>
+              </aside>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
