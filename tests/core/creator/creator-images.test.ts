@@ -25,7 +25,7 @@ test("generateCreatorImages normalizes OpenAI image responses and traces the run
       assert.match(String(input), /api\.openai\.com\/v1\/images\/generations/);
       const body = JSON.parse(String(init?.body));
       assert.equal(body.model, "gpt-image-2");
-      assert.match(body.prompt, /A glossy product photo/);
+      assert.equal(body.prompt, "A glossy product photo");
       return new Response(
         JSON.stringify({
           data: [{ b64_json: Buffer.from("fake-png").toString("base64"), revised_prompt: "Revised" }],

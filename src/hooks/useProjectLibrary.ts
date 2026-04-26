@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { PROJECT_LIBRARY_UPDATED_EVENT, notifyProjectLibraryUpdated } from "@/lib/projects/events";
-import { createProjectFromSourceFile } from "@/lib/projects/source-assets";
+import { createEmptyContentProject, createProjectFromSourceFile } from "@/lib/projects/source-assets";
 import { requestProjectYouTubeImport } from "@/lib/projects/youtube-import-client";
 import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import type { ContentProjectRecord, ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
@@ -59,6 +59,15 @@ export function useProjectLibrary() {
     return project;
   }, [refresh]);
 
+  const createEmptyProject = useCallback(async (name?: string) => {
+    const project = createEmptyContentProject({ name });
+
+    await projectRepository.putProject(project);
+    await refresh();
+    notifyProjectLibraryUpdated();
+    return project;
+  }, [refresh]);
+
   const createProjectFromYouTubeUrl = useCallback(async (url: string) => {
     const imported = await requestProjectYouTubeImport({ url });
     const { project, asset } = await createProjectFromSourceFile({
@@ -110,6 +119,7 @@ export function useProjectLibrary() {
     isLoading,
     error,
     refresh,
+    createEmptyProject,
     createProjectFromFile,
     createProjectFromYouTubeUrl,
     saveProject,

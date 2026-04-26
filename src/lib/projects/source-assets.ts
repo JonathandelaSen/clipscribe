@@ -108,6 +108,16 @@ export async function createProjectFromSourceFile(input: {
   return { project, asset };
 }
 
+export function createEmptyContentProject(input?: {
+  name?: string;
+  now?: number;
+}): ContentProjectRecord {
+  return createEmptyEditorProject({
+    now: input?.now,
+    name: input?.name?.trim() || "Untitled Project",
+  }) as ContentProjectRecord;
+}
+
 export function isSelectableProjectSourceAsset(
   asset: Pick<ProjectAssetRecord, "kind">
 ): boolean {

@@ -38,8 +38,8 @@ export const VIDEO_INFO_PROMPT_SLOT_DEFAULTS: Record<CreatorVideoInfoPromptSlot,
 };
 
 export const IMAGE_PROMPT_SLOT_DEFAULTS: Record<CreatorImagePromptSlot, string> = {
-  persona: "You are an expert creative director for production-ready image generation.",
-  style: "Create a polished, high-fidelity image with clear composition, intentional lighting, and no unwanted text.",
+  persona: "",
+  style: "",
 };
 
 export const VIDEO_INFO_PROMPT_FIELD_DEFAULTS: Partial<Record<CreatorVideoInfoBlock, string>> = {

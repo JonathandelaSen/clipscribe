@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { createEditorAssetRecord } from "../../../src/lib/editor/storage";
 import {
+  createEmptyContentProject,
   getActiveProjectSourceAsset,
   getSelectableProjectSourceAssets,
   getSelectableProjectVisualAssets,
@@ -44,6 +45,21 @@ function createAsset(
     now: overrides.createdAt ?? 100,
   }) as ProjectAssetRecord;
 }
+
+test("empty content projects can be created without assets", () => {
+  const project = createEmptyContentProject({
+    name: "Sin assets",
+    now: 123,
+  });
+
+  assert.equal(project.name, "Sin assets");
+  assert.equal(project.createdAt, 123);
+  assert.deepEqual(project.assetIds, []);
+  assert.equal(project.activeSourceAssetId, undefined);
+  assert.deepEqual(project.timeline.videoClips, []);
+  assert.deepEqual(project.timeline.audioItems, []);
+  assert.deepEqual(project.timeline.imageItems, []);
+});
 
 test("derived videos remain selectable as active project sources", () => {
   const uploadedAudio = createAsset({

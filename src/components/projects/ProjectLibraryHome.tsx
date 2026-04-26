@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Film, Link as LinkIcon, Pencil, Sparkles, Trash2 } from "lucide-react";
+import { FilePlus2, Film, Link as LinkIcon, Pencil, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DragDropZone } from "@/components/DragDropZone";
@@ -27,7 +27,7 @@ export function ProjectLibraryHome() {
   const router = useRouter();
   const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false);
   const { startYouTubeImport } = useBackgroundTasks();
-  const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createProjectFromFile, renameProject, deleteProject } = useProjectLibrary();
+  const { projects, assetsByProjectId, exportsByProjectId, isLoading, error, createEmptyProject, createProjectFromFile, renameProject, deleteProject } = useProjectLibrary();
 
   useEffect(() => {
     if (!isLoading) {
@@ -44,6 +44,17 @@ export function ProjectLibraryHome() {
   const handleCreateProject = async (file: File) => {
     try {
       const project = await createProjectFromFile(file);
+      toast.success(`Proyecto creado: ${project.name}`);
+      router.push(`/projects/${project.id}`);
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "No se pudo crear el proyecto");
+    }
+  };
+
+  const handleCreateEmptyProject = async () => {
+    try {
+      const project = await createEmptyProject();
       toast.success(`Proyecto creado: ${project.name}`);
       router.push(`/projects/${project.id}`);
     } catch (err) {
@@ -91,7 +102,7 @@ export function ProjectLibraryHome() {
             <div className="space-y-1">
               <h1 className="text-3xl font-semibold tracking-tight text-white/90">Project Library</h1>
               <p className="max-w-2xl text-sm text-white/50">
-                Sube un video o audio para crear un proyecto. Gestiona assets, transcripciones, shorts y la timeline centralizadamente.
+                Crea un proyecto vacío o empieza desde un video, audio o URL. Gestiona assets, transcripciones, shorts y la timeline centralizadamente.
               </p>
             </div>
           </div>
@@ -109,14 +120,24 @@ export function ProjectLibraryHome() {
                 <Sparkles className="h-5 w-5 text-cyan-200" />
                 Crear Proyecto
               </CardTitle>
-              <Button
-                variant="outline"
-                className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
-                onClick={() => setIsYouTubeDialogOpen(true)}
-              >
-                <LinkIcon className="mr-2 h-4 w-4" />
-                Importar URL
-              </Button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => void handleCreateEmptyProject()}
+                >
+                  <FilePlus2 className="mr-2 h-4 w-4" />
+                  Proyecto vacío
+                </Button>
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => setIsYouTubeDialogOpen(true)}
+                >
+                  <LinkIcon className="mr-2 h-4 w-4" />
+                  Importar URL
+                </Button>
+              </div>
             </CardHeader>
             <CardContent>
               <DragDropZone onFileSelect={handleCreateProject} disabled={false} />

@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import NextImage from "next/image";
 import {
   AlertTriangle,
   Check,
   Copy,
+  Download,
+  ExternalLink,
   Image as ImageIcon,
   KeyRound,
   Loader2,
@@ -157,7 +159,7 @@ function PromptSlotControl({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-sm font-medium text-white">{label}</div>
-          <div className="mt-1 text-xs leading-relaxed text-zinc-500">{defaultValue}</div>
+          {defaultValue ? <div className="mt-1 text-xs leading-relaxed text-zinc-500">{defaultValue}</div> : null}
         </div>
         <Select value={override.mode} onValueChange={(value) => onModeChange(value as CreatorPromptSlotOverrideMode)}>
           <SelectTrigger className="w-[160px] border-white/10 bg-black/30 text-white">
@@ -220,6 +222,58 @@ function base64ToFile(base64: string, filename: string, mimeType: string): File 
     bytes[index] = binary.charCodeAt(index);
   }
   return new File([bytes], filename, { type: mimeType });
+}
+
+function withObjectUrl(file: File | Blob, action: (url: string) => void) {
+  const url = URL.createObjectURL(file);
+  action(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
+function openFile(file: File) {
+  withObjectUrl(file, (url) => {
+    window.open(url, "_blank", "noopener,noreferrer");
+  });
+}
+
+function downloadFile(file: File, filename = file.name) {
+  withObjectUrl(file, (url) => {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  });
+}
+
+function AssetImagePreview({ file, alt }: { file?: File; alt: string }) {
+  const imageRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!file || !imageRef.current) return;
+
+    const url = URL.createObjectURL(file);
+    imageRef.current.src = url;
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  if (!file) {
+    return (
+      <div className="flex aspect-video w-full items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/30 text-xs text-white/35">
+        Preview unavailable
+      </div>
+    );
+  }
+
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      ref={imageRef}
+      alt={alt}
+      className="aspect-video w-full rounded-xl object-cover"
+    />
+  );
 }
 
 export function AiImagesHub({
@@ -828,17 +882,41 @@ export function AiImagesHub({
           </CardHeader>
           <CardContent className="grid gap-4 p-6 sm:grid-cols-2 xl:grid-cols-4">
             {imageResult.images.map((image) => (
-              <div key={image.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/25">
-                <NextImage
-                  src={`data:${image.mimeType};base64,${image.base64}`}
-                  alt={image.revisedPrompt || imageResult.prompt}
-                  width={512}
-                  height={512}
-                  unoptimized
-                  className="aspect-square w-full object-cover"
-                />
-                <div className="p-3 text-xs text-white/55">{image.filename}</div>
-              </div>
+                <div key={image.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/25">
+                  <NextImage
+                    src={`data:${image.mimeType};base64,${image.base64}`}
+                    alt={image.revisedPrompt || imageResult.prompt}
+                    width={512}
+                    height={512}
+                    unoptimized
+                    className="aspect-square w-full object-cover"
+                  />
+                  <div className="space-y-3 p-3">
+                    <div className="break-all text-xs text-white/55">{image.filename}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
+                        onClick={() => openFile(base64ToFile(image.base64, image.filename, image.mimeType))}
+                      >
+                        <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                        Open
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
+                        onClick={() => downloadFile(base64ToFile(image.base64, image.filename, image.mimeType))}
+                      >
+                        <Download className="mr-2 h-3.5 w-3.5" />
+                        Download
+                      </Button>
+                    </div>
+                  </div>
+                </div>
             ))}
           </CardContent>
         </Card>
@@ -867,13 +945,39 @@ export function AiImagesHub({
                         {record.assetIds.length} asset{record.assetIds.length === 1 ? "" : "s"}
                       </Badge>
                     </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
+                    <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
                       {record.assetIds.map((assetId) => {
                         const asset = assetsById.get(assetId);
+                        const imageFile = asset?.fileBlob;
                         return (
-                          <span key={assetId} className="rounded-full border border-white/10 bg-white/5 px-2 py-0.5 text-[10px] text-white/55">
-                            {asset?.filename ?? assetId}
-                          </span>
+                          <div key={assetId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
+                            <AssetImagePreview file={imageFile} alt={asset?.filename ?? "Generated image"} />
+                            <div className="mt-2 truncate text-xs text-white/70">{asset?.filename ?? assetId}</div>
+                            <div className="mt-2 grid grid-cols-2 gap-2">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 border border-white/10 bg-white/5 text-xs text-white hover:bg-white/10"
+                                onClick={() => imageFile && openFile(imageFile)}
+                                disabled={!imageFile}
+                              >
+                                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                                Open
+                              </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 border border-white/10 bg-white/5 text-xs text-white hover:bg-white/10"
+                                onClick={() => imageFile && downloadFile(imageFile, asset?.filename)}
+                                disabled={!imageFile}
+                              >
+                                <Download className="mr-1.5 h-3.5 w-3.5" />
+                                Download
+                              </Button>
+                            </div>
+                          </div>
                         );
                       })}
                     </div>
