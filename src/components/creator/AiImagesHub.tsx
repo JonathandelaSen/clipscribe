@@ -228,29 +228,6 @@ function base64ToFile(base64: string, filename: string, mimeType: string): File 
   return new File([bytes], filename, { type: mimeType });
 }
 
-function withObjectUrl(file: File | Blob, action: (url: string) => void) {
-  const url = URL.createObjectURL(file);
-  action(url);
-  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
-}
-
-function openFile(file: File) {
-  withObjectUrl(file, (url) => {
-    window.open(url, "_blank", "noopener,noreferrer");
-  });
-}
-
-function downloadFile(file: File, filename = file.name) {
-  withObjectUrl(file, (url) => {
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = filename;
-    document.body.append(anchor);
-    anchor.click();
-    anchor.remove();
-  });
-}
-
 function GenerationInfoGrid({
   provider,
   model,
@@ -260,7 +237,12 @@ function GenerationInfoGrid({
   quality,
   outputFormat,
   generatedAt,
-}: Omit<ImageViewerState, "src" | "objectUrl" | "filename">) {
+  columns = "wide",
+  promptClassName,
+}: Omit<ImageViewerState, "src" | "objectUrl" | "filename"> & {
+  columns?: "compact" | "wide";
+  promptClassName?: string;
+}) {
   const items = [
     ["Provider", provider],
     ["Model", model],
@@ -273,7 +255,7 @@ function GenerationInfoGrid({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-x-5 gap-y-2 sm:grid-cols-2 lg:grid-cols-3">
+      <div className={cn("grid gap-x-5 gap-y-2", columns === "wide" ? "sm:grid-cols-2 lg:grid-cols-3" : "grid-cols-2")}>
         {items.map(([label, value]) => (
           <div key={label} className="min-w-0 border-b border-white/8 pb-2">
             <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">{label}</div>
@@ -283,7 +265,7 @@ function GenerationInfoGrid({
       </div>
       <div className="border-b border-white/8 pb-2">
         <div className="text-[10px] uppercase tracking-[0.22em] text-white/35">Prompt</div>
-        <div className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-white/85">
+        <div className={cn("mt-2 max-h-28 overflow-auto whitespace-pre-wrap text-sm leading-relaxed text-white/85", promptClassName)}>
           {prompt?.trim() ? prompt : "n/a"}
         </div>
       </div>
@@ -291,7 +273,12 @@ function GenerationInfoGrid({
   );
 }
 
-function GenerationInfoPanel(props: Omit<ImageViewerState, "src" | "objectUrl" | "filename">) {
+function GenerationInfoPanel(
+  props: Omit<ImageViewerState, "src" | "objectUrl" | "filename"> & {
+    columns?: "compact" | "wide";
+    promptClassName?: string;
+  }
+) {
   return (
     <div className="space-y-5">
       <div>
@@ -342,7 +329,7 @@ function GenerationMetaRow({
   );
 }
 
-function AssetImagePreview({ file, alt, onOpen }: { file?: File; alt: string; onOpen?: () => void }) {
+function AssetImagePreview({ file, alt }: { file?: File; alt: string }) {
   const imageRef = useRef<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -355,26 +342,21 @@ function AssetImagePreview({ file, alt, onOpen }: { file?: File; alt: string; on
 
   if (!file) {
     return (
-      <div className="flex h-52 w-full items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/30 text-xs text-white/35">
+      <div className="flex h-36 w-full items-center justify-center rounded-xl border border-dashed border-white/10 bg-black/30 text-xs text-white/35">
         Preview unavailable
       </div>
     );
   }
 
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      disabled={!onOpen}
-      className="block w-full overflow-hidden rounded-xl bg-zinc-950 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
-    >
+    <div className="block w-full overflow-hidden rounded-xl bg-zinc-950 text-left">
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         ref={imageRef}
         alt={alt}
-        className="h-52 w-full object-contain transition-transform hover:scale-[1.02]"
+        className="h-36 w-full object-contain transition-transform group-hover:scale-[1.02]"
       />
-    </button>
+    </div>
   );
 }
 
@@ -992,12 +974,26 @@ export function AiImagesHub({
               Latest Images
             </CardTitle>
           </CardHeader>
-          <CardContent className="grid grid-cols-[repeat(auto-fill,minmax(220px,340px))] gap-4 p-6">
-            {imageResult.images.map((image) => (
-                <div key={image.id} className="overflow-hidden rounded-2xl border border-white/10 bg-black/25">
+          <CardContent className="p-6">
+            <div className="grid gap-4 xl:grid-cols-[360px_minmax(0,1fr)] xl:items-start">
+              <GenerationInfoPanel
+                provider={imageResult.providerMode}
+                model={imageResult.model}
+                prompt={imageResult.promptPreview}
+                aspectRatio={imageResult.aspectRatio}
+                size={imageResult.size}
+                quality={imageResult.quality}
+                outputFormat={imageResult.outputFormat}
+                generatedAt={imageResult.generatedAt}
+                columns="compact"
+                promptClassName="max-h-40"
+              />
+              <div className="grid grid-cols-1 gap-3 min-[520px]:grid-cols-2 min-[860px]:grid-cols-3 min-[1180px]:grid-cols-4 min-[1500px]:grid-cols-5">
+                {imageResult.images.map((image) => (
                   <button
+                    key={image.id}
                     type="button"
-                    className="block w-full overflow-hidden bg-zinc-950 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
+                    className="group min-w-0 rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 text-left transition-colors hover:border-cyan-300/35 hover:bg-cyan-300/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400"
                     onClick={() =>
                       openViewerFromBase64(image, {
                         provider: imageResult.providerMode,
@@ -1011,49 +1007,23 @@ export function AiImagesHub({
                       })
                     }
                   >
-                    <NextImage
-                      src={`data:${image.mimeType};base64,${image.base64}`}
-                      alt={image.revisedPrompt || imageResult.prompt}
-                      width={512}
-                      height={512}
-                      unoptimized
-                      className="h-56 w-full object-contain transition-transform hover:scale-[1.02]"
-                    />
-                  </button>
-                  <div className="space-y-3 p-3">
-                    <div className="break-all text-xs text-white/55">{image.filename}</div>
-                    <GenerationMetaRow
-                      provider={imageResult.providerMode}
-                      model={imageResult.model}
-                      aspectRatio={imageResult.aspectRatio}
-                      quality={imageResult.quality}
-                      outputFormat={imageResult.outputFormat}
-                    />
-                    <div className="grid grid-cols-2 gap-2">
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
-                        onClick={() => openFile(base64ToFile(image.base64, image.filename, image.mimeType))}
-                      >
-                        <ExternalLink className="mr-2 h-3.5 w-3.5" />
-                        Open
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="ghost"
-                        className="border border-white/10 bg-white/5 text-white hover:bg-white/10"
-                        onClick={() => downloadFile(base64ToFile(image.base64, image.filename, image.mimeType))}
-                      >
-                        <Download className="mr-2 h-3.5 w-3.5" />
-                        Download
-                      </Button>
+                    <div className="overflow-hidden rounded-xl bg-zinc-950">
+                      <NextImage
+                        src={`data:${image.mimeType};base64,${image.base64}`}
+                        alt={image.revisedPrompt || imageResult.prompt}
+                        width={512}
+                        height={512}
+                        unoptimized
+                        className="h-36 w-full object-contain transition-transform group-hover:scale-[1.02]"
+                      />
                     </div>
-                  </div>
-                </div>
-            ))}
+                    <div className="mt-2 truncate px-1 pb-1 text-xs text-white/65">
+                      {image.filename}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
           </CardContent>
         </Card>
       ) : null}
@@ -1066,11 +1036,11 @@ export function AiImagesHub({
               Image History
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-3 p-6">
+          <CardContent className="grid grid-cols-1 gap-4 p-6 lg:grid-cols-2">
             {imageHistory.map((record) => (
-              <div key={record.id} className="rounded-2xl border border-white/8 bg-black/20 p-4">
+              <div key={record.id} className="min-w-0 rounded-2xl border border-white/8 bg-black/20 p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <Check className="h-3.5 w-3.5 text-cyan-400" />
                       <span className="text-sm font-medium text-white">{formatRelativeDate(record.generatedAt)}</span>
@@ -1081,7 +1051,7 @@ export function AiImagesHub({
                         {record.assetIds.length} asset{record.assetIds.length === 1 ? "" : "s"}
                       </Badge>
                     </div>
-                    <div className="mt-3">
+                    <div className="mt-4 space-y-4">
                       <GenerationInfoGrid
                         provider={record.inputSummary.provider}
                         model={record.inputSummary.model}
@@ -1091,66 +1061,40 @@ export function AiImagesHub({
                         quality={record.inputSummary.quality}
                         outputFormat={record.inputSummary.outputFormat}
                         generatedAt={record.generatedAt}
+                        columns="compact"
+                        promptClassName="max-h-40"
                       />
-                    </div>
-                    <div className="mt-3 grid grid-cols-[repeat(auto-fill,minmax(220px,340px))] gap-3">
-                      {record.assetIds.map((assetId) => {
-                        const asset = assetsById.get(assetId);
-                        const imageFile = asset?.fileBlob;
-                        const imageMetadata = {
-                          provider: record.inputSummary.provider,
-                          model: record.inputSummary.model,
-                          prompt: record.inputSummary.promptPreview,
-                          aspectRatio: record.inputSummary.aspectRatio,
-                          size: record.inputSummary.size,
-                          quality: record.inputSummary.quality,
-                          outputFormat: record.inputSummary.outputFormat,
-                          generatedAt: record.generatedAt,
-                        };
-                        return (
-                          <div key={assetId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-2">
-                            <AssetImagePreview
-                              file={imageFile}
-                              alt={asset?.filename ?? "Generated image"}
-                              onOpen={imageFile ? () => openViewerFromFile(imageFile, imageMetadata) : undefined}
-                            />
-                            <div className="mt-2 truncate text-xs text-white/70">{asset?.filename ?? assetId}</div>
-                            <div className="mt-2">
-                              <GenerationMetaRow
-                                provider={record.inputSummary.provider}
-                                model={record.inputSummary.model}
-                                aspectRatio={record.inputSummary.aspectRatio}
-                                quality={record.inputSummary.quality}
-                                outputFormat={record.inputSummary.outputFormat}
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        {record.assetIds.map((assetId) => {
+                          const asset = assetsById.get(assetId);
+                          const imageFile = asset?.fileBlob;
+                          const imageMetadata = {
+                            provider: record.inputSummary.provider,
+                            model: record.inputSummary.model,
+                            prompt: record.inputSummary.promptPreview,
+                            aspectRatio: record.inputSummary.aspectRatio,
+                            size: record.inputSummary.size,
+                            quality: record.inputSummary.quality,
+                            outputFormat: record.inputSummary.outputFormat,
+                            generatedAt: record.generatedAt,
+                          };
+                          return (
+                            <button
+                              key={assetId}
+                              type="button"
+                              disabled={!imageFile}
+                              onClick={() => imageFile && openViewerFromFile(imageFile, imageMetadata)}
+                              className="group min-w-0 rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 text-left transition-colors hover:border-cyan-300/35 hover:bg-cyan-300/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              <AssetImagePreview
+                                file={imageFile}
+                                alt={asset?.filename ?? "Generated image"}
                               />
-                            </div>
-                            <div className="mt-2 grid grid-cols-2 gap-2">
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 border border-white/10 bg-white/5 text-xs text-white hover:bg-white/10"
-                                onClick={() => imageFile && openFile(imageFile)}
-                                disabled={!imageFile}
-                              >
-                                <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
-                                Open
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 border border-white/10 bg-white/5 text-xs text-white hover:bg-white/10"
-                                onClick={() => imageFile && downloadFile(imageFile, asset?.filename)}
-                                disabled={!imageFile}
-                              >
-                                <Download className="mr-1.5 h-3.5 w-3.5" />
-                                Download
-                              </Button>
-                            </div>
-                          </div>
-                        );
-                      })}
+                              <div className="mt-2 truncate px-1 pb-1 text-xs text-white/65">{asset?.filename ?? assetId}</div>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
                   </div>
                   <Button
