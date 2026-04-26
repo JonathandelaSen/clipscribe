@@ -78,6 +78,37 @@ function toProviderErrorMessage(provider: CreatorLLMProvider, status: number, pr
   return providerMessage || `${label} image generation failed (${status}).`;
 }
 
+function readStringField(record: LooseRecord | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function extractProviderErrorDetails(payload: unknown): {
+  providerErrorMessage: string;
+  providerErrorType?: string;
+  providerErrorCode?: string;
+  providerErrorParam?: string;
+} {
+  if (typeof payload === "string") {
+    return { providerErrorMessage: payload.slice(0, 400) };
+  }
+
+  const root = isRecord(payload) ? payload : undefined;
+  const error = isRecord(root?.error) ? root.error : root;
+  const providerErrorMessage =
+    readStringField(error, "message") ??
+    readStringField(error, "error_description") ??
+    readStringField(error, "status") ??
+    (payload == null ? "" : JSON.stringify(payload).slice(0, 400));
+
+  return {
+    providerErrorMessage,
+    providerErrorType: readStringField(error, "type"),
+    providerErrorCode: readStringField(error, "code"),
+    providerErrorParam: readStringField(error, "param"),
+  };
+}
+
 function mimeFromFormat(format: CreatorImageFormat): string {
   if (format === "jpeg") return "image/jpeg";
   if (format === "webp") return "image/webp";
@@ -297,10 +328,15 @@ export async function requestCreatorImageProvider(input: {
   const fetchDurationMs = Math.max(0, Date.now() - startedAt);
 
   if (!response.ok) {
-    const providerMessage = typeof payload === "string" ? payload.slice(0, 400) : JSON.stringify(payload).slice(0, 400);
-    throw new CreatorAIError(toProviderErrorMessage(input.provider, response.status, providerMessage), {
+    const providerDetails = extractProviderErrorDetails(payload);
+    throw new CreatorAIError(toProviderErrorMessage(input.provider, response.status, providerDetails.providerErrorMessage), {
       status: response.status >= 500 ? 502 : response.status,
       code: toProviderErrorCode(input.provider, response.status),
+      details: {
+        provider: input.provider,
+        providerStatus: response.status,
+        ...providerDetails,
+      },
     });
   }
 

@@ -239,6 +239,7 @@ export async function generateCreatorImages(
       throw new CreatorAIError(error.message, {
         status: error.status,
         code: error.code,
+        details: error.details,
         trace: buildImageRunRecord({
           provider,
           operation: "generate_image",

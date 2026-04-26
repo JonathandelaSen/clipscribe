@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
+import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
 import { POST } from "../../../src/app/api/projects/voiceover/generate/route";
 
 const originalFetch = global.fetch;
@@ -13,6 +13,10 @@ const originalElevenLabsVoiceIdAlias = process.env.ELEVEN_LABS_VOICE_ID;
 const originalElevenLabsModel = process.env.ELEVENLABS_MODEL;
 const originalElevenLabsModelAlias = process.env.ELEVEN_LABS_MODEL;
 const originalElevenLabsModelTypo = process.env.EVELEN_LABS_MODEL;
+const originalCreatorGeminiApiKey = process.env.CREATOR_GEMINI_API_KEY;
+const originalGeminiApiKey = process.env.GEMINI_API_KEY;
+const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
+const originalVoiceoverGeminiModel = process.env.VOICEOVER_GEMINI_MODEL;
 
 function readHeaderValue(headers: HeadersInit | undefined, name: string): string {
   if (!headers) return "";
@@ -70,6 +74,26 @@ test.afterEach(() => {
     delete process.env.EVELEN_LABS_MODEL;
   } else {
     process.env.EVELEN_LABS_MODEL = originalElevenLabsModelTypo;
+  }
+  if (originalCreatorGeminiApiKey == null) {
+    delete process.env.CREATOR_GEMINI_API_KEY;
+  } else {
+    process.env.CREATOR_GEMINI_API_KEY = originalCreatorGeminiApiKey;
+  }
+  if (originalGeminiApiKey == null) {
+    delete process.env.GEMINI_API_KEY;
+  } else {
+    process.env.GEMINI_API_KEY = originalGeminiApiKey;
+  }
+  if (originalGoogleApiKey == null) {
+    delete process.env.GOOGLE_API_KEY;
+  } else {
+    process.env.GOOGLE_API_KEY = originalGoogleApiKey;
+  }
+  if (originalVoiceoverGeminiModel == null) {
+    delete process.env.VOICEOVER_GEMINI_MODEL;
+  } else {
+    process.env.VOICEOVER_GEMINI_MODEL = originalVoiceoverGeminiModel;
   }
 });
 
@@ -169,6 +193,131 @@ test("voiceover route lets the request header override ELEVENLABS_API_KEY from e
 
   assert.equal(response.status, 200);
   assert.equal(seenApiKey, "xi-header-key");
+});
+
+test("voiceover route uses the Gemini header key and does not require an ElevenLabs voice ID", async () => {
+  let seenApiKey = "";
+  let capturedBody: unknown = null;
+
+  global.fetch = (async (_input, init) => {
+    seenApiKey = readHeaderValue(init?.headers, "x-goog-api-key");
+    capturedBody = JSON.parse(String(init?.body ?? "{}")) as unknown;
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    data: Buffer.from([1, 0, 2, 0]).toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+        usageMetadata: {
+          promptTokenCount: 4,
+          candidatesTokenCount: 25,
+          totalTokenCount: 29,
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }
+    );
+  }) as typeof fetch;
+
+  const response = await POST(
+    new Request("http://localhost/api/projects/voiceover/generate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [VOICEOVER_GEMINI_API_KEY_HEADER]: "AIza-header-key",
+      },
+      body: JSON.stringify({
+        projectId: "project_1",
+        scriptText: "Hola mundo",
+        provider: "gemini",
+        model: "gemini-3.1-flash-tts-preview",
+        voiceName: "Kore",
+        outputFormat: "wav",
+      }),
+    })
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(seenApiKey, "AIza-header-key");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.provider), "gemini");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice), "Kore");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.promptTokens), "4");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.completionTokens), "25");
+  assert.deepEqual((capturedBody as { generationConfig: unknown }).generationConfig, {
+    responseModalities: ["AUDIO"],
+    speechConfig: {
+      voiceConfig: {
+        prebuiltVoiceConfig: {
+          voiceName: "Kore",
+        },
+      },
+    },
+  });
+});
+
+test("voiceover route falls back to GEMINI_API_KEY from env", async () => {
+  let seenApiKey = "";
+  process.env.GEMINI_API_KEY = "AIza-env-key";
+
+  global.fetch = (async (_input, init) => {
+    seenApiKey = readHeaderValue(init?.headers, "x-goog-api-key");
+    return new Response(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                {
+                  inlineData: {
+                    data: Buffer.from([1, 0]).toString("base64"),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+        },
+      }
+    );
+  }) as typeof fetch;
+
+  const response = await POST(
+    new Request("http://localhost/api/projects/voiceover/generate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        projectId: "project_1",
+        scriptText: "Hola mundo",
+        provider: "gemini",
+        model: "gemini-3.1-flash-tts-preview",
+        voiceName: "Kore",
+        outputFormat: "wav",
+      }),
+    })
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(seenApiKey, "AIza-env-key");
 });
 
 test("voiceover route explains when the saved Voiceover settings key is rejected", async () => {

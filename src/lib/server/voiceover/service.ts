@@ -8,9 +8,11 @@ import type {
 
 import { VoiceoverError } from "./errors";
 import { elevenLabsVoiceoverAdapter } from "./elevenlabs";
+import { geminiVoiceoverAdapter } from "./gemini";
 
 const PROVIDERS: Partial<Record<VoiceoverProviderId, VoiceoverProviderAdapter>> = {
   elevenlabs: elevenLabsVoiceoverAdapter,
+  gemini: geminiVoiceoverAdapter,
 };
 
 export async function generateProjectVoiceover(

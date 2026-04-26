@@ -60,6 +60,7 @@ import type {
   VoiceoverGenerateRequest,
 } from "@/lib/voiceover/types";
 import {
+  DEFAULT_GEMINI_TTS_VOICE,
   areProjectVoiceoverDraftsEqual,
   buildProjectVoiceoverDraftFromRecord,
   buildProjectVoiceoverFilename,
@@ -121,6 +122,29 @@ function formatCredits(
     : `${min}-${max} cr`;
 }
 
+function formatTokenSummary(input?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }) {
+  if (!input) return "n/d";
+  const total = input.totalTokens ?? ((input.promptTokens ?? 0) + (input.completionTokens ?? 0));
+  return total > 0 ? `${formatWholeNumber(total)} tokens` : "n/d";
+}
+
+function getProviderLabel(provider: ProjectVoiceoverDraft["provider"]) {
+  if (provider === "gemini") return "Google Gemini";
+  if (provider === "openai") return "OpenAI";
+  return "ElevenLabs";
+}
+
+function getVoiceoverVoiceLabel(record: ProjectVoiceoverRecord) {
+  if (record.provider === "gemini") {
+    if (record.speakerMode === "multi" && record.speakers?.length) {
+      return record.speakers.map((speaker) => `${speaker.speaker}: ${speaker.voiceName}`).join(" / ");
+    }
+    return record.voiceName || record.voiceId || DEFAULT_GEMINI_TTS_VOICE;
+  }
+
+  return maskVoiceoverSecret(record.voiceId);
+}
+
 function triggerFileDownload(file: File, filename: string) {
   const url = URL.createObjectURL(file);
   const anchor = document.createElement("a");
@@ -160,10 +184,15 @@ export function ProjectVoiceoverWorkspace({
   const lastProjectIdRef = useRef(project.id);
   const {
     elevenLabsApiKey,
+    geminiApiKey,
     hasElevenLabsApiKey,
+    hasGeminiApiKey,
     maskedElevenLabsApiKey,
+    maskedGeminiApiKey,
     saveElevenLabsApiKey,
+    saveGeminiApiKey,
     clearElevenLabsApiKey,
+    clearGeminiApiKey,
   } = useCreatorAiSettings();
   const config = useProjectVoiceoverConfig();
   const { generateVoiceover, isGeneratingVoiceover, voiceoverError } =
@@ -179,6 +208,7 @@ export function ProjectVoiceoverWorkspace({
   const [draft, setDraft] = useState<ProjectVoiceoverDraft>(persistedDraft);
   const [elevenLabsApiKeyDraft, setElevenLabsApiKeyDraft] =
     useState(elevenLabsApiKey);
+  const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState(geminiApiKey);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [selectedVoiceoverId, setSelectedVoiceoverId] = useState<string | null>(
     null,
@@ -189,12 +219,23 @@ export function ProjectVoiceoverWorkspace({
     [assets],
   );
   const draftUsage = useMemo(
-    () =>
-      estimateVoiceoverUsage({
+    () => {
+      if (draft.provider === "gemini") {
+        return {
+          billedCharacters: draft.text.length,
+          source: "estimated" as const,
+          estimatedCostUsd: null,
+          estimatedCostSource: "unavailable" as const,
+          estimatedCreditsMin: 0,
+          estimatedCreditsMax: 0,
+        };
+      }
+      return estimateVoiceoverUsage({
         model: draft.model,
         scriptText: draft.text,
-      }),
-    [draft.model, draft.text],
+      });
+    },
+    [draft.model, draft.provider, draft.text],
   );
   const generatedAudioRecords = useMemo(
     () =>
@@ -218,10 +259,16 @@ export function ProjectVoiceoverWorkspace({
     [draft.text],
   );
   const scriptPreview = useMemo(() => draft.text.trim(), [draft.text]);
-  const currentApiKeySource = resolveCurrentApiKeySource(
-    hasElevenLabsApiKey,
-    config.hasApiKey,
-  );
+  const providerConfig = config.providers[draft.provider] ?? config.providers.elevenlabs;
+  const modelOptions = providerConfig?.models?.length ? providerConfig.models : config.models;
+  const geminiConfig = config.providers.gemini;
+  const elevenLabsConfig = config.providers.elevenlabs;
+  const isGeminiProvider = draft.provider === "gemini";
+  const hasElevenLabsAvailableApiKey = hasElevenLabsApiKey || Boolean(elevenLabsConfig?.hasApiKey ?? config.hasApiKey);
+  const hasGeminiAvailableApiKey = hasGeminiApiKey || Boolean(geminiConfig?.hasApiKey);
+  const hasCurrentProviderLocalApiKey = isGeminiProvider ? hasGeminiApiKey : hasElevenLabsApiKey;
+  const hasCurrentProviderEnvApiKey = isGeminiProvider ? Boolean(geminiConfig?.hasApiKey) : Boolean(elevenLabsConfig?.hasApiKey ?? config.hasApiKey);
+  const currentApiKeySource = resolveCurrentApiKeySource(hasCurrentProviderLocalApiKey, hasCurrentProviderEnvApiKey);
   const apiKeySourceLabel = currentApiKeySource
     ? getProjectVoiceoverApiKeyLabel(currentApiKeySource)
     : "Missing";
@@ -233,10 +280,10 @@ export function ProjectVoiceoverWorkspace({
     () =>
       selectedVoiceover
         ? getProjectVoiceoverReplayStatus(selectedVoiceover, {
-            hasLocalApiKey: hasElevenLabsApiKey,
+            hasLocalApiKey: selectedVoiceover.provider === "gemini" ? hasGeminiApiKey : hasElevenLabsApiKey,
           })
         : null,
-    [hasElevenLabsApiKey, selectedVoiceover],
+    [hasElevenLabsApiKey, hasGeminiApiKey, selectedVoiceover],
   );
 
   useEffect(() => {
@@ -279,6 +326,10 @@ export function ProjectVoiceoverWorkspace({
   }, [elevenLabsApiKey]);
 
   useEffect(() => {
+    setGeminiApiKeyDraft(geminiApiKey);
+  }, [geminiApiKey]);
+
+  useEffect(() => {
     if (areProjectVoiceoverDraftsEqual(draft, persistedDraft)) {
       return;
     }
@@ -301,7 +352,7 @@ export function ProjectVoiceoverWorkspace({
 
   const canGenerate =
     draft.text.trim().length > 0 && draft.model.trim().length > 0;
-  const hasAvailableApiKey = hasElevenLabsApiKey || config.hasApiKey;
+  const hasAvailableApiKey = hasCurrentProviderLocalApiKey || hasCurrentProviderEnvApiKey;
 
   const handleApiKeySave = () => {
     const trimmed = elevenLabsApiKeyDraft.trim();
@@ -311,6 +362,66 @@ export function ProjectVoiceoverWorkspace({
     }
     saveElevenLabsApiKey(trimmed);
     toast.success("ElevenLabs key saved");
+  };
+
+  const handleGeminiApiKeySave = () => {
+    const trimmed = geminiApiKeyDraft.trim();
+    if (!trimmed) {
+      toast.error("Paste a Gemini API key first.");
+      return;
+    }
+    saveGeminiApiKey(trimmed);
+    toast.success("Gemini key saved");
+  };
+
+  const updateGeminiGenerationConfig = (
+    key: keyof NonNullable<ProjectVoiceoverDraft["generationConfig"]>,
+    value: string,
+  ) => {
+    setDraft((current) => {
+      const nextConfig = {
+        ...(current.generationConfig ?? {}),
+      };
+      if (key === "stopSequences") {
+        const stopSequences = value
+          .split("\n")
+          .map((item) => item.trim())
+          .filter(Boolean)
+          .slice(0, 5);
+        if (stopSequences.length) {
+          nextConfig.stopSequences = stopSequences;
+        } else {
+          delete nextConfig.stopSequences;
+        }
+      } else if (value.trim()) {
+        nextConfig[key] = Number(value) as never;
+      } else {
+        delete nextConfig[key];
+      }
+      return {
+        ...current,
+        generationConfig: Object.keys(nextConfig).length ? nextConfig : undefined,
+      };
+    });
+  };
+
+  const updateGeminiSpeaker = (
+    index: number,
+    patch: Partial<NonNullable<ProjectVoiceoverDraft["speakers"]>[number]>,
+  ) => {
+    setDraft((current) => {
+      const speakers = [...(current.speakers ?? [])];
+      const fallback = index === 0 ? { speaker: "Speaker1", voiceName: current.voiceName || DEFAULT_GEMINI_TTS_VOICE } : { speaker: "Speaker2", voiceName: "Puck" };
+      speakers[index] = {
+        ...fallback,
+        ...speakers[index],
+        ...patch,
+      };
+      return {
+        ...current,
+        speakers,
+      };
+    });
   };
 
   const handleImportScript = async (file: File | null | undefined) => {
@@ -346,13 +457,20 @@ export function ProjectVoiceoverWorkspace({
       toast.error("Add script text and model before generating.");
       return null;
     }
-    if (!draft.voiceId.trim()) {
+    if (draft.provider === "elevenlabs" && !draft.voiceId.trim()) {
       toast.error("Paste an ElevenLabs voice ID before generating.");
       return null;
     }
     if (!hasAvailableApiKey) {
-      toast.error("Add your ElevenLabs API key or set it in .env first.");
+      toast.error(`Add your ${getProviderLabel(draft.provider)} API key or set it in .env first.`);
       return null;
+    }
+    if (draft.provider === "gemini" && draft.speakerMode === "multi") {
+      const speakers = draft.speakers ?? [];
+      if (speakers.length !== 2 || speakers.some((speaker) => !speaker.speaker.trim() || !speaker.voiceName.trim())) {
+        toast.error("Gemini multi-speaker mode needs two speaker names and voices.");
+        return null;
+      }
     }
 
     return {
@@ -360,7 +478,13 @@ export function ProjectVoiceoverWorkspace({
       scriptText: draft.text,
       provider: draft.provider,
       model: draft.model,
-      voiceId: draft.voiceId,
+      voiceId: draft.provider === "gemini" ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : draft.voiceId,
+      voiceName: draft.provider === "gemini" ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : undefined,
+      languageCode: draft.provider === "gemini" ? draft.languageCode : undefined,
+      speakerMode: draft.provider === "gemini" ? draft.speakerMode ?? "single" : undefined,
+      speakers: draft.provider === "gemini" && draft.speakerMode === "multi" ? draft.speakers : undefined,
+      stylePrompt: draft.provider === "gemini" ? draft.stylePrompt : undefined,
+      generationConfig: draft.provider === "gemini" ? draft.generationConfig : undefined,
       outputFormat: draft.outputFormat,
     };
   };
@@ -370,6 +494,7 @@ export function ProjectVoiceoverWorkspace({
       await saveVoiceoverDraft(draft);
       const result = await generateVoiceover(request, {
         elevenLabsApiKey: hasElevenLabsApiKey ? elevenLabsApiKey : undefined,
+        geminiApiKey: hasGeminiApiKey ? geminiApiKey : undefined,
       });
       const metadata = await readMediaMetadata(result.file);
       const now = Date.now();
@@ -402,6 +527,12 @@ export function ProjectVoiceoverWorkspace({
           ...request,
           model: result.meta.model,
           voiceId: result.meta.voiceId,
+          voiceName: result.meta.voiceName,
+          languageCode: result.meta.languageCode,
+          speakerMode: result.meta.speakerMode,
+          speakers: result.meta.speakers ?? request.speakers,
+          stylePrompt: request.stylePrompt,
+          generationConfig: request.generationConfig,
           outputFormat: result.meta.outputFormat,
         },
         scriptText: draft.text,
@@ -474,7 +605,7 @@ export function ProjectVoiceoverWorkspace({
                 </div>
                 <div className="flex items-center gap-2">
                   <Badge className="border-cyan-300/20 bg-cyan-400/10 text-cyan-50">
-                    {draft.provider}
+                    {getProviderLabel(draft.provider)}
                   </Badge>
                   <Badge
                     variant="outline"
@@ -494,10 +625,25 @@ export function ProjectVoiceoverWorkspace({
                   <Select
                     value={draft.provider}
                     onValueChange={(value) =>
-                      setDraft((current) => ({
-                        ...current,
-                        provider: value as ProjectVoiceoverDraft["provider"],
-                      }))
+                      setDraft((current) => {
+                        const provider = value as ProjectVoiceoverDraft["provider"];
+                        const nextConfig = config.providers[provider];
+                        const nextModel = nextConfig?.defaultModel || current.model;
+                        return {
+                          ...current,
+                          provider,
+                          model: nextModel,
+                          voiceName: provider === "gemini" ? current.voiceName || nextConfig?.defaultVoiceName || DEFAULT_GEMINI_TTS_VOICE : current.voiceName,
+                          speakerMode: provider === "gemini" ? current.speakerMode ?? "single" : current.speakerMode,
+                          speakers:
+                            provider === "gemini"
+                              ? current.speakers ?? [
+                                  { speaker: "Speaker1", voiceName: current.voiceName || DEFAULT_GEMINI_TTS_VOICE },
+                                  { speaker: "Speaker2", voiceName: "Puck" },
+                                ]
+                              : current.speakers,
+                        };
+                      })
                     }
                   >
                     <SelectTrigger id="voiceover-provider">
@@ -505,6 +651,7 @@ export function ProjectVoiceoverWorkspace({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                      <SelectItem value="gemini">Google Gemini</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -526,7 +673,7 @@ export function ProjectVoiceoverWorkspace({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {config.models.map((model) => (
+                      {modelOptions.map((model) => (
                         <SelectItem key={model.value} value={model.value}>
                           {model.label}
                         </SelectItem>
@@ -561,22 +708,103 @@ export function ProjectVoiceoverWorkspace({
               </div>
 
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
-                <div className="space-y-2">
-                  <Label htmlFor="voiceover-voice-id" className="text-white/80">
-                    Voice ID
-                  </Label>
-                  <Input
-                    id="voiceover-voice-id"
-                    value={draft.voiceId}
-                    onChange={(event) =>
-                      setDraft((current) => ({
-                        ...current,
-                        voiceId: event.target.value,
-                      }))
-                    }
-                    placeholder="Paste the ElevenLabs voice ID"
-                  />
-                </div>
+                {isGeminiProvider ? (
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-gemini-voice" className="text-white/80">
+                        Voice
+                      </Label>
+                      <Select
+                        value={draft.voiceName || DEFAULT_GEMINI_TTS_VOICE}
+                        onValueChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            voiceName: value,
+                          }))
+                        }
+                        disabled={draft.speakerMode === "multi"}
+                      >
+                        <SelectTrigger id="voiceover-gemini-voice">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(geminiConfig?.voices ?? []).map((voice) => (
+                            <SelectItem key={voice.value} value={voice.value}>
+                              {voice.label}{voice.tone ? ` - ${voice.tone}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-gemini-language" className="text-white/80">
+                        Language
+                      </Label>
+                      <Select
+                        value={draft.languageCode || "auto"}
+                        onValueChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            languageCode: value === "auto" ? undefined : value,
+                          }))
+                        }
+                      >
+                        <SelectTrigger id="voiceover-gemini-language">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="auto">Auto</SelectItem>
+                          {(geminiConfig?.languages ?? []).map((language) => (
+                            <SelectItem key={language.value} value={language.value}>
+                              {language.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-gemini-speaker-mode" className="text-white/80">
+                        Speakers
+                      </Label>
+                      <Select
+                        value={draft.speakerMode ?? "single"}
+                        onValueChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            speakerMode: value === "multi" ? "multi" : "single",
+                          }))
+                        }
+                      >
+                        <SelectTrigger id="voiceover-gemini-speaker-mode">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="single">Single</SelectItem>
+                          <SelectItem value="multi">Two speakers</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <Label htmlFor="voiceover-voice-id" className="text-white/80">
+                      Voice ID
+                    </Label>
+                    <Input
+                      id="voiceover-voice-id"
+                      value={draft.voiceId}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          voiceId: event.target.value,
+                        }))
+                      }
+                      placeholder="Paste the ElevenLabs voice ID"
+                    />
+                  </div>
+                )}
                 <div className="flex items-end gap-2">
                   <input
                     ref={scriptInputRef}
@@ -598,6 +826,110 @@ export function ProjectVoiceoverWorkspace({
                   </Button>
                 </div>
               </div>
+
+              {isGeminiProvider && draft.speakerMode === "multi" ? (
+                <div className="grid gap-3 rounded-[1.4rem] border border-white/10 bg-black/20 p-4 lg:grid-cols-2">
+                  {[0, 1].map((index) => {
+                    const speaker = draft.speakers?.[index] ?? {
+                      speaker: index === 0 ? "Speaker1" : "Speaker2",
+                      voiceName: index === 0 ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : "Puck",
+                    };
+                    return (
+                      <div key={index} className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_180px]">
+                        <Input
+                          value={speaker.speaker}
+                          onChange={(event) => updateGeminiSpeaker(index, { speaker: event.target.value })}
+                          placeholder={`Speaker ${index + 1}`}
+                        />
+                        <Select
+                          value={speaker.voiceName}
+                          onValueChange={(value) => updateGeminiSpeaker(index, { voiceName: value })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(geminiConfig?.voices ?? []).map((voice) => (
+                              <SelectItem key={voice.value} value={voice.value}>
+                                {voice.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+
+              {isGeminiProvider ? (
+                <div className="space-y-2">
+                  <Label htmlFor="voiceover-gemini-style" className="text-white/80">
+                    Director notes
+                  </Label>
+                  <Textarea
+                    id="voiceover-gemini-style"
+                    value={draft.stylePrompt ?? ""}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        stylePrompt: event.target.value,
+                      }))
+                    }
+                    className="min-h-[96px] rounded-[1.2rem] border-white/10 bg-black/25 px-4 py-3 text-sm leading-6"
+                    placeholder="Style, accent, pacing, mood, scene context"
+                  />
+                </div>
+              ) : null}
+
+              {isGeminiProvider ? (
+                <details className="rounded-[1.4rem] border border-white/10 bg-black/20 p-4">
+                  <summary className="cursor-pointer text-sm font-medium text-white/78">Advanced Gemini controls</summary>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                    {[
+                      ["temperature", "Temperature", "0-2", "0", "2", "0.1"],
+                      ["topP", "Top P", "0-1", "0", "1", "0.05"],
+                      ["topK", "Top K", "1-100", "1", "100", "1"],
+                      ["seed", "Seed", "Optional", undefined, undefined, "1"],
+                      ["candidateCount", "Candidates", "1-4", "1", "4", "1"],
+                      ["maxOutputTokens", "Max output tokens", "Optional", "1", "32768", "1"],
+                    ].map(([key, label, placeholder, min, max, step]) => (
+                      <div key={key} className="space-y-2">
+                        <Label htmlFor={`voiceover-gemini-${key}`} className="text-white/70">
+                          {label}
+                        </Label>
+                        <Input
+                          id={`voiceover-gemini-${key}`}
+                          type="number"
+                          min={min}
+                          max={max}
+                          step={step}
+                          value={String(draft.generationConfig?.[key as keyof NonNullable<ProjectVoiceoverDraft["generationConfig"]>] ?? "")}
+                          onChange={(event) =>
+                            updateGeminiGenerationConfig(
+                              key as keyof NonNullable<ProjectVoiceoverDraft["generationConfig"]>,
+                              event.target.value,
+                            )
+                          }
+                          placeholder={placeholder}
+                        />
+                      </div>
+                    ))}
+                    <div className="space-y-2 sm:col-span-2 lg:col-span-3">
+                      <Label htmlFor="voiceover-gemini-stop-sequences" className="text-white/70">
+                        Stop sequences
+                      </Label>
+                      <Textarea
+                        id="voiceover-gemini-stop-sequences"
+                        value={draft.generationConfig?.stopSequences?.join("\n") ?? ""}
+                        onChange={(event) => updateGeminiGenerationConfig("stopSequences", event.target.value)}
+                        className="min-h-[88px] rounded-[1.2rem] border-white/10 bg-black/25 px-4 py-3 text-sm"
+                        placeholder="One per line, max 5"
+                      />
+                    </div>
+                  </div>
+                </details>
+              ) : null}
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between gap-3">
@@ -643,18 +975,20 @@ export function ProjectVoiceoverWorkspace({
                       true,
                     )}
                   </Badge>
-                  <Badge
-                    variant="outline"
-                    className="border-white/15 bg-white/5 text-white/70"
-                  >
-                    {formatUsageMetric(
-                      formatCredits(
-                        draftUsage.estimatedCreditsMin,
-                        draftUsage.estimatedCreditsMax,
-                      ),
-                      true,
-                    )}
-                  </Badge>
+                  {!isGeminiProvider ? (
+                    <Badge
+                      variant="outline"
+                      className="border-white/15 bg-white/5 text-white/70"
+                    >
+                      {formatUsageMetric(
+                        formatCredits(
+                          draftUsage.estimatedCreditsMin,
+                          draftUsage.estimatedCreditsMax,
+                        ),
+                        true,
+                      )}
+                    </Badge>
+                  ) : null}
                   <Badge
                     variant="outline"
                     className="border-white/15 bg-white/5 text-white/70"
@@ -769,7 +1103,7 @@ export function ProjectVoiceoverWorkspace({
                             </Badge>
                           ) : null}
                           <Badge className="border-cyan-300/20 bg-cyan-400/10 text-cyan-50">
-                            {record.provider}
+                            {getProviderLabel(record.provider)}
                           </Badge>
                           <Badge
                             variant="outline"
@@ -782,7 +1116,7 @@ export function ProjectVoiceoverWorkspace({
                           <span>{formatDateTime(record.createdAt)}</span>
                           <span>{formatDuration(asset.durationSeconds)}</span>
                           <span>{record.model}</span>
-                          <span>{maskVoiceoverSecret(record.voiceId)}</span>
+                          <span>{getVoiceoverVoiceLabel(record)}</span>
                         </div>
                       </div>
                       {record.usage ? (
@@ -800,13 +1134,15 @@ export function ProjectVoiceoverWorkspace({
                             variant="outline"
                             className="border-white/15 bg-white/5 text-white/70"
                           >
-                            {formatUsageMetric(
-                              formatCredits(
-                                record.usage.estimatedCreditsMin,
-                                record.usage.estimatedCreditsMax,
-                              ),
-                              true,
-                            )}
+                            {record.provider === "gemini"
+                              ? formatTokenSummary(record.usage)
+                              : formatUsageMetric(
+                                  formatCredits(
+                                    record.usage.estimatedCreditsMin,
+                                    record.usage.estimatedCreditsMax,
+                                  ),
+                                  true,
+                                )}
                           </Badge>
                           <Badge
                             variant="outline"
@@ -899,19 +1235,19 @@ export function ProjectVoiceoverWorkspace({
               <div
                 className={cn(
                   "rounded-[1.4rem] border px-4 py-3 text-sm",
-                  hasAvailableApiKey
+                  hasElevenLabsAvailableApiKey
                     ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-50"
                     : "border-white/10 bg-black/20 text-white/50",
                 )}
               >
                 {hasElevenLabsApiKey
                   ? maskedElevenLabsApiKey
-                  : config.hasApiKey
-                    ? config.maskedApiKey
+                  : (elevenLabsConfig?.hasApiKey ?? config.hasApiKey)
+                    ? elevenLabsConfig?.maskedApiKey || config.maskedApiKey
                     : "No key detected"}
               </div>
 
-              {hasElevenLabsApiKey && config.hasApiKey ? (
+              {hasElevenLabsApiKey && (elevenLabsConfig?.hasApiKey ?? config.hasApiKey) ? (
                 <div className="text-xs text-white/45">
                   Local key overrides `.env`
                 </div>
@@ -946,6 +1282,70 @@ export function ProjectVoiceoverWorkspace({
               {config.hasDefaultVoiceId ? (
                 <div className="rounded-[1.4rem] border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
                   Voice ID in `.env`: {config.maskedDefaultVoiceId}
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-[linear-gradient(180deg,rgba(7,13,23,0.92),rgba(7,13,23,0.74))] text-white">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4 text-cyan-300" />
+                Google Gemini
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="gemini-api-key" className="text-white/80">
+                  API Key
+                </Label>
+                <Input
+                  id="gemini-api-key"
+                  value={geminiApiKeyDraft}
+                  onChange={(event) => setGeminiApiKeyDraft(event.target.value)}
+                  placeholder="Paste your Gemini API key"
+                  type="password"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  className="rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+                  onClick={handleGeminiApiKeySave}
+                >
+                  Save Key
+                </Button>
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => {
+                    clearGeminiApiKey();
+                    toast.success("Gemini key cleared");
+                  }}
+                  disabled={!hasGeminiApiKey}
+                >
+                  Clear
+                </Button>
+              </div>
+
+              <div
+                className={cn(
+                  "rounded-[1.4rem] border px-4 py-3 text-sm",
+                  hasGeminiAvailableApiKey
+                    ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-50"
+                    : "border-white/10 bg-black/20 text-white/50",
+                )}
+              >
+                {hasGeminiApiKey
+                  ? maskedGeminiApiKey
+                  : geminiConfig?.hasApiKey
+                    ? geminiConfig.maskedApiKey
+                    : "No key detected"}
+              </div>
+
+              {hasGeminiApiKey && geminiConfig?.hasApiKey ? (
+                <div className="text-xs text-white/45">
+                  Local key overrides `.env`
                 </div>
               ) : null}
             </CardContent>
@@ -1002,12 +1402,26 @@ export function ProjectVoiceoverWorkspace({
           <div className="grid gap-6 px-6 py-6 lg:grid-cols-[0.95fr_1.05fr]">
             <section className="space-y-3 rounded-[1.6rem] border border-white/8 bg-black/20 p-4">
               {[
-                { label: "Provider", value: draft.provider },
+                { label: "Provider", value: getProviderLabel(draft.provider) },
                 { label: "Model", value: draft.model },
                 {
-                  label: "Voice ID",
-                  value: maskVoiceoverSecret(draft.voiceId) || "Missing",
+                  label: isGeminiProvider ? "Voice" : "Voice ID",
+                  value: isGeminiProvider
+                    ? draft.speakerMode === "multi"
+                      ? (draft.speakers ?? [])
+                          .map((speaker) => `${speaker.speaker}: ${speaker.voiceName}`)
+                          .join(" / ") || "Missing"
+                      : draft.voiceName || DEFAULT_GEMINI_TTS_VOICE
+                    : maskVoiceoverSecret(draft.voiceId) || "Missing",
                 },
+                ...(isGeminiProvider
+                  ? [
+                      {
+                        label: "Language",
+                        value: draft.languageCode || "Auto",
+                      },
+                    ]
+                  : []),
                 { label: "Format", value: draft.outputFormat.toUpperCase() },
                 { label: "API key", value: apiKeySourceLabel },
                 {
@@ -1047,13 +1461,15 @@ export function ProjectVoiceoverWorkspace({
                 </div>
                 <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
                   <div className="text-[11px] uppercase tracking-[0.22em] text-white/38">
-                    Estimate
+                    {isGeminiProvider ? "Tokens" : "Estimate"}
                   </div>
                   <div className="mt-2 text-lg font-semibold text-white">
-                    {formatCredits(
-                      draftUsage.estimatedCreditsMin,
-                      draftUsage.estimatedCreditsMax,
-                    )}
+                    {isGeminiProvider
+                      ? "n/d"
+                      : formatCredits(
+                          draftUsage.estimatedCreditsMin,
+                          draftUsage.estimatedCreditsMax,
+                        )}
                   </div>
                 </div>
               </div>

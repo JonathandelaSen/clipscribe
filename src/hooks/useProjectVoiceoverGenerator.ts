@@ -9,7 +9,7 @@ export function useProjectVoiceoverGenerator() {
 
   const generateVoiceover = async (
     payload: VoiceoverGenerateRequest,
-    options: { elevenLabsApiKey?: string }
+    options: { elevenLabsApiKey?: string; geminiApiKey?: string }
   ): Promise<VoiceoverClientResult> => {
     setIsGeneratingVoiceover(true);
     setVoiceoverError(null);

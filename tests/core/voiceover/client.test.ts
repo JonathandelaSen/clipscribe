@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { requestProjectVoiceoverAudio } from "../../../src/lib/voiceover/client";
-import { VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
+import { VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
 
 const originalFetch = global.fetch;
 
@@ -87,4 +87,65 @@ test("requestProjectVoiceoverAudio surfaces JSON error bodies", async () => {
     ),
     /provider down/
   );
+});
+
+test("requestProjectVoiceoverAudio sends Gemini keys and parses token metadata", async () => {
+  let capturedHeaders: HeadersInit | undefined;
+
+  global.fetch = (async (_input, init) => {
+    capturedHeaders = init?.headers;
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: {
+        "content-type": "audio/wav",
+        [VOICEOVER_RESPONSE_HEADERS.provider]: "gemini",
+        [VOICEOVER_RESPONSE_HEADERS.model]: "gemini-3.1-flash-tts-preview",
+        [VOICEOVER_RESPONSE_HEADERS.voice]: "Kore",
+        [VOICEOVER_RESPONSE_HEADERS.language]: "es-ES",
+        [VOICEOVER_RESPONSE_HEADERS.speakerMode]: "single",
+        [VOICEOVER_RESPONSE_HEADERS.format]: "wav",
+        [VOICEOVER_RESPONSE_HEADERS.apiKeySource]: "voiceover_settings",
+        [VOICEOVER_RESPONSE_HEADERS.usageSource]: "provider",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCostSource]: "estimated",
+        [VOICEOVER_RESPONSE_HEADERS.billedCharacters]: "10",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin]: "0",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax]: "0",
+        [VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd]: "0.00101",
+        [VOICEOVER_RESPONSE_HEADERS.promptTokens]: "10",
+        [VOICEOVER_RESPONSE_HEADERS.completionTokens]: "50",
+        [VOICEOVER_RESPONSE_HEADERS.totalTokens]: "60",
+      },
+    });
+  }) as typeof fetch;
+
+  const result = await requestProjectVoiceoverAudio(
+    {
+      projectId: "project_1",
+      scriptText: "Hola mundo",
+      provider: "gemini",
+      model: "gemini-3.1-flash-tts-preview",
+      voiceId: "Kore",
+      voiceName: "Kore",
+      languageCode: "es-ES",
+      speakerMode: "single",
+      outputFormat: "wav",
+    },
+    { geminiApiKey: "AIza-test" }
+  );
+
+  assert.equal((capturedHeaders as Record<string, string>)[VOICEOVER_GEMINI_API_KEY_HEADER], "AIza-test");
+  assert.equal(result.meta.provider, "gemini");
+  assert.equal(result.meta.voiceName, "Kore");
+  assert.equal(result.meta.languageCode, "es-ES");
+  assert.deepEqual(result.meta.usage, {
+    source: "provider",
+    billedCharacters: 10,
+    estimatedCreditsMin: 0,
+    estimatedCreditsMax: 0,
+    estimatedCostUsd: 0.00101,
+    estimatedCostSource: "estimated",
+    promptTokens: 10,
+    completionTokens: 50,
+    totalTokens: 60,
+  });
 });

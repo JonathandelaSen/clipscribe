@@ -21,15 +21,20 @@ export function useProjectVoiceoverConfig() {
         }
         const payload = (await response.json()) as ProjectVoiceoverConfigResponse;
         if (!active) return;
+        const defaults = buildDefaultProjectVoiceoverConfig();
         setConfig({
-          provider: "elevenlabs",
-          models: Array.isArray(payload.models) && payload.models.length > 0 ? payload.models : buildDefaultProjectVoiceoverConfig().models,
+          provider: payload.provider === "gemini" || payload.provider === "openai" ? payload.provider : "elevenlabs",
+          models: Array.isArray(payload.models) && payload.models.length > 0 ? payload.models : defaults.models,
           defaultModel: payload.defaultModel,
           defaultVoiceId: payload.defaultVoiceId ?? "",
           hasApiKey: Boolean(payload.hasApiKey),
           maskedApiKey: payload.maskedApiKey ?? "",
           hasDefaultVoiceId: Boolean(payload.hasDefaultVoiceId),
           maskedDefaultVoiceId: payload.maskedDefaultVoiceId ?? "",
+          providers: {
+            ...defaults.providers,
+            ...(payload.providers ?? {}),
+          },
         });
       } catch {
         // Keep local defaults when config lookup fails.

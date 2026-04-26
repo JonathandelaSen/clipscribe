@@ -1,19 +1,26 @@
 import type { VoiceoverGenerateResponseMeta } from "./types";
 
 export const VOICEOVER_ELEVENLABS_API_KEY_HEADER = "x-voiceover-elevenlabs-api-key";
+export const VOICEOVER_GEMINI_API_KEY_HEADER = "x-creator-gemini-api-key";
 
 export const VOICEOVER_RESPONSE_HEADERS = {
   provider: "x-clipscribe-provider",
   model: "x-clipscribe-model",
   voice: "x-clipscribe-voice",
+  language: "x-clipscribe-language",
+  speakerMode: "x-clipscribe-speaker-mode",
   format: "x-clipscribe-format",
   apiKeySource: "x-clipscribe-api-key-source",
   maskedApiKey: "x-clipscribe-masked-api-key",
   usageSource: "x-clipscribe-usage-source",
+  estimatedCostSource: "x-clipscribe-estimated-cost-source",
   billedCharacters: "x-clipscribe-billed-characters",
   estimatedCreditsMin: "x-clipscribe-estimated-credits-min",
   estimatedCreditsMax: "x-clipscribe-estimated-credits-max",
   estimatedCostUsd: "x-clipscribe-estimated-cost-usd",
+  promptTokens: "x-clipscribe-prompt-tokens",
+  completionTokens: "x-clipscribe-completion-tokens",
+  totalTokens: "x-clipscribe-total-tokens",
 } as const;
 
 function sanitizeHeaderValue(value: string): string {
@@ -25,7 +32,17 @@ export function buildVoiceoverResponseHeaders(meta: VoiceoverGenerateResponseMet
     "content-disposition": `attachment; filename="${sanitizeHeaderValue(meta.filename)}"`,
     [VOICEOVER_RESPONSE_HEADERS.provider]: meta.provider,
     [VOICEOVER_RESPONSE_HEADERS.model]: sanitizeHeaderValue(meta.model),
-    [VOICEOVER_RESPONSE_HEADERS.voice]: sanitizeHeaderValue(meta.voiceId),
+    [VOICEOVER_RESPONSE_HEADERS.voice]: sanitizeHeaderValue(meta.voiceName || meta.voiceId),
+    ...(meta.languageCode
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.language]: sanitizeHeaderValue(meta.languageCode),
+        }
+      : undefined),
+    ...(meta.speakerMode
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.speakerMode]: sanitizeHeaderValue(meta.speakerMode),
+        }
+      : undefined),
     [VOICEOVER_RESPONSE_HEADERS.format]: meta.outputFormat,
     ...(meta.apiKeySource
       ? {
@@ -38,14 +55,34 @@ export function buildVoiceoverResponseHeaders(meta: VoiceoverGenerateResponseMet
         }
       : undefined),
     ...(meta.usage
-      ? {
+        ? {
           [VOICEOVER_RESPONSE_HEADERS.usageSource]: meta.usage.source,
+          ...(meta.usage.estimatedCostSource
+            ? {
+                [VOICEOVER_RESPONSE_HEADERS.estimatedCostSource]: meta.usage.estimatedCostSource,
+              }
+            : undefined),
           [VOICEOVER_RESPONSE_HEADERS.billedCharacters]: String(meta.usage.billedCharacters),
           [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin]: String(meta.usage.estimatedCreditsMin),
           [VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax]: String(meta.usage.estimatedCreditsMax),
           ...(meta.usage.estimatedCostUsd != null
             ? {
                 [VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd]: String(meta.usage.estimatedCostUsd),
+              }
+            : undefined),
+          ...(meta.usage.promptTokens != null
+            ? {
+                [VOICEOVER_RESPONSE_HEADERS.promptTokens]: String(meta.usage.promptTokens),
+              }
+            : undefined),
+          ...(meta.usage.completionTokens != null
+            ? {
+                [VOICEOVER_RESPONSE_HEADERS.completionTokens]: String(meta.usage.completionTokens),
+              }
+            : undefined),
+          ...(meta.usage.totalTokens != null
+            ? {
+                [VOICEOVER_RESPONSE_HEADERS.totalTokens]: String(meta.usage.totalTokens),
               }
             : undefined),
         }

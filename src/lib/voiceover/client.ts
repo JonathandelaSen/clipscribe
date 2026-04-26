@@ -1,6 +1,7 @@
 import {
   parseAttachmentFilename,
   VOICEOVER_ELEVENLABS_API_KEY_HEADER,
+  VOICEOVER_GEMINI_API_KEY_HEADER,
   VOICEOVER_RESPONSE_HEADERS,
 } from "@/lib/voiceover/contracts";
 import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverUsageSummary } from "@/lib/voiceover/types";
@@ -37,7 +38,7 @@ async function readVoiceoverError(response: Response): Promise<string> {
 
 export async function requestProjectVoiceoverAudio(
   payload: VoiceoverGenerateRequest,
-  options: { elevenLabsApiKey?: string }
+  options: { elevenLabsApiKey?: string; geminiApiKey?: string }
 ): Promise<VoiceoverClientResult> {
   const response = await fetch("/api/projects/voiceover/generate", {
     method: "POST",
@@ -46,6 +47,11 @@ export async function requestProjectVoiceoverAudio(
       ...(options.elevenLabsApiKey
         ? {
             [VOICEOVER_ELEVENLABS_API_KEY_HEADER]: options.elevenLabsApiKey,
+          }
+        : undefined),
+      ...(options.geminiApiKey
+        ? {
+            [VOICEOVER_GEMINI_API_KEY_HEADER]: options.geminiApiKey,
           }
         : undefined),
     },
@@ -60,14 +66,20 @@ export async function requestProjectVoiceoverAudio(
   const providerHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.provider);
   const modelHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.model);
   const voiceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice);
+  const languageHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.language);
+  const speakerModeHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.speakerMode);
   const formatHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.format);
   const apiKeySourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.apiKeySource);
   const maskedApiKeyHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.maskedApiKey);
   const usageSourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.usageSource);
+  const estimatedCostSourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCostSource);
   const billedCharactersHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.billedCharacters));
   const estimatedCreditsMinHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMin));
   const estimatedCreditsMaxHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCreditsMax));
   const estimatedCostUsdHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.estimatedCostUsd));
+  const promptTokensHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.promptTokens));
+  const completionTokensHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.completionTokens));
+  const totalTokensHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.totalTokens));
   const usage: VoiceoverUsageSummary | undefined =
     usageSourceHeader &&
     billedCharactersHeader != null &&
@@ -79,6 +91,26 @@ export async function requestProjectVoiceoverAudio(
           estimatedCreditsMin: Math.max(0, Math.round(estimatedCreditsMinHeader)),
           estimatedCreditsMax: Math.max(0, Math.round(estimatedCreditsMaxHeader)),
           estimatedCostUsd: estimatedCostUsdHeader,
+          ...(estimatedCostSourceHeader === "provider" || estimatedCostSourceHeader === "estimated" || estimatedCostSourceHeader === "unavailable"
+            ? {
+                estimatedCostSource: estimatedCostSourceHeader,
+              }
+            : undefined),
+          ...(promptTokensHeader == null
+            ? undefined
+            : {
+                promptTokens: Math.max(0, Math.round(promptTokensHeader)),
+              }),
+          ...(completionTokensHeader == null
+            ? undefined
+            : {
+                completionTokens: Math.max(0, Math.round(completionTokensHeader)),
+              }),
+          ...(totalTokensHeader == null
+            ? undefined
+            : {
+                totalTokens: Math.max(0, Math.round(totalTokensHeader)),
+              }),
         }
       : undefined;
 
@@ -86,6 +118,10 @@ export async function requestProjectVoiceoverAudio(
     provider: providerHeader === "openai" || providerHeader === "gemini" ? providerHeader : "elevenlabs",
     model: modelHeader?.trim() || payload.model,
     voiceId: voiceHeader?.trim() || payload.voiceId,
+    voiceName: providerHeader === "gemini" ? voiceHeader?.trim() || payload.voiceName : payload.voiceName,
+    languageCode: languageHeader?.trim() || payload.languageCode,
+    speakerMode: speakerModeHeader === "multi" ? "multi" : speakerModeHeader === "single" ? "single" : payload.speakerMode,
+    speakers: payload.speakers,
     outputFormat: formatHeader === "wav" ? "wav" : payload.outputFormat,
     apiKeySource: apiKeySourceHeader === "voiceover_settings" || apiKeySourceHeader === "env" ? apiKeySourceHeader : undefined,
     maskedApiKey: maskedApiKeyHeader?.trim() || undefined,

@@ -2,10 +2,38 @@ export type VoiceoverProviderId = "elevenlabs" | "openai" | "gemini";
 export type VoiceoverOutputFormat = "mp3" | "wav";
 export type VoiceoverApiKeySource = "voiceover_settings" | "env";
 export type VoiceoverUsageSource = "provider" | "estimated";
+export type VoiceoverEstimatedCostSource = "estimated" | "provider" | "unavailable";
+export type VoiceoverSpeakerMode = "single" | "multi";
 
 export interface VoiceoverModelOption {
   value: string;
   label: string;
+}
+
+export interface VoiceoverVoiceOption {
+  value: string;
+  label: string;
+  tone?: string;
+}
+
+export interface VoiceoverLanguageOption {
+  value: string;
+  label: string;
+}
+
+export interface VoiceoverSpeakerConfig {
+  speaker: string;
+  voiceName: string;
+}
+
+export interface VoiceoverGeminiGenerationConfig {
+  temperature?: number;
+  topP?: number;
+  topK?: number;
+  seed?: number;
+  candidateCount?: number;
+  maxOutputTokens?: number;
+  stopSequences?: string[];
 }
 
 export interface ProjectVoiceoverDraft {
@@ -15,6 +43,12 @@ export interface ProjectVoiceoverDraft {
   provider: VoiceoverProviderId;
   model: string;
   voiceId: string;
+  voiceName?: string;
+  languageCode?: string;
+  speakerMode?: VoiceoverSpeakerMode;
+  speakers?: VoiceoverSpeakerConfig[];
+  stylePrompt?: string;
+  generationConfig?: VoiceoverGeminiGenerationConfig;
   useDefaultVoiceId: boolean;
   outputFormat: VoiceoverOutputFormat;
 }
@@ -28,6 +62,12 @@ export interface ProjectVoiceoverRecord {
   provider: VoiceoverProviderId;
   model: string;
   voiceId: string;
+  voiceName?: string;
+  languageCode?: string;
+  speakerMode?: VoiceoverSpeakerMode;
+  speakers?: VoiceoverSpeakerConfig[];
+  stylePrompt?: string;
+  generationConfig?: VoiceoverGeminiGenerationConfig;
   outputFormat: VoiceoverOutputFormat;
   sourceFilename?: string;
   apiKeySource?: VoiceoverApiKeySource;
@@ -41,6 +81,12 @@ export interface VoiceoverGenerateRequest {
   provider: VoiceoverProviderId;
   model: string;
   voiceId: string;
+  voiceName?: string;
+  languageCode?: string;
+  speakerMode?: VoiceoverSpeakerMode;
+  speakers?: VoiceoverSpeakerConfig[];
+  stylePrompt?: string;
+  generationConfig?: VoiceoverGeminiGenerationConfig;
   useDefaultVoiceId?: boolean;
   outputFormat: VoiceoverOutputFormat;
 }
@@ -49,6 +95,10 @@ export interface VoiceoverGenerateResponseMeta {
   provider: VoiceoverProviderId;
   model: string;
   voiceId: string;
+  voiceName?: string;
+  languageCode?: string;
+  speakerMode?: VoiceoverSpeakerMode;
+  speakers?: VoiceoverSpeakerConfig[];
   outputFormat: VoiceoverOutputFormat;
   apiKeySource?: VoiceoverApiKeySource;
   maskedApiKey?: string;
@@ -66,8 +116,12 @@ export interface VoiceoverUsageSummary {
   billedCharacters: number;
   source: VoiceoverUsageSource;
   estimatedCostUsd: number | null;
+  estimatedCostSource?: VoiceoverEstimatedCostSource;
   estimatedCreditsMin: number;
   estimatedCreditsMax: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 export interface VoiceoverProviderGenerateInput extends VoiceoverGenerateRequest {
@@ -82,7 +136,7 @@ export interface VoiceoverProviderAdapter {
 }
 
 export interface ProjectVoiceoverConfigResponse {
-  provider: "elevenlabs";
+  provider: VoiceoverProviderId;
   models: VoiceoverModelOption[];
   defaultModel: string;
   defaultVoiceId: string;
@@ -90,4 +144,21 @@ export interface ProjectVoiceoverConfigResponse {
   maskedApiKey: string;
   hasDefaultVoiceId: boolean;
   maskedDefaultVoiceId: string;
+  providers: Partial<Record<VoiceoverProviderId, VoiceoverProviderConfig>>;
+}
+
+export interface VoiceoverProviderConfig {
+  provider: VoiceoverProviderId;
+  label: string;
+  models: VoiceoverModelOption[];
+  defaultModel: string;
+  hasApiKey: boolean;
+  maskedApiKey: string;
+  defaultVoiceId?: string;
+  hasDefaultVoiceId?: boolean;
+  maskedDefaultVoiceId?: string;
+  voices?: VoiceoverVoiceOption[];
+  defaultVoiceName?: string;
+  languages?: VoiceoverLanguageOption[];
+  defaultLanguageCode?: string;
 }

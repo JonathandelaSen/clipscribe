@@ -2,9 +2,23 @@ import { useState } from "react";
 
 import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
 import type { CreatorImageGenerateRequest, CreatorImageGenerateResponse } from "@/lib/creator/types";
-import { postJson } from "@/hooks/creator-api";
+import { CreatorApiError, postJson } from "@/hooks/creator-api";
 
 const IMAGE_PENDING_PROMPT_VERSION = "creator-images-v1";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object";
+}
+
+function formatImageGenerationError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Image generation failed";
+  if (!(error instanceof CreatorApiError) || !isRecord(error.details)) return message;
+
+  const providerErrorMessage = error.details.providerErrorMessage;
+  if (typeof providerErrorMessage !== "string" || !providerErrorMessage.trim()) return message;
+  if (message.includes(providerErrorMessage)) return message;
+  return `${message} API error: ${providerErrorMessage.trim()}`;
+}
 
 export function useCreatorImageGenerator() {
   const [imageResult, setImageResult] = useState<CreatorImageGenerateResponse | null>(null);
@@ -47,8 +61,7 @@ export function useCreatorImageGenerator() {
       setImageResult(result);
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Image generation failed";
-      setImageError(message);
+      setImageError(formatImageGenerationError(error));
       throw error;
     } finally {
       setIsGeneratingImages(false);

@@ -8,6 +8,7 @@ import { createDexieCreatorLLMRunsRepository } from "@/lib/repositories/creator-
 interface ApiErrorResponse {
   ok?: false;
   error?: string;
+  details?: unknown;
 }
 
 interface ApiResponseMeta {
@@ -24,6 +25,18 @@ interface PostJsonOptions {
 }
 
 const creatorLlmRunsRepository = createDexieCreatorLLMRunsRepository();
+
+export class CreatorApiError extends Error {
+  status: number;
+  details?: unknown;
+
+  constructor(message: string, options: { status: number; details?: unknown }) {
+    super(message);
+    this.name = "CreatorApiError";
+    this.status = options.status;
+    this.details = options.details;
+  }
+}
 
 async function persistResponseMeta(meta: ApiResponseMeta | undefined): Promise<void> {
   if (!meta?.creatorLlmRun) return;
@@ -79,8 +92,9 @@ export async function postJson<TResponse>(url: string, payload: unknown, options
 
     const unwrapped = unwrapApiEnvelope<TResponse>(data);
     if (!response.ok) {
-      const message = (unwrapped as ApiErrorResponse).error || `Request failed (${response.status})`;
-      throw new Error(message);
+      const errorResponse = unwrapped as ApiErrorResponse;
+      const message = errorResponse.error || `Request failed (${response.status})`;
+      throw new CreatorApiError(message, { status: response.status, details: errorResponse.details });
     }
 
     if (pendingRun) {

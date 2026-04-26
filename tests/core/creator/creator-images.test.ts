@@ -185,6 +185,57 @@ test("generateCreatorImages records provider errors", async () => {
           assert.equal(error.trace?.feature, "images");
           assert.equal(error.trace?.status, "provider_error");
           assert.equal(error.trace?.errorCode, "openai_rate_limited");
+          assert.deepEqual(error.details, {
+            provider: "openai",
+            providerStatus: 429,
+            providerErrorMessage: "quota",
+          });
+          return true;
+        }
+      );
+    }
+  );
+});
+
+test("generateCreatorImages preserves OpenAI API error details for authentication failures", async () => {
+  await withMockFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "Incorrect API key provided: sk-demo.",
+            type: "invalid_request_error",
+            code: "invalid_api_key",
+          },
+        }),
+        { status: 401, headers: { "Content-Type": "application/json" } }
+      ),
+    async () => {
+      await assert.rejects(
+        generateCreatorImages(
+          {
+            prompt: "A failed image",
+            generationConfig: {
+              provider: "openai",
+              model: "gpt-image-2",
+            },
+          },
+          {
+            headers: new Headers({
+              [CREATOR_OPENAI_API_KEY_HEADER]: "sk-demo",
+            }),
+          }
+        ),
+        (error) => {
+          assert.ok(error instanceof CreatorAIError);
+          assert.equal(error.message, "OpenAI authentication failed. Check the API key saved in this browser.");
+          assert.deepEqual(error.details, {
+            provider: "openai",
+            providerStatus: 401,
+            providerErrorMessage: "Incorrect API key provided: sk-demo.",
+            providerErrorType: "invalid_request_error",
+            providerErrorCode: "invalid_api_key",
+          });
           return true;
         }
       );

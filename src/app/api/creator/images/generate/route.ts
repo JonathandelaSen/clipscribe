@@ -40,7 +40,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof CreatorAIError) {
-      return errorResponse(error.message, error.status, { code: error.code }, error.trace);
+      return errorResponse(error.message, error.status, { code: error.code, ...(isRecord(error.details) ? error.details : { details: error.details }) }, error.trace);
     }
 
     const message = error instanceof Error ? error.message : "Creator image generation failed";
