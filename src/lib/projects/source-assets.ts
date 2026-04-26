@@ -58,6 +58,33 @@ export async function createProjectAssetFromFile(input: {
   }) as ProjectAssetRecord;
 }
 
+export async function createProjectImageAssetFromFile(input: {
+  projectId: string;
+  file: File;
+  now?: number;
+}): Promise<ProjectAssetRecord> {
+  const metadata = await readMediaMetadata(input.file);
+  const now = input.now ?? Date.now();
+
+  return createEditorAssetRecord({
+    projectId: input.projectId,
+    role: "support",
+    origin: "ai-image",
+    kind: "image",
+    filename: input.file.name,
+    mimeType: input.file.type || "image/png",
+    sizeBytes: input.file.size,
+    durationSeconds: metadata.durationSeconds,
+    width: metadata.width,
+    height: metadata.height,
+    hasAudio: false,
+    sourceType: "upload",
+    captionSource: { kind: "none" },
+    fileBlob: input.file,
+    now,
+  }) as ProjectAssetRecord;
+}
+
 export async function createProjectFromSourceFile(input: {
   file: File;
   now?: number;

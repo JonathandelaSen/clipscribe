@@ -3,7 +3,7 @@ import type { CreatorVideoInfoGenerateRequest, CreatorVideoInfoGenerateResponse 
 import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
 import { postJson } from "@/hooks/creator-api";
 
-const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v4";
+const VIDEO_INFO_PENDING_PROMPT_VERSION = "creator-video-info-v5";
 
 export function useCreatorVideoInfoGenerator() {
   const [videoInfoAnalysis, setVideoInfoAnalysis] = useState<CreatorVideoInfoGenerateResponse | null>(null);
@@ -28,6 +28,10 @@ export function useCreatorVideoInfoGenerator() {
             model: payload.generationConfig?.model,
             inputSummary: {
               videoInfoBlocks: payload.videoInfoBlocks?.slice(),
+              metadataTarget: payload.metadataTarget,
+              focusedTranscriptChunkCount: payload.focusedTranscriptChunks?.length,
+              contextTranscriptChunkCount: payload.contextTranscriptChunks?.length,
+              contextTranscriptTruncated: payload.contextTranscriptTruncated,
               promptCustomizationMode: payload.promptCustomization?.mode ?? "default",
               promptCustomizationHash: payload.promptCustomization?.hash,
               promptEditedSections: payload.promptCustomization?.editedSections?.slice() ?? [],

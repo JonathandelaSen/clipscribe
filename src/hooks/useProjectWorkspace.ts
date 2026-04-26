@@ -16,6 +16,7 @@ import type {
   ProjectVoiceoverRecord,
   ProjectYouTubeUploadRecord,
 } from "@/lib/projects/types";
+import type { CreatorImageProjectRecord } from "@/lib/creator/types";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
 import type { ProjectVoiceoverDraft } from "@/lib/voiceover/types";
 import { normalizeProjectVoiceoverDraft } from "@/lib/voiceover/utils";
@@ -125,6 +126,26 @@ export function useProjectWorkspace(projectId: string | undefined) {
       await saveProject({
         ...project,
         assetIds: project.assetIds.includes(input.asset.id) ? project.assetIds : [...project.assetIds, input.asset.id],
+        updatedAt: now,
+        lastOpenedAt: now,
+      });
+      await refresh();
+    },
+    [project, refresh, saveProject]
+  );
+
+  const saveGeneratedImageAssets = useCallback(
+    async (input: { assets: ProjectAssetRecord[]; imageRecord: CreatorImageProjectRecord }) => {
+      if (!project || input.assets.length === 0) return;
+      const now = Math.max(project.updatedAt, input.imageRecord.generatedAt, ...input.assets.map((asset) => asset.updatedAt));
+      await projectRepository.bulkPutAssets(input.assets);
+      await saveProject({
+        ...project,
+        assetIds: Array.from(new Set([...project.assetIds, ...input.assets.map((asset) => asset.id)])),
+        aiImageHistory: [
+          input.imageRecord,
+          ...(project.aiImageHistory ?? []).filter((record) => record.id !== input.imageRecord.id),
+        ].slice(0, 40),
         updatedAt: now,
         lastOpenedAt: now,
       });
@@ -262,6 +283,7 @@ export function useProjectWorkspace(projectId: string | undefined) {
     saveProject,
     saveVoiceoverDraft,
     saveGeneratedVoiceover,
+    saveGeneratedImageAssets,
     saveYouTubeUpload,
     setActiveSourceAsset,
     addAssets,

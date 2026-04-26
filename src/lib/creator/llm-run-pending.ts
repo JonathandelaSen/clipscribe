@@ -15,8 +15,12 @@ function makeRunId() {
   return `run_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+type CreatorPendingRunRequest = Partial<CreatorGenerationSourceInput> & {
+  generationConfig?: CreatorGenerationSourceInput["generationConfig"];
+};
+
 export function buildCreatorLlmRunInputSummary(
-  input: CreatorGenerationSourceInput
+  input: CreatorPendingRunRequest
 ): CreatorLLMRunInputSummary {
   return {
     projectId: input.projectId,
@@ -26,8 +30,11 @@ export function buildCreatorLlmRunInputSummary(
     sourceSignature: input.sourceSignature,
     transcriptVersionLabel: input.transcriptVersionLabel,
     subtitleVersionLabel: input.subtitleVersionLabel,
-    transcriptCharCount: input.transcriptText.length,
-    transcriptChunkCount: input.transcriptChunks.length,
+    transcriptCharCount: input.transcriptText?.length ?? 0,
+    transcriptChunkCount: input.transcriptChunks?.length ?? 0,
+    focusedTranscriptChunkCount: input.focusedTranscriptChunks?.length,
+    contextTranscriptChunkCount: input.contextTranscriptChunks?.length,
+    contextTranscriptTruncated: input.contextTranscriptTruncated,
     subtitleChunkCount: input.subtitleChunks?.length ?? 0,
   };
 }
@@ -35,8 +42,8 @@ export function buildCreatorLlmRunInputSummary(
 export function buildPendingCreatorLlmRun(input: {
   feature: CreatorLLMFeature;
   operation: CreatorLLMOperation;
-  promptVersion: string;
-  request: CreatorGenerationSourceInput;
+    promptVersion: string;
+  request: CreatorPendingRunRequest;
   inputSummary?: Partial<CreatorLLMRunInputSummary>;
   provider?: CreatorLLMProvider;
   model?: string;

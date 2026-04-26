@@ -176,6 +176,29 @@ test("buildVideoInfoPrompt applies prompt customization layers and field instruc
   assert.match(prompt, /chapters: Use concrete timestamps for chapters/i);
 });
 
+test("buildVideoInfoPrompt tells short publish metadata to use short transcript as focus and full transcript as context", () => {
+  const prompt = buildVideoInfoPrompt({
+    ...baseRequest,
+    metadataTarget: "youtube_short_publish",
+    videoInfoBlocks: ["titleIdeas", "description", "hashtags"],
+    transcriptText: "This exact short moment needs a title.",
+    transcriptChunks: [{ text: "This exact short moment needs a title.", timestamp: [10, 15] }],
+    focusedTranscriptText: "This exact short moment needs a title.",
+    focusedTranscriptChunks: [{ text: "This exact short moment needs a title.", timestamp: [10, 15] }],
+    contextTranscriptText: "The full video explains the speaker and setup before the short moment.",
+    contextTranscriptChunks: [
+      { text: "The full video explains the speaker and setup before the short moment.", timestamp: [0, 20] },
+    ],
+  });
+
+  assert.match(prompt, /Short transcript:/);
+  assert.match(prompt, /Full video context transcript:/);
+  assert.match(prompt, /Describe the Short being published, not the full source video/i);
+  assert.match(prompt, /Use the full video context only/i);
+  assert.match(prompt, /This exact short moment needs a title/);
+  assert.match(prompt, /full video explains the speaker/i);
+});
+
 test("buildCollapsedVideoInfoPromptPreview keeps the transcript in the accordion payload only", () => {
   const prompt = buildVideoInfoPrompt(baseRequest);
   const preview = buildCollapsedVideoInfoPromptPreview(prompt);

@@ -2,6 +2,9 @@ import type {
   CreatorPromptCustomizationMode,
   CreatorPromptSlotOverride,
   CreatorPromptSlotOverrideMode,
+  CreatorImagePromptCustomizationSnapshot,
+  CreatorImagePromptProfile,
+  CreatorImagePromptSlot,
   CreatorVideoInfoBlock,
   CreatorVideoInfoPromptCustomizationSnapshot,
   CreatorVideoInfoPromptProfile,
@@ -12,6 +15,11 @@ export type VideoInfoPromptEditorMode = "global" | "run";
 
 export const VIDEO_INFO_PROMPT_SLOT_ORDER: CreatorVideoInfoPromptSlot[] = [
   "persona",
+];
+
+export const IMAGE_PROMPT_SLOT_ORDER: CreatorImagePromptSlot[] = [
+  "persona",
+  "style",
 ];
 
 export const VIDEO_INFO_PROMPT_FIELD_ORDER: CreatorVideoInfoBlock[] = [
@@ -27,6 +35,11 @@ export const VIDEO_INFO_PROMPT_FIELD_ORDER: CreatorVideoInfoBlock[] = [
 
 export const VIDEO_INFO_PROMPT_SLOT_DEFAULTS: Record<CreatorVideoInfoPromptSlot, string> = {
   persona: "You are a senior YouTube strategist focused on long-form packaging and SEO.",
+};
+
+export const IMAGE_PROMPT_SLOT_DEFAULTS: Record<CreatorImagePromptSlot, string> = {
+  persona: "You are an expert creative director for production-ready image generation.",
+  style: "Create a polished, high-fidelity image with clear composition, intentional lighting, and no unwanted text.",
 };
 
 export const VIDEO_INFO_PROMPT_FIELD_DEFAULTS: Partial<Record<CreatorVideoInfoBlock, string>> = {
@@ -111,6 +124,35 @@ export function sanitizeVideoInfoPromptProfile(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+export function sanitizeImagePromptProfile(
+  profile: unknown
+): CreatorImagePromptProfile | undefined {
+  if (!isRecord(profile)) return undefined;
+
+  const slotOverrides: Partial<Record<CreatorImagePromptSlot, CreatorPromptSlotOverride>> = {};
+  const rawSlotOverrides = isRecord(profile.slotOverrides) ? profile.slotOverrides : {};
+  for (const slot of IMAGE_PROMPT_SLOT_ORDER) {
+    const nextValue = sanitizeSlotOverride(rawSlotOverrides[slot]);
+    if (isNonDefaultSlotOverride(nextValue)) {
+      slotOverrides[slot] = nextValue;
+    }
+  }
+
+  const globalInstructions = sanitizeText(
+    typeof profile.globalInstructions === "string" ? profile.globalInstructions : undefined
+  );
+
+  const normalized: CreatorImagePromptProfile = {};
+  if (Object.keys(slotOverrides).length > 0) {
+    normalized.slotOverrides = slotOverrides;
+  }
+  if (globalInstructions) {
+    normalized.globalInstructions = globalInstructions;
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function mergeVideoInfoPromptProfiles(
   baseProfile: CreatorVideoInfoPromptProfile | undefined,
   overrideProfile: CreatorVideoInfoPromptProfile | undefined
@@ -151,10 +193,44 @@ export function mergeVideoInfoPromptProfiles(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+export function mergeImagePromptProfiles(
+  baseProfile: CreatorImagePromptProfile | undefined,
+  overrideProfile: CreatorImagePromptProfile | undefined
+): CreatorImagePromptProfile | undefined {
+  const base = sanitizeImagePromptProfile(baseProfile);
+  const override = sanitizeImagePromptProfile(overrideProfile);
+  const slotOverrides: Partial<Record<CreatorImagePromptSlot, CreatorPromptSlotOverride>> = {};
+
+  for (const slot of IMAGE_PROMPT_SLOT_ORDER) {
+    const overrideValue = override?.slotOverrides?.[slot];
+    const nextValue = overrideValue ?? base?.slotOverrides?.[slot];
+    if (nextValue && nextValue.mode !== "inherit") {
+      slotOverrides[slot] = nextValue;
+    }
+  }
+
+  const instructions = [base?.globalInstructions, override?.globalInstructions].filter(Boolean).join("\n\n").trim();
+  const merged: CreatorImagePromptProfile = {};
+  if (Object.keys(slotOverrides).length > 0) {
+    merged.slotOverrides = slotOverrides;
+  }
+  if (instructions) {
+    merged.globalInstructions = instructions;
+  }
+
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
 export function hasCustomizedVideoInfoPromptProfile(
   profile: CreatorVideoInfoPromptProfile | undefined
 ): boolean {
   return !!sanitizeVideoInfoPromptProfile(profile);
+}
+
+export function hasCustomizedImagePromptProfile(
+  profile: CreatorImagePromptProfile | undefined
+): boolean {
+  return !!sanitizeImagePromptProfile(profile);
 }
 
 function stableJsonStringify(value: unknown): string {
@@ -204,6 +280,24 @@ export function summarizeVideoInfoPromptEdits(
   return sections;
 }
 
+export function summarizeImagePromptEdits(
+  profile: CreatorImagePromptProfile | undefined
+): string[] {
+  const sanitized = sanitizeImagePromptProfile(profile);
+  if (!sanitized) return [];
+
+  const sections: string[] = [];
+  for (const slot of IMAGE_PROMPT_SLOT_ORDER) {
+    if (sanitized.slotOverrides?.[slot]) {
+      sections.push(`base:${slot}`);
+    }
+  }
+  if (sanitized.globalInstructions) {
+    sections.push("globalInstructions");
+  }
+  return sections;
+}
+
 export function createVideoInfoPromptCustomizationSnapshot(input: {
   globalProfile?: CreatorVideoInfoPromptProfile;
   runProfile?: CreatorVideoInfoPromptProfile;
@@ -237,6 +331,39 @@ export function createVideoInfoPromptCustomizationSnapshot(input: {
   };
 }
 
+export function createImagePromptCustomizationSnapshot(input: {
+  globalProfile?: CreatorImagePromptProfile;
+  runProfile?: CreatorImagePromptProfile;
+}): CreatorImagePromptCustomizationSnapshot | undefined {
+  const hasRunProfile = hasCustomizedImagePromptProfile(input.runProfile);
+  const hasGlobalProfile = hasCustomizedImagePromptProfile(input.globalProfile);
+
+  const mode: CreatorPromptCustomizationMode = hasRunProfile
+    ? "run_override"
+    : hasGlobalProfile
+      ? "global_customized"
+      : "default";
+
+  if (mode === "default") {
+    return undefined;
+  }
+
+  const effectiveProfile = hasRunProfile
+    ? mergeImagePromptProfiles(input.globalProfile, input.runProfile)
+    : sanitizeImagePromptProfile(input.globalProfile);
+
+  if (!effectiveProfile) {
+    return undefined;
+  }
+
+  return {
+    mode,
+    effectiveProfile,
+    hash: computePromptCustomizationHash(effectiveProfile),
+    editedSections: summarizeImagePromptEdits(effectiveProfile),
+  };
+}
+
 export function selectVideoInfoPromptCustomizationSnapshot(
   editorMode: VideoInfoPromptEditorMode,
   input: {
@@ -244,6 +371,19 @@ export function selectVideoInfoPromptCustomizationSnapshot(
     runSnapshot?: CreatorVideoInfoPromptCustomizationSnapshot;
   }
 ): CreatorVideoInfoPromptCustomizationSnapshot | undefined {
+  if (editorMode === "run") {
+    return input.runSnapshot ?? input.globalSnapshot;
+  }
+  return input.globalSnapshot;
+}
+
+export function selectImagePromptCustomizationSnapshot(
+  editorMode: VideoInfoPromptEditorMode,
+  input: {
+    globalSnapshot?: CreatorImagePromptCustomizationSnapshot;
+    runSnapshot?: CreatorImagePromptCustomizationSnapshot;
+  }
+): CreatorImagePromptCustomizationSnapshot | undefined {
   if (editorMode === "run") {
     return input.runSnapshot ?? input.globalSnapshot;
   }
@@ -260,6 +400,16 @@ export function resolveVideoInfoPromptSlotLine(
   return VIDEO_INFO_PROMPT_SLOT_DEFAULTS[slot];
 }
 
+export function resolveImagePromptSlotLine(
+  slot: CreatorImagePromptSlot,
+  profile: CreatorImagePromptProfile | undefined
+): string | undefined {
+  const override = profile?.slotOverrides?.[slot];
+  if (override?.mode === "omit") return undefined;
+  if (override?.mode === "replace") return override.value;
+  return IMAGE_PROMPT_SLOT_DEFAULTS[slot];
+}
+
 export function resolveVideoInfoPromptFieldInstruction(
   block: CreatorVideoInfoBlock,
   profile: CreatorVideoInfoPromptProfile | undefined
@@ -268,6 +418,10 @@ export function resolveVideoInfoPromptFieldInstruction(
 }
 
 export function createEmptyVideoInfoPromptProfile(): CreatorVideoInfoPromptProfile {
+  return {};
+}
+
+export function createEmptyImagePromptProfile(): CreatorImagePromptProfile {
   return {};
 }
 

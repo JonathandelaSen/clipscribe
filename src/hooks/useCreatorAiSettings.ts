@@ -5,6 +5,7 @@ import { useCallback, useSyncExternalStore } from "react";
 import type {
   CreatorAIFeatureSettings,
   CreatorAIFeatureSettingsMap,
+  CreatorImagePromptProfile,
   CreatorLLMFeature,
   CreatorPromptProfiles,
   CreatorVideoInfoPromptProfile,
@@ -191,6 +192,31 @@ export function useCreatorAiSettings() {
     writeSettings,
   ]);
 
+  const saveImagePromptProfile = useCallback((profile: CreatorImagePromptProfile | undefined) => {
+    const nextPromptProfiles: CreatorPromptProfiles = {
+      ...(settings?.promptProfiles ?? {}),
+    };
+    if (profile) {
+      nextPromptProfiles.images = profile;
+    } else {
+      delete nextPromptProfiles.images;
+    }
+    return writeSettings({
+      openAIApiKey: credentials?.openAIApiKey ?? "",
+      geminiApiKey: credentials?.geminiApiKey ?? "",
+      elevenLabsApiKey: credentials?.elevenLabsApiKey ?? "",
+      featureSettings,
+      promptProfiles: nextPromptProfiles,
+    });
+  }, [
+    credentials?.elevenLabsApiKey,
+    credentials?.geminiApiKey,
+    credentials?.openAIApiKey,
+    featureSettings,
+    settings?.promptProfiles,
+    writeSettings,
+  ]);
+
   const clearOpenAIApiKey = useCallback(() => {
     if (typeof window === "undefined") return;
     const hasPromptProfiles = Boolean(settings?.promptProfiles && Object.keys(settings.promptProfiles).length > 0);
@@ -282,6 +308,7 @@ export function useCreatorAiSettings() {
   const geminiApiKey = credentials?.geminiApiKey ?? "";
   const elevenLabsApiKey = credentials?.elevenLabsApiKey ?? "";
   const videoInfoPromptProfile = settings?.promptProfiles?.video_info;
+  const imagePromptProfile = settings?.promptProfiles?.images;
 
   return {
     settings,
@@ -298,7 +325,9 @@ export function useCreatorAiSettings() {
     maskedElevenLabsApiKey: elevenLabsApiKey ? maskElevenLabsApiKey(elevenLabsApiKey) : "",
     shortsFeatureSettings: featureSettings?.shorts,
     videoInfoFeatureSettings: featureSettings?.video_info,
+    imagesFeatureSettings: featureSettings?.images,
     videoInfoPromptProfile,
+    imagePromptProfile,
     saveOpenAIApiKey,
     saveGeminiApiKey,
     saveElevenLabsApiKey,
@@ -309,6 +338,7 @@ export function useCreatorAiSettings() {
     clearGeminiApiKey,
     clearElevenLabsApiKey,
     saveVideoInfoPromptProfile,
+    saveImagePromptProfile,
     clearVideoInfoPromptProfile,
   };
 }

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { ProjectAssetRecord, ProjectExportRecord } from "../../../src/lib/projects/types";
 import {
   buildShortSuggestionPublishDraft,
+  buildYouTubeShortPublishPromptProfile,
   DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS,
   appendChapterBlockToDescription,
   applySuggestedDescription,
@@ -18,12 +19,15 @@ import {
   resolveYouTubeShortEligibility,
   resolveInitialYouTubePublishSelection,
   resolveYouTubeShortExportForProjectAsset,
+  resolveYouTubeShortPublishTranscriptContext,
   resolveYouTubePublishView,
+  YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS,
   YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
 } from "../../../src/lib/creator/youtube-publish";
 import type { YouTubePublishResult, YouTubeUploadDraft } from "../../../src/lib/youtube/types";
 import type { CreatorVideoInfoProjectRecord } from "../../../src/lib/creator/types";
 import type { CreatorShortProjectRecord } from "../../../src/lib/creator/storage";
+import type { TranscriptVersion } from "../../../src/lib/history";
 
 function createAsset(overrides: Partial<ProjectAssetRecord> = {}): ProjectAssetRecord {
   return {
@@ -176,6 +180,40 @@ function createShortProject(overrides: Partial<CreatorShortProjectRecord> = {}):
   };
 }
 
+function createTranscript(overrides: Partial<TranscriptVersion> = {}): TranscriptVersion {
+  const chunks = overrides.chunks ?? [
+    { text: "The host sets up the full topic.", timestamp: [0, 10] },
+    { text: "This exact moment becomes the short.", timestamp: [10, 20] },
+    { text: "The long video continues with more context.", timestamp: [20, 40] },
+  ];
+  return {
+    id: overrides.id ?? "transcript_1",
+    versionNumber: overrides.versionNumber ?? 1,
+    label: overrides.label ?? "Original transcript",
+    status: overrides.status ?? "completed",
+    createdAt: overrides.createdAt ?? 1_000,
+    updatedAt: overrides.updatedAt ?? 1_000,
+    requestedLanguage: overrides.requestedLanguage ?? "en",
+    detectedLanguage: overrides.detectedLanguage ?? "en",
+    transcript: overrides.transcript ?? chunks.map((chunk) => chunk.text).join(" "),
+    chunks,
+    subtitles: overrides.subtitles ?? [
+      {
+        id: "subtitle_1",
+        versionNumber: 1,
+        label: "Original subtitles",
+        language: "en",
+        sourceLanguage: "en",
+        kind: "original",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        shiftSeconds: 0,
+        chunks,
+      },
+    ],
+  };
+}
+
 test("DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS keeps the upload-focused defaults", () => {
   assert.deepEqual(DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS, [
     "titleIdeas",
@@ -255,6 +293,85 @@ test("buildShortSuggestionPublishDraft maps short title and caption into publish
     description: "This is the short caption. #shorts #clipscribe",
     tagsInput: "shorts, clipscribe",
   });
+});
+
+test("resolveYouTubeShortPublishTranscriptContext focuses the short subtitle chunks and keeps full context separate", () => {
+  const transcript = createTranscript();
+  const context = resolveYouTubeShortPublishTranscriptContext({
+    transcript,
+    subtitleId: "subtitle_1",
+    short: {
+      id: "short_1",
+      startSeconds: 10,
+      endSeconds: 20,
+      durationSeconds: 10,
+      score: 0.9,
+      title: "Short",
+      reason: "Reason",
+      caption: "",
+      openingText: "",
+      endCardText: "",
+      sourceChunkIndexes: [1],
+      suggestedSubtitleLanguage: "en",
+      editorPreset: {
+        aspectRatio: "9:16",
+        resolution: "1080x1920",
+        subtitleStyle: "clean_caption",
+        safeTopPct: 10,
+        safeBottomPct: 14,
+        targetDurationRange: [20, 45],
+      },
+    },
+  });
+
+  assert.equal(context?.shortTranscriptText, "This exact moment becomes the short.");
+  assert.equal(context?.shortTranscriptChunks.length, 1);
+  assert.match(context?.fullTranscriptText ?? "", /host sets up the full topic/);
+  assert.match(context?.fullTranscriptText ?? "", /long video continues/);
+});
+
+test("resolveYouTubeShortPublishTranscriptContext truncates long full context around the short", () => {
+  const transcript = createTranscript({
+    chunks: [
+      { text: "Intro context before the useful part.", timestamp: [0, 8] },
+      { text: "The key short moment that needs packaging.", timestamp: [8, 16] },
+      { text: "Follow up context after the useful part.", timestamp: [16, 24] },
+      { text: "A very long tail that should not fit the request budget.", timestamp: [24, 80] },
+    ],
+  });
+  const context = resolveYouTubeShortPublishTranscriptContext({
+    transcript,
+    clip: {
+      id: "clip_1",
+      startSeconds: 8,
+      endSeconds: 16,
+      durationSeconds: 8,
+      score: 0.8,
+      title: "Clip",
+      hook: "Hook",
+      reason: "Reason",
+      punchline: "Punchline",
+      sourceChunkIndexes: [1],
+      suggestedSubtitleLanguage: "en",
+    },
+    maxContextChars: 90,
+  });
+
+  assert.equal(context?.shortTranscriptText, "The key short moment that needs packaging.");
+  assert.equal(context?.contextTranscriptTruncated, true);
+  assert.doesNotMatch(context?.fullTranscriptText ?? "", /very long tail/);
+});
+
+test("buildYouTubeShortPublishPromptProfile falls back to publish defaults for empty instructions", () => {
+  const profile = buildYouTubeShortPublishPromptProfile({
+    globalInstructions: " ",
+    titleInstructions: "Use a numbered title.",
+  });
+
+  assert.equal(profile.globalInstructions, YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.global);
+  assert.equal(profile.fieldInstructions?.titleIdeas, "Use a numbered title.");
+  assert.equal(profile.fieldInstructions?.description, YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.description);
+  assert.equal(profile.fieldInstructions?.hashtags, YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.hashtags);
 });
 
 test("applySuggestedTags normalizes and deduplicates hashtags into the tags input", () => {

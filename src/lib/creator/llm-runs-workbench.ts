@@ -86,6 +86,10 @@ function buildSearchHaystack(run: CreatorLLMRunRecord): string {
     summary.transcriptVersionLabel,
     summary.subtitleVersionLabel,
     summary.videoInfoBlocks?.join(" "),
+    summary.imageAspectRatio,
+    summary.imageSize,
+    summary.imageQuality,
+    summary.imageFormat,
   ]
     .filter(Boolean)
     .join(" ")

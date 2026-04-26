@@ -1,12 +1,15 @@
 import type {
   CreatorShortPlan,
   CreatorSuggestedShort,
+  CreatorViralClip,
   CreatorVideoInfoBlock,
   CreatorVideoInfoGenerateResponse,
   CreatorVideoInfoProjectRecord,
+  CreatorVideoInfoPromptProfile,
 } from "@/lib/creator/types";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
-import { makeId } from "@/lib/history";
+import { getSubtitleById, makeId, type SubtitleChunk, type TranscriptVersion } from "@/lib/history";
+import { clipSubtitleChunks } from "@/lib/creator/core/clip-windowing";
 import type {
   ProjectAssetRecord,
   ProjectExportRecord,
@@ -22,7 +25,24 @@ export const DEFAULT_YOUTUBE_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] 
   "chapters",
   "pinnedComment",
 ];
+export const YOUTUBE_SHORT_PUBLISH_VIDEO_INFO_BLOCKS: CreatorVideoInfoBlock[] = [
+  "titleIdeas",
+  "description",
+  "hashtags",
+];
 export const YOUTUBE_SHORTS_MAX_DURATION_SECONDS = 180;
+export const YOUTUBE_SHORT_PUBLISH_CONTEXT_MAX_CHARS = 60_000;
+
+export const YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS = {
+  global:
+    "Create metadata for the YouTube Short being published. Use the full video transcript only as context; do not make the title, description, or tags describe the full source video.",
+  titleIdeas:
+    "Return short, clear YouTube Shorts titles. Make the hook understandable without clickbait, and avoid implying the full source video is being published.",
+  description:
+    "Write a concise YouTube Shorts description grounded in the Short. Add a natural CTA only if it fits the content.",
+  hashtags:
+    "Return relevant YouTube tags or hashtags for the Short. Avoid invented brands, names, claims, or unrelated trend tags.",
+} as const;
 
 export type YouTubePublishSourceMode = "local_file" | "project_asset" | "project_export";
 export type YouTubePublishView = "list" | "new";
@@ -32,6 +52,26 @@ export interface YouTubePublishDraft {
   title: string;
   description: string;
   tagsInput: string;
+}
+
+export interface YouTubeShortPublishPromptInstructionDraft {
+  globalInstructions: string;
+  titleInstructions: string;
+  descriptionInstructions: string;
+  tagsInstructions: string;
+}
+
+export interface YouTubeShortPublishTranscriptContext {
+  transcriptId: string;
+  subtitleId?: string;
+  transcriptVersionLabel?: string;
+  subtitleVersionLabel?: string;
+  shortTranscriptText: string;
+  shortTranscriptChunks: SubtitleChunk[];
+  fullTranscriptText?: string;
+  fullTranscriptChunks?: SubtitleChunk[];
+  contextTranscriptTruncated: boolean;
+  warning?: string;
 }
 
 export interface YouTubeProjectExportOption {
@@ -176,6 +216,147 @@ function uniqueStrings(values: string[]): string[] {
 
 function extractHashtagsFromText(value: string): string[] {
   return Array.from(value.matchAll(/#([\p{L}\p{N}_]+)/gu), (match) => match[1] ?? "");
+}
+
+function chunksToText(chunks: SubtitleChunk[]): string {
+  return chunks.map((chunk) => String(chunk.text ?? "").trim()).filter(Boolean).join(" ");
+}
+
+function chunkTextLength(chunks: SubtitleChunk[]): number {
+  return chunks.reduce((total, chunk) => total + String(chunk.text ?? "").trim().length + 1, 0);
+}
+
+function getClipWindow(input: {
+  short?: CreatorSuggestedShort | null;
+  clip?: CreatorViralClip | null;
+}): CreatorSuggestedShort | CreatorViralClip | null {
+  return input.short ?? input.clip ?? null;
+}
+
+function selectContextChunksAroundClip(input: {
+  chunks: SubtitleChunk[];
+  clip?: CreatorSuggestedShort | CreatorViralClip | null;
+  maxChars?: number;
+}): { chunks: SubtitleChunk[]; truncated: boolean } {
+  const maxChars = input.maxChars ?? YOUTUBE_SHORT_PUBLISH_CONTEXT_MAX_CHARS;
+  if (chunkTextLength(input.chunks) <= maxChars) {
+    return { chunks: input.chunks, truncated: false };
+  }
+
+  const clip = input.clip;
+  if (!clip) {
+    const selected: SubtitleChunk[] = [];
+    let chars = 0;
+    for (const chunk of input.chunks) {
+      const nextChars = String(chunk.text ?? "").trim().length + 1;
+      if (selected.length > 0 && chars + nextChars > maxChars) break;
+      selected.push(chunk);
+      chars += nextChars;
+    }
+    return { chunks: selected, truncated: true };
+  }
+
+  const overlappingIndexes = input.chunks.flatMap((chunk, index) => {
+    const start = chunk.timestamp?.[0] ?? 0;
+    const end = chunk.timestamp?.[1] ?? start;
+    return start < clip.endSeconds && end > clip.startSeconds ? [index] : [];
+  });
+  if (overlappingIndexes.length === 0) {
+    return selectContextChunksAroundClip({ chunks: input.chunks, maxChars });
+  }
+
+  let left = Math.min(...overlappingIndexes);
+  let right = Math.max(...overlappingIndexes);
+  let selectedChars = chunkTextLength(input.chunks.slice(left, right + 1));
+
+  while (selectedChars < maxChars && (left > 0 || right < input.chunks.length - 1)) {
+    const leftChunk = left > 0 ? input.chunks[left - 1] : undefined;
+    const rightChunk = right < input.chunks.length - 1 ? input.chunks[right + 1] : undefined;
+    const leftChars = leftChunk ? String(leftChunk.text ?? "").trim().length + 1 : Number.POSITIVE_INFINITY;
+    const rightChars = rightChunk ? String(rightChunk.text ?? "").trim().length + 1 : Number.POSITIVE_INFINITY;
+    const preferLeft = leftChars <= rightChars;
+    const nextChars = preferLeft ? leftChars : rightChars;
+
+    if (!Number.isFinite(nextChars) || selectedChars + nextChars > maxChars) break;
+    if (preferLeft) {
+      left -= 1;
+    } else {
+      right += 1;
+    }
+    selectedChars += nextChars;
+  }
+
+  return {
+    chunks: input.chunks.slice(left, right + 1),
+    truncated: true,
+  };
+}
+
+export function buildYouTubeShortPublishPromptProfile(
+  instructions: Partial<YouTubeShortPublishPromptInstructionDraft> = {}
+): CreatorVideoInfoPromptProfile {
+  const globalInstructions =
+    instructions.globalInstructions?.trim() || YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.global;
+  const titleInstructions =
+    instructions.titleInstructions?.trim() || YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.titleIdeas;
+  const descriptionInstructions =
+    instructions.descriptionInstructions?.trim() || YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.description;
+  const tagsInstructions =
+    instructions.tagsInstructions?.trim() || YOUTUBE_SHORT_PUBLISH_PROMPT_DEFAULTS.hashtags;
+
+  return {
+    globalInstructions,
+    fieldInstructions: {
+      titleIdeas: titleInstructions,
+      description: descriptionInstructions,
+      hashtags: tagsInstructions,
+    },
+  };
+}
+
+export function resolveYouTubeShortPublishTranscriptContext(input: {
+  transcript?: TranscriptVersion | null;
+  short?: CreatorSuggestedShort | null;
+  clip?: CreatorViralClip | null;
+  subtitleId?: string | null;
+  maxContextChars?: number;
+}): YouTubeShortPublishTranscriptContext | null {
+  const transcript = input.transcript;
+  if (!transcript) return null;
+
+  const subtitle = getSubtitleById(transcript, input.subtitleId);
+  const fullChunks = transcript.chunks?.length ? transcript.chunks : subtitle?.chunks ?? [];
+  const subtitleChunks = subtitle?.chunks?.length ? subtitle.chunks : fullChunks;
+  const clip = getClipWindow(input);
+  const shortTranscriptChunks = clip ? clipSubtitleChunks(clip, subtitleChunks) : subtitleChunks;
+
+  if (shortTranscriptChunks.length === 0) {
+    return null;
+  }
+
+  const selectedContext = fullChunks.length
+    ? selectContextChunksAroundClip({
+        chunks: fullChunks,
+        clip,
+        maxChars: input.maxContextChars,
+      })
+    : { chunks: [], truncated: false };
+  const fullTranscriptText = chunksToText(selectedContext.chunks);
+
+  return {
+    transcriptId: transcript.id,
+    subtitleId: subtitle?.id,
+    transcriptVersionLabel: transcript.label,
+    subtitleVersionLabel: subtitle?.label,
+    shortTranscriptText: chunksToText(shortTranscriptChunks),
+    shortTranscriptChunks,
+    fullTranscriptText: fullTranscriptText || undefined,
+    fullTranscriptChunks: selectedContext.chunks.length ? selectedContext.chunks : undefined,
+    contextTranscriptTruncated: selectedContext.truncated,
+    warning: selectedContext.chunks.length
+      ? undefined
+      : "Full source transcript context is unavailable; metadata will be based on the Short transcript only.",
+  };
 }
 
 export function buildVideoInfoTagsInput(result: Pick<CreatorVideoInfoGenerateResponse, "youtube">): string {

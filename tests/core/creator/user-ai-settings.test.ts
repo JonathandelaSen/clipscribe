@@ -84,6 +84,36 @@ test("readCreatorAISettings keeps prompt profiles even without an API key", () =
   );
 });
 
+test("readCreatorAISettings persists image feature settings and prompt profile", () => {
+  const storage = createStorage();
+
+  writeCreatorAISettings(storage, {
+    featureSettings: {
+      images: {
+        provider: "openai",
+        model: "gpt-image-2",
+      },
+    },
+    promptProfiles: {
+      images: {
+        globalInstructions: "Use product photography lighting.",
+        slotOverrides: {
+          style: {
+            mode: "replace",
+            value: "Minimal studio background.",
+          },
+        },
+      },
+    },
+  });
+
+  const loaded = readCreatorAISettings(storage);
+  assert.equal(loaded?.featureSettings?.images?.provider, "openai");
+  assert.equal(loaded?.featureSettings?.images?.model, "gpt-image-2");
+  assert.equal(loaded?.promptProfiles?.images?.globalInstructions, "Use product photography lighting.");
+  assert.equal(loaded?.promptProfiles?.images?.slotOverrides?.style?.mode, "replace");
+});
+
 test("readCreatorAISettings accepts legacy payloads without prompt profiles", () => {
   const storage = createStorage();
 

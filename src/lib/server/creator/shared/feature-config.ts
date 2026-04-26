@@ -1,5 +1,6 @@
 import {
   CREATOR_DEFAULT_PROVIDER_BY_FEATURE,
+  getCuratedCreatorImageModelOptions,
   getCuratedCreatorModelOptions,
   sanitizeCreatorModelSelection,
   sanitizeCreatorProvider,
@@ -38,6 +39,13 @@ const FEATURE_CONFIG: Record<CreatorLLMFeature, FeatureConfigSpec> = {
     defaultProvider: "gemini",
     allowedProviders: ["gemini", "openai"],
   },
+  images: {
+    providerEnvKey: "CREATOR_IMAGES_PROVIDER",
+    modelEnvKeys: ["CREATOR_IMAGES_MODEL", "OPENAI_CREATOR_IMAGES_MODEL"],
+    temperatureEnvKeys: ["CREATOR_IMAGES_TEMPERATURE", "OPENAI_CREATOR_IMAGES_TEMPERATURE"],
+    defaultProvider: "openai",
+    allowedProviders: ["openai", "gemini"],
+  },
 };
 
 function readFirstEnvValue(keys: readonly string[]): string {
@@ -71,7 +79,9 @@ export function readCreatorFeatureEnvConfig(
   })();
   const defaultModel =
     sanitizeCreatorModelSelection(readFirstEnvValue(modelEnvKeys)) ??
-    getCuratedCreatorModelOptions(provider)[0]?.value ??
+    (feature === "images"
+      ? getCuratedCreatorImageModelOptions(provider)[0]?.value
+      : getCuratedCreatorModelOptions(provider)[0]?.value) ??
     "";
   const rawTemperature = readFirstEnvValue(spec.temperatureEnvKeys);
   const temperature = rawTemperature && !Number.isNaN(Number(rawTemperature)) ? Number(rawTemperature) : 0.4;

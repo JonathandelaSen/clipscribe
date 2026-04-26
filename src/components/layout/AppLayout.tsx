@@ -11,6 +11,7 @@ import {
   ChevronRight, 
   FolderKanban, 
   Film, 
+  Image,
   Languages, 
   Clapperboard, 
   Scissors, 
@@ -48,6 +49,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
     { id: "shorts", label: "Shorts", icon: Clapperboard },
     { id: "timeline", label: "Editor", icon: Scissors },
     { id: "ai_metadata", label: "AI Metadata", icon: WandSparkles },
+    { id: "image_generation", label: "AI Images", icon: Image },
     { id: "publish", label: "Publish", icon: Upload },
     { id: "exports", label: "Exports", icon: Download },
   ];

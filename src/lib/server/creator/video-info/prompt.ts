@@ -6,7 +6,7 @@ import {
 import { selectedVideoInfoBlocks } from "../shared/request-normalizers";
 import { buildTimedTranscriptLines } from "../shared/transcript-format";
 
-export const CREATOR_VIDEO_INFO_PROMPT_VERSION = "creator-video-info-v4";
+export const CREATOR_VIDEO_INFO_PROMPT_VERSION = "creator-video-info-v5";
 
 function buildRequestedShape(request: CreatorVideoInfoGenerateRequest): string {
   const blocks = selectedVideoInfoBlocks(request);
@@ -63,7 +63,14 @@ function buildRequestedShape(request: CreatorVideoInfoGenerateRequest): string {
 
 export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): string {
   const blocks = selectedVideoInfoBlocks(request);
-  const timedTranscript = buildTimedTranscriptLines(request.transcriptChunks);
+  const isShortPublish = request.metadataTarget === "youtube_short_publish";
+  const focusedTranscriptChunks = request.focusedTranscriptChunks?.length
+    ? request.focusedTranscriptChunks
+    : request.transcriptChunks;
+  const focusedTimedTranscript = buildTimedTranscriptLines(focusedTranscriptChunks);
+  const contextTimedTranscript = request.contextTranscriptChunks?.length
+    ? buildTimedTranscriptLines(request.contextTranscriptChunks)
+    : "";
   const effectiveProfile = request.promptCustomization?.effectiveProfile;
 
   const scopeLines: string[] = [];
@@ -101,7 +108,18 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
   return [
     resolveVideoInfoPromptSlotLine("persona", effectiveProfile),
     "Return valid JSON only.",
-    "Produce copy-ready packaging based on the full transcript.",
+    isShortPublish
+      ? "Produce copy-ready YouTube Shorts publish metadata for the Short transcript."
+      : "Produce copy-ready packaging based on the full transcript.",
+    isShortPublish
+      ? "The Short transcript is the primary source of truth. Describe the Short being published, not the full source video."
+      : undefined,
+    isShortPublish && contextTimedTranscript
+      ? "Use the full video context only to understand names, topic, continuity, and why the Short matters. Do not package the full video as if it were being published."
+      : undefined,
+    isShortPublish && request.contextTranscriptTruncated
+      ? "The full video context has been deterministically truncated around the Short because the source transcript is long."
+      : undefined,
     "Only include the requested keys. Omit every other key entirely.",
     effectiveProfile?.globalInstructions ? "" : undefined,
     effectiveProfile?.globalInstructions,
@@ -113,8 +131,11 @@ export function buildVideoInfoPrompt(request: CreatorVideoInfoGenerateRequest): 
     "Required JSON shape:",
     requestedShape,
     "",
-    "Transcript:",
-    timedTranscript,
+    isShortPublish ? "Short transcript:" : "Transcript:",
+    focusedTimedTranscript,
+    isShortPublish && contextTimedTranscript ? "" : undefined,
+    isShortPublish && contextTimedTranscript ? "Full video context transcript:" : undefined,
+    isShortPublish && contextTimedTranscript ? contextTimedTranscript : undefined,
   ]
     .filter(Boolean)
     .join("\n");
@@ -124,7 +145,7 @@ export function buildCollapsedVideoInfoPromptPreview(promptText: string): {
   displayText: string;
   transcriptText: string;
 } {
-  const marker = "\nTranscript:\n";
+  const marker = promptText.includes("\nShort transcript:\n") ? "\nShort transcript:\n" : "\nTranscript:\n";
   const markerIndex = promptText.indexOf(marker);
   if (markerIndex === -1) {
     return {

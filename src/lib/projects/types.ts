@@ -8,6 +8,7 @@ import type {
 } from "@/lib/editor/types";
 import type {
   CreatorShortEditorState,
+  CreatorImageProjectRecord,
   CreatorShortPlan,
   CreatorShortSystemExportCounts,
   CreatorShortSystemExportTimingsMs,
@@ -22,11 +23,19 @@ export type ContentProjectRecord = EditorProjectRecord & {
   /** @deprecated Use youtubeVideoInfoHistory instead. Kept for migration from legacy single-record shape. */
   youtubeVideoInfo?: CreatorVideoInfoProjectRecord;
   youtubeVideoInfoHistory?: CreatorVideoInfoProjectRecord[];
+  aiImageHistory?: CreatorImageProjectRecord[];
   voiceoverDraft?: ProjectVoiceoverDraft;
 };
 
 export type ProjectAssetRole = "source" | "derived" | "support";
-export type ProjectAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio" | "youtube-import";
+export type ProjectAssetOrigin =
+  | "upload"
+  | "short-export"
+  | "timeline-export"
+  | "manual"
+  | "ai-audio"
+  | "ai-image"
+  | "youtube-import";
 
 export interface ProjectAssetRecord extends EditorAssetRecord {
   role: ProjectAssetRole;

@@ -49,6 +49,12 @@ type QueryFilterState = {
   model: string;
 };
 
+function formatFeatureLabel(feature: CreatorLLMRunRecord["feature"]): string {
+  if (feature === "video_info") return "Video Info";
+  if (feature === "images") return "Images";
+  return "Shorts";
+}
+
 function copyText(text: string, label: string) {
   navigator.clipboard.writeText(text);
   toast.success(`${label} copied`);
@@ -491,7 +497,7 @@ function OverviewInspector({
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <KeyValue label="Project" value={projectName ?? run.projectId ?? "Global"} />
-        <KeyValue label="Feature" value={run.feature === "video_info" ? "Video Info" : "Shorts"} />
+        <KeyValue label="Feature" value={formatFeatureLabel(run.feature)} />
         <KeyValue label="Operation" value={run.operation} mono />
         <KeyValue label="Prompt Version" value={run.promptVersion} mono />
         <KeyValue label="Duration" value={formatDurationMs(run.durationMs)} />
@@ -516,6 +522,14 @@ function OverviewInspector({
             <KeyValue label="Transcript Chars" value={formatCompactNumber(inputSummary.transcriptCharCount)} />
             <KeyValue label="Transcript Chunks" value={formatCompactNumber(inputSummary.transcriptChunkCount)} />
             <KeyValue label="Subtitle Chunks" value={formatCompactNumber(inputSummary.subtitleChunkCount)} />
+            {run.feature === "images" ? (
+              <>
+                <KeyValue label="Image Prompt Chars" value={formatCompactNumber(inputSummary.imagePromptCharCount)} />
+                <KeyValue label="Image Count" value={formatCompactNumber(inputSummary.imageCount)} />
+                <KeyValue label="Image Frame" value={inputSummary.imageAspectRatio ?? "n/a"} />
+                <KeyValue label="Image Quality" value={inputSummary.imageQuality ?? "n/a"} />
+              </>
+            ) : null}
             <KeyValue label="Transcript Version" value={inputSummary.transcriptVersionLabel ?? "n/a"} />
             <KeyValue label="Subtitle Version" value={inputSummary.subtitleVersionLabel ?? "n/a"} />
             <KeyValue label="Source Asset" value={inputSummary.sourceAssetId ?? "n/a"} mono />
@@ -594,7 +608,7 @@ function RunListRow({
         <div className="min-w-0 space-y-2">
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant="outline" className="border-white/12 bg-white/5 text-white/78">
-              {run.feature === "video_info" ? "Video Info" : "Shorts"}
+              {formatFeatureLabel(run.feature)}
             </Badge>
             <Badge
               variant="outline"
@@ -675,7 +689,7 @@ export function AiRunsWorkbench() {
 
     return {
       projectId: searchParams.get("projectId") ?? "all",
-      feature: feature === "shorts" || feature === "video_info" ? feature : "all",
+      feature: feature === "shorts" || feature === "video_info" || feature === "images" ? feature : "all",
       provider: provider === "openai" || provider === "gemini" ? provider : "all",
       status:
         status === "queued" ||
@@ -959,6 +973,7 @@ export function AiRunsWorkbench() {
                           <SelectItem value="all">All features</SelectItem>
                           <SelectItem value="shorts">Shorts</SelectItem>
                           <SelectItem value="video_info">Video info</SelectItem>
+                          <SelectItem value="images">Images</SelectItem>
                         </SelectContent>
                       </Select>
                     </WorkbenchControlBlock>
@@ -1115,7 +1130,7 @@ export function AiRunsWorkbench() {
                     <div className="space-y-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline" className="border-white/12 bg-white/5 text-white/80">
-                          {selectedRun.feature === "video_info" ? "Video Info" : "Shorts"}
+                          {formatFeatureLabel(selectedRun.feature)}
                         </Badge>
                         <Badge variant="outline" className="border-white/12 bg-white/5 text-white/70">
                           {selectedRun.provider}

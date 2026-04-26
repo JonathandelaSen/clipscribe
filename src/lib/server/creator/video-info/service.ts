@@ -54,6 +54,10 @@ export async function generateCreatorVideoInfo(
     inputSummary: {
       ...buildBaseInputSummary(request),
       videoInfoBlocks: request.videoInfoBlocks?.slice(),
+      metadataTarget: request.metadataTarget,
+      focusedTranscriptChunkCount: request.focusedTranscriptChunks?.length,
+      contextTranscriptChunkCount: request.contextTranscriptChunks?.length,
+      contextTranscriptTruncated: request.contextTranscriptTruncated,
       promptCustomizationMode: request.promptCustomization?.mode ?? "default",
       promptCustomizationHash: request.promptCustomization?.hash,
       promptEditedSections: request.promptCustomization?.editedSections?.slice() ?? [],

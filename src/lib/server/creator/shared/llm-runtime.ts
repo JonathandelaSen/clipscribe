@@ -47,6 +47,9 @@ export function buildBaseInputSummary(input: CreatorGenerationSourceInput): Crea
     subtitleVersionLabel: input.subtitleVersionLabel,
     transcriptCharCount: input.transcriptText.length,
     transcriptChunkCount: input.transcriptChunks.length,
+    focusedTranscriptChunkCount: input.focusedTranscriptChunks?.length,
+    contextTranscriptChunkCount: input.contextTranscriptChunks?.length,
+    contextTranscriptTruncated: input.contextTranscriptTruncated,
     subtitleChunkCount: input.subtitleChunks?.length ?? 0,
   };
 }

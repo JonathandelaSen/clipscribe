@@ -18,7 +18,14 @@ export type EditorExportEngine = "system";
 export type EditorAssetSource = "history" | "upload" | "youtube";
 export type EditorAssetKind = "video" | "audio" | "image";
 export type EditorAssetRole = "source" | "derived" | "support";
-export type EditorAssetOrigin = "upload" | "short-export" | "timeline-export" | "manual" | "ai-audio" | "youtube-import";
+export type EditorAssetOrigin =
+  | "upload"
+  | "short-export"
+  | "timeline-export"
+  | "manual"
+  | "ai-audio"
+  | "ai-image"
+  | "youtube-import";
 
 export type EditorSubtitlePreset = CreatorVerticalEditorPreset["subtitleStyle"];
 export const EDITOR_SUBTITLE_TRACK_ID = "subtitle-track";

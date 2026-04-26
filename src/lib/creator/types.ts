@@ -9,10 +9,11 @@ import type {
 } from "@/lib/motion-overlays";
 
 export type CreatorAIProviderMode = "mock" | "openai" | "gemini";
-export type CreatorLLMFeature = "shorts" | "video_info";
+export type CreatorLLMFeature = "shorts" | "video_info" | "images";
 export type CreatorLLMProvider = "openai" | "gemini";
-export type CreatorLLMOperation = "generate_shorts" | "generate_video_info";
-export type CreatorPromptProfileFamily = "video_info" | "shorts";
+export type CreatorLLMOperation = "generate_shorts" | "generate_video_info" | "generate_image";
+export type CreatorVideoInfoMetadataTarget = "youtube_video" | "youtube_short_publish";
+export type CreatorPromptProfileFamily = "video_info" | "shorts" | "images";
 export type CreatorPromptCustomizationMode = "default" | "global_customized" | "run_override";
 export type CreatorPromptSlotOverrideMode = "inherit" | "replace" | "omit";
 export type CreatorLLMApiKeySource = "header" | "env";
@@ -39,6 +40,7 @@ export interface CreatorAIFeatureSettings {
 export interface CreatorAIFeatureSettingsMap {
   shorts?: CreatorAIFeatureSettings;
   video_info?: CreatorAIFeatureSettings;
+  images?: CreatorAIFeatureSettings;
 }
 
 export interface CreatorFeatureModelOption {
@@ -61,6 +63,31 @@ export interface CreatorTextFeatureConfigResponse {
   apiKeySource?: CreatorLLMApiKeySource;
 }
 
+export type CreatorImageModelFamily = "openai_image" | "google_imagen" | "google_gemini_image";
+export type CreatorImageAspectRatio = "1:1" | "16:9" | "9:16" | "4:5" | "3:4";
+export type CreatorImageQuality = "auto" | "low" | "medium" | "high";
+export type CreatorImageFormat = "png" | "jpeg" | "webp";
+
+export interface CreatorImageModelOption {
+  value: string;
+  label: string;
+  provider: CreatorLLMProvider;
+  family: CreatorImageModelFamily;
+  source: "catalog";
+}
+
+export interface CreatorImageFeatureConfigResponse {
+  feature: "images";
+  provider: CreatorLLMProvider;
+  defaultProvider: CreatorLLMProvider;
+  allowedProviders: CreatorLLMProvider[];
+  defaultModel: string;
+  models: CreatorImageModelOption[];
+  modelSource: "catalog";
+  hasApiKey: boolean;
+  apiKeySource?: CreatorLLMApiKeySource;
+}
+
 
 export type CreatorVideoInfoBlock =
   | "titleIdeas"
@@ -73,6 +100,7 @@ export type CreatorVideoInfoBlock =
   | "insights";
 
 export type CreatorVideoInfoPromptSlot = "persona";
+export type CreatorImagePromptSlot = "persona" | "style";
 
 export interface CreatorPromptSlotOverride {
   mode: CreatorPromptSlotOverrideMode;
@@ -87,14 +115,27 @@ export interface CreatorVideoInfoPromptProfile {
 
 export type CreatorShortsPromptProfile = Record<string, never>;
 
+export interface CreatorImagePromptProfile {
+  slotOverrides?: Partial<Record<CreatorImagePromptSlot, CreatorPromptSlotOverride>>;
+  globalInstructions?: string;
+}
+
 export interface CreatorPromptProfiles {
   video_info?: CreatorVideoInfoPromptProfile;
   shorts?: CreatorShortsPromptProfile;
+  images?: CreatorImagePromptProfile;
 }
 
 export interface CreatorVideoInfoPromptCustomizationSnapshot {
   mode: CreatorPromptCustomizationMode;
   effectiveProfile: CreatorVideoInfoPromptProfile;
+  hash?: string;
+  editedSections?: string[];
+}
+
+export interface CreatorImagePromptCustomizationSnapshot {
+  mode: CreatorPromptCustomizationMode;
+  effectiveProfile: CreatorImagePromptProfile;
   hash?: string;
   editedSections?: string[];
 }
@@ -107,6 +148,11 @@ export interface CreatorGenerationSourceInput {
   sourceSignature?: string;
   transcriptText: string;
   transcriptChunks: SubtitleChunk[];
+  focusedTranscriptText?: string;
+  focusedTranscriptChunks?: SubtitleChunk[];
+  contextTranscriptText?: string;
+  contextTranscriptChunks?: SubtitleChunk[];
+  contextTranscriptTruncated?: boolean;
   subtitleChunks?: SubtitleChunk[];
   transcriptVersionLabel?: string;
   subtitleVersionLabel?: string;
@@ -129,14 +175,24 @@ export interface CreatorLLMRunInputSummary {
   subtitleVersionLabel?: string;
   transcriptCharCount: number;
   transcriptChunkCount: number;
+  focusedTranscriptChunkCount?: number;
+  contextTranscriptChunkCount?: number;
+  contextTranscriptTruncated?: boolean;
   subtitleChunkCount: number;
   niche?: string;
   audience?: string;
   tone?: string;
   videoInfoBlocks?: CreatorVideoInfoBlock[];
+  metadataTarget?: CreatorVideoInfoMetadataTarget;
   promptCustomizationMode?: CreatorPromptCustomizationMode;
   promptCustomizationHash?: string;
   promptEditedSections?: string[];
+  imagePromptCharCount?: number;
+  imageAspectRatio?: CreatorImageAspectRatio;
+  imageSize?: string;
+  imageQuality?: CreatorImageQuality;
+  imageFormat?: CreatorImageFormat;
+  imageCount?: number;
 }
 
 export interface CreatorLLMRunRecord {
@@ -184,8 +240,21 @@ export interface CreatorShortsGenerateRequest extends CreatorGenerationSourceInp
 }
 
 export interface CreatorVideoInfoGenerateRequest extends CreatorGenerationSourceInput {
+  metadataTarget?: CreatorVideoInfoMetadataTarget;
   videoInfoBlocks?: CreatorVideoInfoBlock[];
   promptCustomization?: CreatorVideoInfoPromptCustomizationSnapshot;
+}
+
+export interface CreatorImageGenerateRequest {
+  projectId?: string;
+  prompt: string;
+  aspectRatio?: CreatorImageAspectRatio;
+  size?: string;
+  quality?: CreatorImageQuality;
+  outputFormat?: CreatorImageFormat;
+  count?: number;
+  generationConfig?: CreatorGenerationConfig;
+  promptCustomization?: CreatorImagePromptCustomizationSnapshot;
 }
 
 export interface CreatorChapter {
@@ -264,6 +333,26 @@ export interface CreatorVideoInfoGenerateResponse extends CreatorGenerationRespo
   insights: CreatorInsights;
 }
 
+export interface CreatorGeneratedImage {
+  id: string;
+  base64: string;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  filename: string;
+  revisedPrompt?: string;
+}
+
+export interface CreatorImageGenerateResponse extends CreatorGenerationResponseMeta {
+  prompt: string;
+  promptPreview: string;
+  aspectRatio: CreatorImageAspectRatio;
+  size: string;
+  quality: CreatorImageQuality;
+  outputFormat: CreatorImageFormat;
+  images: CreatorGeneratedImage[];
+}
+
 export interface CreatorVideoInfoProjectRecordInputSummary {
   transcriptId?: string;
   subtitleId?: string;
@@ -271,6 +360,10 @@ export interface CreatorVideoInfoProjectRecordInputSummary {
   subtitleVersionLabel?: string;
   sourceSignature?: string;
   videoInfoBlocks: CreatorVideoInfoBlock[];
+  metadataTarget?: CreatorVideoInfoMetadataTarget;
+  focusedTranscriptChunkCount?: number;
+  contextTranscriptChunkCount?: number;
+  contextTranscriptTruncated?: boolean;
   provider?: CreatorLLMProvider;
   model?: string;
   promptCustomizationMode?: CreatorPromptCustomizationMode;
@@ -285,6 +378,29 @@ export interface CreatorVideoInfoProjectRecord {
   sourceSignature?: string;
   inputSummary: CreatorVideoInfoProjectRecordInputSummary;
   analysis: CreatorVideoInfoGenerateResponse;
+}
+
+export interface CreatorImageProjectRecordInputSummary {
+  provider?: CreatorLLMProvider;
+  model?: string;
+  promptCustomizationMode?: CreatorPromptCustomizationMode;
+  promptCustomizationHash?: string;
+  promptEditedSections?: string[];
+  promptPreview: string;
+  aspectRatio: CreatorImageAspectRatio;
+  size: string;
+  quality: CreatorImageQuality;
+  outputFormat: CreatorImageFormat;
+  count: number;
+  estimatedCostUsd?: number | null;
+  estimatedCostSource?: CreatorLLMCostSource;
+}
+
+export interface CreatorImageProjectRecord {
+  id: string;
+  generatedAt: number;
+  assetIds: string[];
+  inputSummary: CreatorImageProjectRecordInputSummary;
 }
 
 export interface CreatorShortRenderRequest {

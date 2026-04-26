@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { Clapperboard, Download, Film, Languages, Link as LinkIcon, Loader2, MoreHorizontal, Pencil, Plus, Sparkles, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 
+import { AiImagesHub } from "@/components/creator/AiImagesHub";
 import { AiMetadataHub } from "@/components/creator/AiMetadataHub";
 import { ProjectYouTubeUploadList } from "@/components/creator/ProjectYouTubeUploadList";
 import { CreatorHub } from "@/components/CreatorHub";
@@ -30,7 +31,16 @@ import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
 import type { ProjectExportRecord } from "@/lib/projects/types";
 
-type WorkspaceTab = "assets" | "transcripts" | "voiceover" | "shorts" | "timeline" | "ai_metadata" | "publish" | "exports";
+type WorkspaceTab =
+  | "assets"
+  | "transcripts"
+  | "voiceover"
+  | "shorts"
+  | "timeline"
+  | "ai_metadata"
+  | "image_generation"
+  | "publish"
+  | "exports";
 
 function formatRelativeDate(timestamp: number) {
   return new Intl.DateTimeFormat("es", {
@@ -84,7 +94,16 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
   const initialExportId = searchParams.get("exportId") ?? undefined;
   const selectedUploadId = searchParams.get("uploadId") ?? undefined;
   const currentTab: WorkspaceTab =
-    tabParam === "transcripts" || tabParam === "voiceover" || tabParam === "shorts" || tabParam === "timeline" || tabParam === "ai_metadata" || tabParam === "publish" || tabParam === "exports" ? tabParam : "assets";
+    tabParam === "transcripts" ||
+    tabParam === "voiceover" ||
+    tabParam === "shorts" ||
+    tabParam === "timeline" ||
+    tabParam === "ai_metadata" ||
+    tabParam === "image_generation" ||
+    tabParam === "publish" ||
+    tabParam === "exports"
+      ? tabParam
+      : "assets";
   const publishView = resolveYouTubePublishView({
     requestedView: viewParam,
     assetId: initialAssetId,
@@ -103,8 +122,10 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     isLoading,
     error,
     refresh,
+    saveProject,
     saveVoiceoverDraft,
     saveGeneratedVoiceover,
+    saveGeneratedImageAssets,
     addAssets,
     renameAsset,
     deleteAsset,
@@ -518,6 +539,15 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
 
           {currentTab === "ai_metadata" && (
             <AiMetadataHub projectId={project.id} />
+          )}
+
+          {currentTab === "image_generation" && (
+            <AiImagesHub
+              project={project}
+              assets={assets}
+              saveProject={saveProject}
+              saveGeneratedImageAssets={saveGeneratedImageAssets}
+            />
           )}
 
           {currentTab === "publish" && (

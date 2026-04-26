@@ -30,6 +30,10 @@ export function buildProjectVideoInfoRecord(input: {
       subtitleVersionLabel: input.request.subtitleVersionLabel,
       sourceSignature: input.request.sourceSignature,
       videoInfoBlocks: input.request.videoInfoBlocks?.slice() ?? [],
+      metadataTarget: input.request.metadataTarget,
+      focusedTranscriptChunkCount: input.request.focusedTranscriptChunks?.length,
+      contextTranscriptChunkCount: input.request.contextTranscriptChunks?.length,
+      contextTranscriptTruncated: input.request.contextTranscriptTruncated,
       provider: input.response.providerMode === "openai" || input.response.providerMode === "gemini"
         ? input.response.providerMode
         : undefined,

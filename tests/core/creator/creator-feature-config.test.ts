@@ -7,6 +7,7 @@ import {
 } from "../../../src/lib/creator/user-ai-settings";
 import { loadCreatorTextFeatureConfig } from "../../../src/lib/server/creator/shared/feature-route-config";
 import { readCreatorFeatureEnvConfig } from "../../../src/lib/server/creator/shared/feature-config";
+import { loadCreatorImageFeatureConfig } from "../../../src/lib/server/creator/images/config";
 
 function withEnv<T>(updates: Record<string, string | undefined>, run: () => Promise<T> | T): Promise<T> | T {
   const previous = new Map<string, string | undefined>();
@@ -99,6 +100,49 @@ test("readCreatorFeatureEnvConfig respects OpenAI override for video_info", () =
       assert.equal(config.defaultProvider, "gemini");
       assert.deepEqual(config.allowedProviders, ["gemini", "openai"]);
       assert.equal(config.defaultModel, "gpt-4.1-mini");
+    }
+  );
+});
+
+test("readCreatorFeatureEnvConfig defaults images to OpenAI image models", () => {
+  withEnv(
+    {
+      CREATOR_IMAGES_PROVIDER: undefined,
+      CREATOR_IMAGES_MODEL: undefined,
+      OPENAI_CREATOR_IMAGES_MODEL: undefined,
+    },
+    () => {
+      const config = readCreatorFeatureEnvConfig("images");
+      assert.equal(config.provider, "openai");
+      assert.equal(config.defaultProvider, "openai");
+      assert.deepEqual(config.allowedProviders, ["openai", "gemini"]);
+      assert.equal(config.defaultModel, "gpt-image-2");
+    }
+  );
+});
+
+test("loadCreatorImageFeatureConfig returns image-only catalogs", async () => {
+  await withEnv(
+    {
+      CREATOR_IMAGES_PROVIDER: "gemini",
+      CREATOR_IMAGES_MODEL: "imagen-4.0-fast-generate-001",
+    },
+    async () => {
+      const config = await loadCreatorImageFeatureConfig(
+        new Headers({
+          [CREATOR_GEMINI_API_KEY_HEADER]: "AIza-demo",
+        }),
+        "gemini"
+      );
+
+      assert.equal(config.feature, "images");
+      assert.equal(config.provider, "gemini");
+      assert.equal(config.defaultModel, "imagen-4.0-fast-generate-001");
+      assert.equal(config.modelSource, "catalog");
+      assert.equal(config.hasApiKey, true);
+      assert.ok(config.models.some((model) => model.value === "imagen-4.0-generate-001"));
+      assert.ok(config.models.some((model) => model.value === "gemini-3.1-flash-image-preview"));
+      assert.equal(config.models.some((model) => model.value === "gemini-2.5-flash"), false);
     }
   );
 });

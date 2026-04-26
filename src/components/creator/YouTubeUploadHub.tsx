@@ -34,9 +34,18 @@ import {
 import { toast } from "sonner";
 
 import { readMediaMetadata } from "@/lib/editor/media";
+import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
+import { useCreatorTextFeatureConfig } from "@/hooks/useCreatorTextFeatureConfig";
+import { useCreatorVideoInfoGenerator } from "@/hooks/useCreatorVideoInfoGenerator";
 import { useProjectLibrary } from "@/hooks/useProjectLibrary";
-import { resolveProjectVideoInfoHistory } from "@/lib/creator/video-info-storage";
 import {
+  appendProjectVideoInfoRecord,
+  buildProjectVideoInfoRecord,
+  resolveProjectVideoInfoHistory,
+} from "@/lib/creator/video-info-storage";
+import { createVideoInfoPromptCustomizationSnapshot } from "@/lib/creator/prompt-customization";
+import {
+  buildYouTubeShortPublishPromptProfile,
   buildShortSuggestionPublishDraft,
   buildVideoInfoPublishDraft,
   buildProjectYouTubeUploadRecord,
@@ -47,13 +56,18 @@ import {
   resolveInitialYouTubePublishSelection,
   resolveYouTubeShortExportForProjectAsset,
   resolveYouTubeShortEligibility,
+  resolveYouTubeShortPublishTranscriptContext,
+  YOUTUBE_SHORT_PUBLISH_VIDEO_INFO_BLOCKS,
   YOUTUBE_SHORTS_MAX_DURATION_SECONDS,
   type YouTubePublishDraft,
   type YouTubePublishIntent,
   type YouTubePublishSourceMode,
+  type YouTubeShortPublishPromptInstructionDraft,
 } from "@/lib/creator/youtube-publish";
 import type { ProjectYouTubeUploadRecord } from "@/lib/projects/types";
 import type { CreatorShortProjectRecord } from "@/lib/creator/storage";
+import { getTranscriptById, type TranscriptVersion } from "@/lib/history";
+import { createDexieProjectRepository } from "@/lib/repositories/project-repo";
 import { normalizeYouTubeRegionCode, parseYouTubeTagsInput } from "@/lib/youtube/drafts";
 import { publishToYouTubeFromBrowser } from "@/lib/youtube/browser-upload";
 import type {
@@ -73,6 +87,7 @@ import type {
   YouTubeUploadDraft,
 } from "@/lib/youtube/types";
 import { cn } from "@/lib/utils";
+import { buildCreatorTextProviderHeaders } from "@/lib/creator/user-ai-settings";
 
 import { AiAutoloadPicker, AiAutoloadButton, type AutoloadField } from "@/components/creator/AiAutoloadPicker";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -122,6 +137,8 @@ type RelatedVideosPayload = {
   ok: true;
   videos: YouTubeRelatedVideoOption[];
 };
+
+const projectRepository = createDexieProjectRepository();
 
 function makeRowId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -376,7 +393,29 @@ export function YouTubeUploadHub({
     assetsByProjectId,
     exportsByProjectId,
     isLoading: isLoadingProjects,
+    saveProject,
   } = useProjectLibrary();
+  const {
+    openAIApiKey,
+    geminiApiKey,
+    videoInfoFeatureSettings,
+    videoInfoPromptProfile,
+  } = useCreatorAiSettings();
+  const creatorProviderHeaders = useMemo(
+    () => buildCreatorTextProviderHeaders({ openAIApiKey, geminiApiKey }),
+    [geminiApiKey, openAIApiKey]
+  );
+  const { config: videoInfoAiConfig } = useCreatorTextFeatureConfig("video_info", {
+    headers: creatorProviderHeaders,
+    provider: videoInfoFeatureSettings?.provider,
+  });
+  const {
+    videoInfoAnalysis: generatedPublishMetadata,
+    setVideoInfoAnalysis: setGeneratedPublishMetadata,
+    isGeneratingVideoInfo: isGeneratingPublishMetadata,
+    videoInfoError: publishMetadataError,
+    generateVideoInfo,
+  } = useCreatorVideoInfoGenerator();
   const isProjectLocked = !!projectId;
   const [selectedProjectId, setSelectedProjectId] = useState(projectId ?? "");
   const [sourceMode, setSourceMode] = useState<YouTubePublishSourceMode>("local_file");
@@ -428,6 +467,15 @@ export function YouTubeUploadHub({
     tagsInput: "",
   });
   const [hasManualDraftEdits, setHasManualDraftEdits] = useState(false);
+  const [shortPublishPromptDraft, setShortPublishPromptDraft] = useState<YouTubeShortPublishPromptInstructionDraft>({
+    globalInstructions: "",
+    titleInstructions: "",
+    descriptionInstructions: "",
+    tagsInstructions: "",
+  });
+  const [sourceTranscript, setSourceTranscript] = useState<TranscriptVersion | null>(null);
+  const [isLoadingSourceTranscript, setIsLoadingSourceTranscript] = useState(false);
+  const [sourceTranscriptError, setSourceTranscriptError] = useState<string | null>(null);
   const [privacyStatus, setPrivacyStatus] = useState<YouTubePrivacyStatus>("private");
   const [categoryId, setCategoryId] = useState("");
   const [defaultLanguage, setDefaultLanguage] = useState("");
@@ -584,6 +632,11 @@ export function YouTubeUploadHub({
     return selectedAssetShortExportOption;
   }, [selectedAssetShortExportOption, selectedExportOption, sourceMode]);
 
+  const activeShortProject = useMemo(
+    () => (activeShortExportOption?.shortProjectId ? shortProjectsById.get(activeShortExportOption.shortProjectId) ?? null : null),
+    [activeShortExportOption?.shortProjectId, shortProjectsById]
+  );
+
   const activeSourceAssetId = useMemo(() => {
     if (sourceMode === "project_asset") {
       return selectedAssetOption?.assetId ?? "";
@@ -593,6 +646,10 @@ export function YouTubeUploadHub({
     }
     return "";
   }, [selectedAssetOption?.assetId, selectedExportOption?.sourceAssetId, sourceMode]);
+
+  const publishMetadataSourceAssetId = useMemo(() => {
+    return activeShortExportOption?.sourceAssetId || activeSourceAssetId;
+  }, [activeShortExportOption?.sourceAssetId, activeSourceAssetId]);
 
   useEffect(() => {
     if (initialAssetId && eligibleProjectAssetOptions.some((option) => option.assetId === initialAssetId)) {
@@ -666,9 +723,9 @@ export function YouTubeUploadHub({
     () =>
       resolveMatchingVideoInfoRecord({
         history: projectVideoInfoHistory,
-        sourceAssetId: activeSourceAssetId,
+        sourceAssetId: publishMetadataSourceAssetId,
       }),
-    [activeSourceAssetId, projectVideoInfoHistory]
+    [projectVideoInfoHistory, publishMetadataSourceAssetId]
   );
   const matchingVideoInfoAnalysis = activeShortExportOption ? null : (matchingVideoInfoRecord?.analysis ?? null);
   const shortSuggestionPrefillDraft = useMemo(() => {
@@ -696,6 +753,86 @@ export function YouTubeUploadHub({
     ? sourceSelectionKey
     : activeMetadataSourceKey;
   const hasAutoloadMetadata = Boolean(preferredPrefillDraft) || hasAiGenerations;
+  const shortPublishTranscriptContext = useMemo(
+    () =>
+      resolveYouTubeShortPublishTranscriptContext({
+        transcript: sourceTranscript,
+        short: activeShortExportOption?.short ?? activeShortProject?.short,
+        clip: activeShortExportOption?.short ? null : activeShortExportOption?.clip ?? activeShortProject?.clip,
+        subtitleId: activeShortProject?.subtitleId,
+      }),
+    [
+      activeShortExportOption?.clip,
+      activeShortExportOption?.short,
+      activeShortProject?.clip,
+      activeShortProject?.short,
+      activeShortProject?.subtitleId,
+      sourceTranscript,
+    ]
+  );
+  const resolvedVideoInfoProvider = videoInfoFeatureSettings?.provider ?? videoInfoAiConfig?.provider ?? "gemini";
+  const resolvedVideoInfoModel = useMemo(() => {
+    const savedModel = videoInfoFeatureSettings?.model;
+    if (savedModel && videoInfoAiConfig?.models.some((option) => option.value === savedModel)) {
+      return savedModel;
+    }
+    return videoInfoAiConfig?.defaultModel ?? savedModel ?? "";
+  }, [videoInfoAiConfig?.defaultModel, videoInfoAiConfig?.models, videoInfoFeatureSettings?.model]);
+  const hasResolvedVideoInfoApiKey =
+    videoInfoAiConfig?.provider === resolvedVideoInfoProvider && videoInfoAiConfig.hasApiKey;
+  const canGeneratePublishMetadata =
+    publishIntent === "short" &&
+    Boolean(selectedProject) &&
+    Boolean(publishMetadataSourceAssetId) &&
+    Boolean(shortPublishTranscriptContext?.shortTranscriptChunks.length) &&
+    hasResolvedVideoInfoApiKey &&
+    !isGeneratingPublishMetadata;
+
+  useEffect(() => {
+    let canceled = false;
+    setSourceTranscript(null);
+    setSourceTranscriptError(null);
+
+    if (!publishMetadataSourceAssetId || publishIntent !== "short") {
+      setIsLoadingSourceTranscript(false);
+      return;
+    }
+
+    setIsLoadingSourceTranscript(true);
+    void projectRepository
+      .getAssetTranscript(publishMetadataSourceAssetId)
+      .then((record) => {
+        if (canceled) return;
+        const transcript = record
+          ? getTranscriptById(
+              {
+                id: record.assetId,
+                mediaId: record.assetId,
+                filename: "",
+                createdAt: record.createdAt,
+                updatedAt: record.updatedAt,
+                timestamp: record.timestamp,
+                activeTranscriptVersionId: record.activeTranscriptVersionId,
+                transcripts: record.transcripts,
+              },
+              activeShortProject?.transcriptId
+            )
+          : undefined;
+        setSourceTranscript(transcript ?? null);
+      })
+      .catch((error) => {
+        if (canceled) return;
+        setSourceTranscriptError(error instanceof Error ? error.message : "Failed to load source transcript.");
+      })
+      .finally(() => {
+        if (canceled) return;
+        setIsLoadingSourceTranscript(false);
+      });
+
+    return () => {
+      canceled = true;
+    };
+  }, [activeShortProject?.transcriptId, publishIntent, publishMetadataSourceAssetId]);
 
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -713,6 +850,10 @@ export function YouTubeUploadHub({
   useEffect(() => {
     setIsPublishIntentDirty(false);
   }, [sourceSelectionKey]);
+
+  useEffect(() => {
+    setGeneratedPublishMetadata(null);
+  }, [setGeneratedPublishMetadata, sourceSelectionKey]);
 
   useEffect(() => {
     if (isPublishIntentDirty) return;
@@ -1022,6 +1163,125 @@ export function YouTubeUploadHub({
     [preferredPrefillDraft, preferredPrefillKey, preferredPrefillSource]
   );
 
+  const updateShortPublishPromptDraft = useCallback(
+    (field: keyof YouTubeShortPublishPromptInstructionDraft, value: string) => {
+      setShortPublishPromptDraft((prev) => ({
+        ...prev,
+        [field]: value,
+      }));
+    },
+    []
+  );
+
+  const applyGeneratedPublishMetadata = useCallback(
+    (field: AutoloadField) => {
+      if (!generatedPublishMetadata) return;
+      const nextDraft = buildVideoInfoPublishDraft(generatedPublishMetadata);
+      setHasManualDraftEdits(true);
+      setPublishDraft((prev) => {
+        if (field === "title") return { ...prev, title: nextDraft.title };
+        if (field === "description") return { ...prev, description: nextDraft.description };
+        if (field === "tags") return { ...prev, tagsInput: nextDraft.tagsInput };
+        return nextDraft;
+      });
+      toast.success(field === "all" ? "AI metadata applied" : "AI field applied");
+    },
+    [generatedPublishMetadata]
+  );
+
+  const handleGeneratePublishMetadata = useCallback(async () => {
+    if (!selectedProject) {
+      toast.error("Choose a project before generating publish metadata.");
+      return;
+    }
+    if (!publishMetadataSourceAssetId) {
+      toast.error("This Short needs a source asset before metadata can be generated.");
+      return;
+    }
+    if (!shortPublishTranscriptContext?.shortTranscriptChunks.length) {
+      toast.error("This Short needs subtitle transcript context before metadata can be generated.");
+      return;
+    }
+    if (!hasResolvedVideoInfoApiKey) {
+      toast.error("Add a Creator AI key before generating publish metadata.");
+      return;
+    }
+
+    const clip = activeShortExportOption?.short ?? activeShortExportOption?.clip ?? activeShortProject?.short ?? activeShortProject?.clip;
+    const promptCustomization = createVideoInfoPromptCustomizationSnapshot({
+      globalProfile: videoInfoPromptProfile,
+      runProfile: buildYouTubeShortPublishPromptProfile(shortPublishPromptDraft),
+    });
+    const sourceSignatureParts = [
+      selectedProject.id,
+      publishMetadataSourceAssetId,
+      "youtube_short_publish",
+      shortPublishTranscriptContext.transcriptId,
+      shortPublishTranscriptContext.subtitleId ?? "subtitle",
+      clip ? `${clip.startSeconds}-${clip.endSeconds}` : "full-short-source",
+    ];
+    const request = {
+      projectId: selectedProject.id,
+      sourceAssetId: publishMetadataSourceAssetId,
+      transcriptId: shortPublishTranscriptContext.transcriptId,
+      subtitleId: shortPublishTranscriptContext.subtitleId,
+      sourceSignature: sourceSignatureParts.join(":"),
+      transcriptText: shortPublishTranscriptContext.shortTranscriptText,
+      transcriptChunks: shortPublishTranscriptContext.shortTranscriptChunks,
+      focusedTranscriptText: shortPublishTranscriptContext.shortTranscriptText,
+      focusedTranscriptChunks: shortPublishTranscriptContext.shortTranscriptChunks,
+      contextTranscriptText: shortPublishTranscriptContext.fullTranscriptText,
+      contextTranscriptChunks: shortPublishTranscriptContext.fullTranscriptChunks,
+      contextTranscriptTruncated: shortPublishTranscriptContext.contextTranscriptTruncated,
+      subtitleChunks: shortPublishTranscriptContext.shortTranscriptChunks,
+      transcriptVersionLabel: shortPublishTranscriptContext.transcriptVersionLabel,
+      subtitleVersionLabel: shortPublishTranscriptContext.subtitleVersionLabel,
+      metadataTarget: "youtube_short_publish" as const,
+      videoInfoBlocks: YOUTUBE_SHORT_PUBLISH_VIDEO_INFO_BLOCKS,
+      promptCustomization,
+      generationConfig: {
+        provider: resolvedVideoInfoProvider,
+        model: resolvedVideoInfoModel || undefined,
+      },
+    };
+
+    try {
+      const result = await generateVideoInfo(request, { headers: creatorProviderHeaders });
+      const newRecord = buildProjectVideoInfoRecord({
+        request,
+        response: result,
+      });
+      const updatedHistory = appendProjectVideoInfoRecord(projectVideoInfoHistory, newRecord);
+      await saveProject({
+        ...selectedProject,
+        youtubeVideoInfoHistory: updatedHistory,
+        youtubeVideoInfo: undefined,
+        updatedAt: Date.now(),
+        lastOpenedAt: Date.now(),
+      });
+      toast.success("Publish metadata generated");
+    } catch (error) {
+      console.error(error);
+    }
+  }, [
+    activeShortExportOption?.clip,
+    activeShortExportOption?.short,
+    activeShortProject?.clip,
+    activeShortProject?.short,
+    creatorProviderHeaders,
+    generateVideoInfo,
+    hasResolvedVideoInfoApiKey,
+    projectVideoInfoHistory,
+    publishMetadataSourceAssetId,
+    resolvedVideoInfoModel,
+    resolvedVideoInfoProvider,
+    saveProject,
+    selectedProject,
+    shortPublishPromptDraft,
+    shortPublishTranscriptContext,
+    videoInfoPromptProfile,
+  ]);
+
   const handleUpload = async () => {
     if (!activeVideoFile) return;
 
@@ -1123,6 +1383,17 @@ export function YouTubeUploadHub({
     { label: "License", value: formatOptionalLicense(license) },
   ];
   const publishIntentLabel = publishIntent === "short" ? "Short" : "Video";
+  const publishMetadataGenerateLabel = isGeneratingPublishMetadata ? "Generating..." : "Generate with AI";
+  const publishMetadataDisabledReason = (() => {
+    if (publishIntent !== "short") return "Switch publish intent to Short.";
+    if (!selectedProject) return "Choose a project.";
+    if (!publishMetadataSourceAssetId) return "Choose a source with project context.";
+    if (isLoadingSourceTranscript) return "Loading transcript.";
+    if (sourceTranscriptError) return sourceTranscriptError;
+    if (!shortPublishTranscriptContext?.shortTranscriptChunks.length) return "No Short transcript found for this source.";
+    if (!hasResolvedVideoInfoApiKey) return "Add a Creator AI key in metadata settings.";
+    return "";
+  })();
 
 
 
@@ -1752,6 +2023,151 @@ export function YouTubeUploadHub({
                       className="min-h-44 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
                     />
                   </div>
+
+                  {publishIntent === "short" ? (
+                    <div className="rounded-[24px] border border-cyan-300/15 bg-cyan-400/[0.06] p-4">
+                      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                          <div className="flex items-center gap-2 text-sm font-semibold text-cyan-50">
+                            <WandSparkles className="h-4 w-4 text-cyan-200" />
+                            AI publish metadata
+                          </div>
+                          <div className="mt-1 text-xs leading-relaxed text-cyan-50/70">
+                            Uses the Short transcript first, with the source video transcript as context when available.
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          className="bg-cyan-200 font-semibold text-zinc-950 hover:bg-cyan-100"
+                          onClick={() => void handleGeneratePublishMetadata()}
+                          disabled={!canGeneratePublishMetadata}
+                        >
+                          {isGeneratingPublishMetadata ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Sparkles className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          {publishMetadataGenerateLabel}
+                        </Button>
+                      </div>
+
+                      {publishMetadataDisabledReason ? (
+                        <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-cyan-50/65">
+                          {publishMetadataDisabledReason}
+                        </div>
+                      ) : null}
+                      {shortPublishTranscriptContext?.warning ? (
+                        <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/8 px-3 py-2 text-xs text-amber-50/80">
+                          {shortPublishTranscriptContext.warning}
+                        </div>
+                      ) : null}
+                      {shortPublishTranscriptContext?.contextTranscriptTruncated ? (
+                        <div className="mt-3 rounded-2xl border border-white/8 bg-black/20 px-3 py-2 text-xs text-cyan-50/65">
+                          Full context was trimmed around this Short for the AI request.
+                        </div>
+                      ) : null}
+                      {publishMetadataError ? (
+                        <div className="mt-3 rounded-2xl border border-red-400/25 bg-red-400/10 px-3 py-2 text-xs text-red-50">
+                          {publishMetadataError}
+                        </div>
+                      ) : null}
+
+                      <Accordion type="single" collapsible className="mt-4 rounded-2xl border border-white/8 bg-black/20 px-4">
+                        <AccordionItem value="prompt" className="border-white/8">
+                          <AccordionTrigger className="py-4 text-sm text-cyan-50 hover:no-underline">
+                            Prompt instructions
+                          </AccordionTrigger>
+                          <AccordionContent className="space-y-3 pb-4">
+                            <Textarea
+                              value={shortPublishPromptDraft.globalInstructions}
+                              onChange={(event) => updateShortPublishPromptDraft("globalInstructions", event.target.value)}
+                              placeholder="General instructions for this Short metadata"
+                              className="min-h-20 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
+                            />
+                            <div className="grid gap-3 md:grid-cols-3">
+                              <Textarea
+                                value={shortPublishPromptDraft.titleInstructions}
+                                onChange={(event) => updateShortPublishPromptDraft("titleInstructions", event.target.value)}
+                                placeholder="Title style"
+                                className="min-h-24 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
+                              />
+                              <Textarea
+                                value={shortPublishPromptDraft.descriptionInstructions}
+                                onChange={(event) => updateShortPublishPromptDraft("descriptionInstructions", event.target.value)}
+                                placeholder="Description style"
+                                className="min-h-24 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
+                              />
+                              <Textarea
+                                value={shortPublishPromptDraft.tagsInstructions}
+                                onChange={(event) => updateShortPublishPromptDraft("tagsInstructions", event.target.value)}
+                                placeholder="Tag strategy"
+                                className="min-h-24 border-white/10 bg-black/25 text-white placeholder:text-zinc-500"
+                              />
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+
+                      {generatedPublishMetadata ? (
+                        <div className="mt-4 space-y-3 rounded-2xl border border-white/8 bg-black/25 p-4">
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                              <div className="text-xs uppercase tracking-[0.22em] text-cyan-100/60">Generated preview</div>
+                              <div className="mt-2 text-sm font-medium text-white">
+                                {generatedPublishMetadata.youtube.titleIdeas[0] || "Untitled Short"}
+                              </div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              className="bg-white text-black hover:bg-zinc-200"
+                              onClick={() => applyGeneratedPublishMetadata("all")}
+                            >
+                              Apply all
+                            </Button>
+                          </div>
+                          <div className="grid gap-3">
+                            <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">Title</div>
+                                <Button type="button" variant="ghost" size="sm" className="text-cyan-100 hover:bg-white/10 hover:text-white" onClick={() => applyGeneratedPublishMetadata("title")}>
+                                  Apply title
+                                </Button>
+                              </div>
+                              <div className="text-sm text-white/85">{generatedPublishMetadata.youtube.titleIdeas[0]}</div>
+                            </div>
+                            <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">Description</div>
+                                <Button type="button" variant="ghost" size="sm" className="text-cyan-100 hover:bg-white/10 hover:text-white" onClick={() => applyGeneratedPublishMetadata("description")}>
+                                  Apply description
+                                </Button>
+                              </div>
+                              <div className="max-h-28 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-white/75">
+                                {generatedPublishMetadata.youtube.description}
+                              </div>
+                            </div>
+                            <div className="rounded-xl border border-white/8 bg-white/[0.03] p-3">
+                              <div className="mb-2 flex items-center justify-between gap-3">
+                                <div className="text-xs font-medium uppercase tracking-[0.18em] text-zinc-500">Tags</div>
+                                <Button type="button" variant="ghost" size="sm" className="text-cyan-100 hover:bg-white/10 hover:text-white" onClick={() => applyGeneratedPublishMetadata("tags")}>
+                                  Apply tags
+                                </Button>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {generatedPublishMetadata.youtube.hashtags.map((tag) => (
+                                  <span key={tag} className="rounded-full border border-cyan-300/15 bg-cyan-400/5 px-2 py-0.5 text-[11px] text-cyan-100">
+                                    {tag}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
 
                   <div className="grid gap-2 sm:grid-cols-2">
                     <div className="grid gap-2">

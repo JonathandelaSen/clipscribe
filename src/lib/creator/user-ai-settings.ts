@@ -1,5 +1,5 @@
 import { sanitizeCreatorFeatureSettings } from "./ai";
-import { sanitizeVideoInfoPromptProfile } from "./prompt-customization";
+import { sanitizeImagePromptProfile, sanitizeVideoInfoPromptProfile } from "./prompt-customization";
 import type { CreatorAIFeatureSettingsMap, CreatorLLMFeature, CreatorPromptProfiles } from "./types";
 
 export const CREATOR_OPENAI_API_KEY_HEADER = "x-creator-openai-api-key";
@@ -64,7 +64,7 @@ function sanitizeFeatureSettings(raw: unknown): CreatorAIFeatureSettingsMap | un
   if (!isRecord(raw)) return undefined;
 
   const featureSettings: CreatorAIFeatureSettingsMap = {};
-  for (const feature of ["shorts", "video_info"] as CreatorLLMFeature[]) {
+  for (const feature of ["shorts", "video_info", "images"] as CreatorLLMFeature[]) {
     const next = sanitizeCreatorFeatureSettings(raw[feature], feature);
     if (next) {
       featureSettings[feature] = next;
@@ -93,6 +93,10 @@ export function readCreatorAISettings(storage: StorageLike): CreatorAISettings |
     const videoInfoProfile = sanitizeVideoInfoPromptProfile(rawPromptProfiles?.video_info);
     if (videoInfoProfile) {
       promptProfiles.video_info = videoInfoProfile;
+    }
+    const imageProfile = sanitizeImagePromptProfile(rawPromptProfiles?.images);
+    if (imageProfile) {
+      promptProfiles.images = imageProfile;
     }
     const updatedAt = Number(parsed.updatedAt ?? Date.now());
     const settings: CreatorAISettings = {
@@ -131,6 +135,10 @@ export function writeCreatorAISettings(
   const videoInfoProfile = sanitizeVideoInfoPromptProfile(input.promptProfiles?.video_info);
   if (videoInfoProfile) {
     nextPromptProfiles.video_info = videoInfoProfile;
+  }
+  const imageProfile = sanitizeImagePromptProfile(input.promptProfiles?.images);
+  if (imageProfile) {
+    nextPromptProfiles.images = imageProfile;
   }
 
   const next: CreatorAISettings = {
