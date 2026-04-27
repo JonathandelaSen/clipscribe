@@ -250,6 +250,7 @@ test("Gemini voiceover draft normalization preserves TTS options", () => {
       { speaker: "Sam", voiceName: "Puck" },
     ],
     stylePrompt: "Fast and bright",
+    speed: 0.85,
     generationConfig: {
       temperature: 0.8,
       topP: 0.9,
@@ -272,6 +273,7 @@ test("Gemini voiceover draft normalization preserves TTS options", () => {
     { speaker: "Sam", voiceName: "Puck" },
   ]);
   assert.equal(draft.stylePrompt, "Fast and bright");
+  assert.equal(draft.speed, 0.85);
   assert.deepEqual(draft.generationConfig, {
     temperature: 0.8,
     topP: 0.9,

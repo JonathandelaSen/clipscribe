@@ -205,7 +205,7 @@ function parseRequest(body: unknown): VoiceoverGenerateRequest {
   const generationConfig = normalizeGeminiGenerationConfig(
     isRecord(body.generationConfig) ? body.generationConfig : undefined
   );
-  const speed = provider === "openai" ? normalizeOpenAITtsSpeed(body.speed) ?? DEFAULT_OPENAI_TTS_SPEED : undefined;
+  const speed = provider === "openai" || provider === "gemini" ? normalizeOpenAITtsSpeed(body.speed) ?? DEFAULT_OPENAI_TTS_SPEED : undefined;
   const outputFormat = body.outputFormat;
 
   if (!projectId) {

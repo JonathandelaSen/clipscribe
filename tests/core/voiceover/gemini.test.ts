@@ -63,6 +63,7 @@ test("geminiVoiceoverAdapter sends single-speaker TTS payload and wraps PCM as W
     languageCode: "es-ES",
     speakerMode: "single",
     stylePrompt: "Warm, close mic, energetic pace.",
+    speed: 1.25,
     outputFormat: "wav",
     apiKey: "AIza-test",
     apiKeySource: "voiceover_settings",
@@ -80,6 +81,7 @@ test("geminiVoiceoverAdapter sends single-speaker TTS payload and wraps PCM as W
               "",
               "### DIRECTOR'S NOTES",
               "Warm, close mic, energetic pace.",
+              "Pacing: Speak a little faster than normal while keeping pronunciation clear. Target pace multiplier: 1.25.",
               "",
               "### TRANSCRIPT",
               "Hola [whispers] mundo",
@@ -103,6 +105,7 @@ test("geminiVoiceoverAdapter sends single-speaker TTS payload and wraps PCM as W
   });
   assert.equal(result.provider, "gemini");
   assert.equal(result.voiceName, "Kore");
+  assert.equal(result.speed, 1.25);
   assert.equal(result.mimeType, "audio/wav");
   assert.equal(Buffer.from(result.bytes.slice(0, 4)).toString("ascii"), "RIFF");
   assert.deepEqual(result.usage, {

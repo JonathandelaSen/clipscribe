@@ -230,9 +230,20 @@ async function transcodePcmToMp3(pcm: Uint8Array): Promise<Uint8Array> {
   });
 }
 
-function buildGeminiPrompt(scriptText: string, stylePrompt?: string): string {
+function describeGeminiPacing(speed?: number): string | null {
+  if (speed == null || !Number.isFinite(speed)) return null;
+  if (speed < 0.75) return `Pacing: Speak very slowly and clearly. Target pace multiplier: ${speed}.`;
+  if (speed < 0.95) return `Pacing: Speak slower than normal with deliberate pauses. Target pace multiplier: ${speed}.`;
+  if (speed <= 1.05) return `Pacing: Speak at a natural normal pace. Target pace multiplier: ${speed}.`;
+  if (speed <= 1.35) return `Pacing: Speak a little faster than normal while keeping pronunciation clear. Target pace multiplier: ${speed}.`;
+  if (speed <= 1.75) return `Pacing: Speak fast and energetic, but do not rush words together. Target pace multiplier: ${speed}.`;
+  return `Pacing: Speak very fast while preserving intelligibility. Target pace multiplier: ${speed}.`;
+}
+
+function buildGeminiPrompt(scriptText: string, stylePrompt?: string, speed?: number): string {
   const trimmedStyle = stylePrompt?.trim() ?? "";
-  if (!trimmedStyle) {
+  const pacing = describeGeminiPacing(speed);
+  if (!trimmedStyle && !pacing) {
     return `Synthesize speech from the transcript below.\n\n### TRANSCRIPT\n${scriptText}`;
   }
 
@@ -240,7 +251,7 @@ function buildGeminiPrompt(scriptText: string, stylePrompt?: string): string {
     "Synthesize speech from the transcript below. Follow the director's notes, but only speak the transcript.",
     "",
     "### DIRECTOR'S NOTES",
-    trimmedStyle,
+    ...[trimmedStyle, pacing].filter(Boolean),
     "",
     "### TRANSCRIPT",
     scriptText,
@@ -340,7 +351,7 @@ export const geminiVoiceoverAdapter: VoiceoverProviderAdapter = {
             {
               parts: [
                 {
-                  text: buildGeminiPrompt(input.scriptText, input.stylePrompt),
+                  text: buildGeminiPrompt(input.scriptText, input.stylePrompt, input.speed),
                 },
               ],
             },
@@ -393,6 +404,7 @@ export const geminiVoiceoverAdapter: VoiceoverProviderAdapter = {
       languageCode: input.languageCode,
       speakerMode,
       speakers: speakerMode === "multi" ? normalizeSpeakers(input.speakers) : undefined,
+      speed: input.speed,
       outputFormat: input.outputFormat,
       mimeType,
       extension,

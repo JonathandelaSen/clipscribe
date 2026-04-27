@@ -255,6 +255,7 @@ function buildGeminiRunSettingItems(record: ProjectVoiceoverRecord): Array<{ lab
   const generationConfig = record.generationConfig ?? {};
   return [
     { label: "Voice", value: getVoiceoverVoiceLabel(record) },
+    { label: "Speed", value: formatGeminiSettingValue(record.speed, String(DEFAULT_OPENAI_TTS_SPEED)) },
     { label: "Language", value: record.languageCode || "Auto" },
     { label: "Speaker mode", value: record.speakerMode === "multi" ? "Two speakers" : "Single" },
     { label: "Director notes", value: record.stylePrompt?.trim() ? "Yes" : "No" },
@@ -677,7 +678,7 @@ export function ProjectVoiceoverWorkspace({
       speakers: draft.provider === "gemini" && draft.speakerMode === "multi" ? draft.speakers : undefined,
       stylePrompt: draft.provider === "gemini" ? draft.stylePrompt : undefined,
       generationConfig: draft.provider === "gemini" ? draft.generationConfig : undefined,
-      speed: draft.provider === "openai" ? draft.speed ?? DEFAULT_OPENAI_TTS_SPEED : undefined,
+      speed: draft.provider === "openai" || draft.provider === "gemini" ? draft.speed ?? DEFAULT_OPENAI_TTS_SPEED : undefined,
       outputFormat: draft.outputFormat,
     };
   };
@@ -835,7 +836,7 @@ export function ProjectVoiceoverWorkspace({
                                 ? current.voiceName || nextConfig?.defaultVoiceName || DEFAULT_OPENAI_TTS_VOICE
                                 : current.voiceName,
                           speakerMode: provider === "gemini" ? current.speakerMode ?? "single" : current.speakerMode,
-                          speed: provider === "openai" ? current.speed ?? DEFAULT_OPENAI_TTS_SPEED : current.speed,
+                          speed: provider === "openai" || provider === "gemini" ? current.speed ?? DEFAULT_OPENAI_TTS_SPEED : current.speed,
                           speakers:
                             provider === "gemini"
                               ? current.speakers ?? [
@@ -911,7 +912,7 @@ export function ProjectVoiceoverWorkspace({
 
               <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto]">
                 {isGeminiProvider ? (
-                  <div className="grid gap-4 lg:grid-cols-3">
+                  <div className="grid gap-4 lg:grid-cols-4">
                     <div className="space-y-2">
                       <Label htmlFor="voiceover-gemini-voice" className="text-white/80">
                         Voice
@@ -987,6 +988,27 @@ export function ProjectVoiceoverWorkspace({
                           <SelectItem value="multi">Two speakers</SelectItem>
                         </SelectContent>
                       </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-gemini-speed" className="text-white/80">
+                        Speed
+                      </Label>
+                      <Input
+                        id="voiceover-gemini-speed"
+                        type="number"
+                        min="0.25"
+                        max="4"
+                        step="0.05"
+                        value={String(draft.speed ?? DEFAULT_OPENAI_TTS_SPEED)}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            speed: event.target.value.trim() ? Number(event.target.value) : undefined,
+                          }))
+                        }
+                        placeholder="1.0"
+                      />
                     </div>
                   </div>
                 ) : isOpenAIProvider ? (
@@ -1781,7 +1803,7 @@ export function ProjectVoiceoverWorkspace({
                       },
                     ]
                   : []),
-                ...(isOpenAIProvider
+                ...(isOpenAIProvider || isGeminiProvider
                   ? [
                       {
                         label: "Speed",

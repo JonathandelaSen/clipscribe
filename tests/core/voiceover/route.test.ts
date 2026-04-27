@@ -263,6 +263,7 @@ test("voiceover route uses the Gemini header key and does not require an ElevenL
         provider: "gemini",
         model: "gemini-3.1-flash-tts-preview",
         voiceName: "Kore",
+        speed: 0.85,
         outputFormat: "wav",
       }),
     })
@@ -272,6 +273,7 @@ test("voiceover route uses the Gemini header key and does not require an ElevenL
   assert.equal(seenApiKey, "AIza-header-key");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.provider), "gemini");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice), "Kore");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.speed), "0.85");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.promptTokens), "4");
   assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.completionTokens), "25");
   assert.deepEqual((capturedBody as { generationConfig: unknown }).generationConfig, {
