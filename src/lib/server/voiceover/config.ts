@@ -5,6 +5,8 @@ const ELEVENLABS_VOICE_ID_ENV_KEYS = ["ELEVENLABS_VOICE_ID", "ELEVEN_LABS_VOICE_
 const ELEVENLABS_MODEL_ENV_KEYS = ["ELEVENLABS_MODEL", "ELEVEN_LABS_MODEL", "EVELEN_LABS_MODEL"] as const;
 const GEMINI_API_KEY_ENV_KEYS = ["CREATOR_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"] as const;
 const GEMINI_TTS_MODEL_ENV_KEYS = ["VOICEOVER_GEMINI_MODEL", "GEMINI_TTS_MODEL", "CREATOR_VOICEOVER_GEMINI_MODEL"] as const;
+const OPENAI_API_KEY_ENV_KEYS = ["CREATOR_OPENAI_API_KEY", "OPENAI_API_KEY"] as const;
+const OPENAI_TTS_MODEL_ENV_KEYS = ["VOICEOVER_OPENAI_MODEL", "OPENAI_TTS_MODEL", "CREATOR_VOICEOVER_OPENAI_MODEL"] as const;
 
 function readFirstEnvValue(keys: readonly string[]): string {
   for (const key of keys) {
@@ -37,10 +39,19 @@ export function readGeminiDefaultModelFromEnv(): string {
   return resolveVoiceoverModelSelection(readFirstEnvValue(GEMINI_TTS_MODEL_ENV_KEYS), "gemini");
 }
 
+export function readOpenAIApiKeyFromEnv(): string {
+  return readFirstEnvValue(OPENAI_API_KEY_ENV_KEYS);
+}
+
+export function readOpenAIDefaultModelFromEnv(): string {
+  return resolveVoiceoverModelSelection(readFirstEnvValue(OPENAI_TTS_MODEL_ENV_KEYS), "openai");
+}
+
 export function readProjectVoiceoverConfigFromEnv() {
   const apiKey = readElevenLabsApiKeyFromEnv();
   const voiceId = readElevenLabsDefaultVoiceIdFromEnv();
   const geminiApiKey = readGeminiApiKeyFromEnv();
+  const openAIApiKey = readOpenAIApiKeyFromEnv();
   return buildDefaultProjectVoiceoverConfig({
     defaultModel: readElevenLabsDefaultModelFromEnv(),
     defaultVoiceId: "",
@@ -51,5 +62,8 @@ export function readProjectVoiceoverConfigFromEnv() {
     geminiDefaultModel: readGeminiDefaultModelFromEnv(),
     geminiHasApiKey: Boolean(geminiApiKey),
     geminiMaskedApiKey: maskVoiceoverSecret(geminiApiKey),
+    openAIDefaultModel: readOpenAIDefaultModelFromEnv(),
+    openAIHasApiKey: Boolean(openAIApiKey),
+    openAIMaskedApiKey: maskVoiceoverSecret(openAIApiKey),
   });
 }

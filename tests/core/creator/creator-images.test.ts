@@ -25,7 +25,8 @@ test("generateCreatorImages normalizes OpenAI image responses and traces the run
       assert.match(String(input), /api\.openai\.com\/v1\/images\/generations/);
       const body = JSON.parse(String(init?.body));
       assert.equal(body.model, "gpt-image-2");
-      assert.equal(body.prompt, "A glossy product photo");
+      assert.match(body.prompt, /Frame instruction: Compose for a 1:1 square frame\./);
+      assert.match(body.prompt, /A glossy product photo/);
       return new Response(
         JSON.stringify({
           data: [{ b64_json: Buffer.from("fake-png").toString("base64"), revised_prompt: "Revised" }],
@@ -56,6 +57,7 @@ test("generateCreatorImages normalizes OpenAI image responses and traces the run
       );
 
       assert.equal(result.response.providerMode, "openai");
+      assert.match(result.response.promptPreview, /Frame instruction: Compose for a 1:1 square frame\./);
       assert.equal(result.response.images.length, 1);
       assert.equal(result.response.images[0]?.mimeType, "image/png");
       assert.equal(result.llmRun?.feature, "images");
@@ -65,6 +67,55 @@ test("generateCreatorImages normalizes OpenAI image responses and traces the run
       assert.equal(result.llmRun?.usage?.totalTokens, 50);
       assert.equal(result.llmRun?.estimatedCostSource, "estimated");
       assert.doesNotMatch(JSON.stringify(result.llmRun?.responsePayloadRaw), /fake-png/);
+    }
+  );
+});
+
+test("generateCreatorImages sends OpenAI frame requests through the prompt and fixed size", async () => {
+  await withMockFetch(
+    async (input, init) => {
+      assert.match(String(input), /api\.openai\.com\/v1\/images\/generations/);
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "gpt-image-2");
+      assert.equal(body.size, "1536x1024");
+      assert.equal(body.aspectRatio, undefined);
+      assert.match(body.prompt, /Frame instruction: Compose for a 16:9 wide landscape frame\./);
+      assert.match(body.prompt, /A cinematic product banner/);
+      return new Response(
+        JSON.stringify({
+          data: [{ b64_json: Buffer.from("wide").toString("base64") }],
+          size: "1536x1024",
+          quality: "medium",
+          output_format: "png",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    },
+    async () => {
+      const result = await generateCreatorImages(
+        {
+          prompt: "A cinematic product banner",
+          aspectRatio: "16:9",
+          quality: "medium",
+          outputFormat: "png",
+          generationConfig: {
+            provider: "openai",
+            model: "gpt-image-2",
+          },
+        },
+        {
+          headers: new Headers({
+            [CREATOR_OPENAI_API_KEY_HEADER]: "sk-demo",
+          }),
+        }
+      );
+
+      assert.equal(result.response.size, "1536x1024");
+      assert.equal(result.response.aspectRatio, "16:9");
+      assert.match(result.response.promptPreview, /Frame instruction: Compose for a 16:9 wide landscape frame\./);
+      const requestPayloadRaw = result.llmRun?.requestPayloadRaw;
+      assert.ok(requestPayloadRaw && typeof requestPayloadRaw === "object" && !Array.isArray(requestPayloadRaw));
+      assert.equal((requestPayloadRaw as { aspectRatio?: unknown }).aspectRatio, "16:9");
     }
   );
 });

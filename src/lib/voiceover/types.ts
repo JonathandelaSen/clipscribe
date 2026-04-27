@@ -49,6 +49,7 @@ export interface ProjectVoiceoverDraft {
   speakers?: VoiceoverSpeakerConfig[];
   stylePrompt?: string;
   generationConfig?: VoiceoverGeminiGenerationConfig;
+  speed?: number;
   useDefaultVoiceId: boolean;
   outputFormat: VoiceoverOutputFormat;
 }
@@ -68,6 +69,7 @@ export interface ProjectVoiceoverRecord {
   speakers?: VoiceoverSpeakerConfig[];
   stylePrompt?: string;
   generationConfig?: VoiceoverGeminiGenerationConfig;
+  speed?: number;
   outputFormat: VoiceoverOutputFormat;
   sourceFilename?: string;
   apiKeySource?: VoiceoverApiKeySource;
@@ -87,6 +89,7 @@ export interface VoiceoverGenerateRequest {
   speakers?: VoiceoverSpeakerConfig[];
   stylePrompt?: string;
   generationConfig?: VoiceoverGeminiGenerationConfig;
+  speed?: number;
   useDefaultVoiceId?: boolean;
   outputFormat: VoiceoverOutputFormat;
 }
@@ -99,6 +102,7 @@ export interface VoiceoverGenerateResponseMeta {
   languageCode?: string;
   speakerMode?: VoiceoverSpeakerMode;
   speakers?: VoiceoverSpeakerConfig[];
+  speed?: number;
   outputFormat: VoiceoverOutputFormat;
   apiKeySource?: VoiceoverApiKeySource;
   maskedApiKey?: string;

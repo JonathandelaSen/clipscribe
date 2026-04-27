@@ -1,19 +1,25 @@
-import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, buildVoiceoverResponseHeaders } from "@/lib/voiceover/contracts";
+import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_OPENAI_API_KEY_HEADER, buildVoiceoverResponseHeaders } from "@/lib/voiceover/contracts";
 import type { VoiceoverApiKeySource, VoiceoverGenerateRequest, VoiceoverSpeakerConfig } from "@/lib/voiceover/types";
 import { generateProjectVoiceover } from "@/lib/server/voiceover/service";
 import {
   readElevenLabsApiKeyFromEnv,
   readGeminiApiKeyFromEnv,
   readGeminiDefaultModelFromEnv,
+  readOpenAIApiKeyFromEnv,
+  readOpenAIDefaultModelFromEnv,
   readProjectVoiceoverConfigFromEnv,
   readElevenLabsDefaultModelFromEnv,
 } from "@/lib/server/voiceover/config";
 import {
   DEFAULT_GEMINI_TTS_VOICE,
+  DEFAULT_OPENAI_TTS_SPEED,
+  DEFAULT_OPENAI_TTS_VOICE,
   GEMINI_TTS_LANGUAGE_OPTIONS,
   GEMINI_TTS_VOICE_OPTIONS,
+  OPENAI_TTS_VOICE_OPTIONS,
   maskVoiceoverSecret,
   normalizeGeminiGenerationConfig,
+  normalizeOpenAITtsSpeed,
 } from "@/lib/voiceover/utils";
 import { VoiceoverError } from "@/lib/server/voiceover/errors";
 
@@ -88,6 +94,35 @@ function getRequiredGeminiApiKey(headers: Pick<Headers, "get">): {
   };
 }
 
+function getRequiredOpenAIApiKey(headers: Pick<Headers, "get">): {
+  apiKey: string;
+  apiKeySource: VoiceoverApiKeySource;
+  maskedApiKey: string;
+} {
+  const headerApiKey = headers.get(VOICEOVER_OPENAI_API_KEY_HEADER)?.trim() ?? "";
+  if (headerApiKey) {
+    return {
+      apiKey: headerApiKey,
+      apiKeySource: "voiceover_settings",
+      maskedApiKey: maskVoiceoverSecret(headerApiKey),
+    };
+  }
+
+  const envApiKey = readOpenAIApiKeyFromEnv();
+  if (!envApiKey) {
+    throw new VoiceoverError("OpenAI API key missing. Save it in Creator settings or set OPENAI_API_KEY.", {
+      status: 401,
+      code: "missing_openai_api_key",
+    });
+  }
+
+  return {
+    apiKey: envApiKey,
+    apiKeySource: "env",
+    maskedApiKey: readProjectVoiceoverConfigFromEnv().providers.openai?.maskedApiKey || maskVoiceoverSecret(envApiKey),
+  };
+}
+
 function getProviderApiKey(
   headers: Pick<Headers, "get">,
   provider: VoiceoverGenerateRequest["provider"]
@@ -97,6 +132,9 @@ function getProviderApiKey(
   }
   if (provider === "gemini") {
     return getRequiredGeminiApiKey(headers);
+  }
+  if (provider === "openai") {
+    return getRequiredOpenAIApiKey(headers);
   }
 
   throw new VoiceoverError(`${provider} voiceover generation is not implemented yet.`, {
@@ -116,6 +154,11 @@ function isSupportedFormat(value: unknown): value is VoiceoverGenerateRequest["o
 function parseVoiceName(value: unknown): string {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return GEMINI_TTS_VOICE_OPTIONS.some((option) => option.value === trimmed) ? trimmed : DEFAULT_GEMINI_TTS_VOICE;
+}
+
+function parseOpenAIVoiceName(value: unknown): string {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return OPENAI_TTS_VOICE_OPTIONS.some((option) => option.value === trimmed) ? trimmed : DEFAULT_OPENAI_TTS_VOICE;
 }
 
 function parseLanguageCode(value: unknown): string | undefined {
@@ -153,7 +196,8 @@ function parseRequest(body: unknown): VoiceoverGenerateRequest {
   const provider = body.provider;
   const model = typeof body.model === "string" ? body.model.trim() : "";
   const voiceId = typeof body.voiceId === "string" ? body.voiceId.trim() : "";
-  const voiceName = parseVoiceName(body.voiceName);
+  const openAIVoiceName = parseOpenAIVoiceName(body.voiceName ?? voiceId);
+  const voiceName = provider === "openai" ? openAIVoiceName : parseVoiceName(body.voiceName);
   const languageCode = parseLanguageCode(body.languageCode);
   const speakerMode = body.speakerMode === "multi" ? "multi" : "single";
   const speakers = parseGeminiSpeakers(body.speakers, voiceName);
@@ -161,6 +205,7 @@ function parseRequest(body: unknown): VoiceoverGenerateRequest {
   const generationConfig = normalizeGeminiGenerationConfig(
     isRecord(body.generationConfig) ? body.generationConfig : undefined
   );
+  const speed = provider === "openai" ? normalizeOpenAITtsSpeed(body.speed) ?? DEFAULT_OPENAI_TTS_SPEED : undefined;
   const outputFormat = body.outputFormat;
 
   if (!projectId) {
@@ -175,8 +220,8 @@ function parseRequest(body: unknown): VoiceoverGenerateRequest {
       code: "invalid_provider",
     });
   }
-  const resolvedModel = model || (provider === "gemini" ? readGeminiDefaultModelFromEnv() : readElevenLabsDefaultModelFromEnv());
-  const resolvedVoiceId = voiceId;
+  const resolvedModel = model || (provider === "gemini" ? readGeminiDefaultModelFromEnv() : provider === "openai" ? readOpenAIDefaultModelFromEnv() : readElevenLabsDefaultModelFromEnv());
+  const resolvedVoiceId = provider === "openai" ? openAIVoiceName : voiceId;
 
   if (!resolvedModel) {
     throw new VoiceoverError("model is required.", { status: 400, code: "missing_model" });
@@ -212,6 +257,7 @@ function parseRequest(body: unknown): VoiceoverGenerateRequest {
     speakers,
     stylePrompt,
     generationConfig,
+    speed,
     outputFormat,
   };
 }

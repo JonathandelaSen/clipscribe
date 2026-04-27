@@ -101,11 +101,15 @@ function extractProviderErrorDetails(payload: unknown): {
     readStringField(error, "status") ??
     (payload == null ? "" : JSON.stringify(payload).slice(0, 400));
 
+  const providerErrorType = readStringField(error, "type");
+  const providerErrorCode = readStringField(error, "code");
+  const providerErrorParam = readStringField(error, "param");
+
   return {
     providerErrorMessage,
-    providerErrorType: readStringField(error, "type"),
-    providerErrorCode: readStringField(error, "code"),
-    providerErrorParam: readStringField(error, "param"),
+    ...(providerErrorType ? { providerErrorType } : {}),
+    ...(providerErrorCode ? { providerErrorCode } : {}),
+    ...(providerErrorParam ? { providerErrorParam } : {}),
   };
 }
 

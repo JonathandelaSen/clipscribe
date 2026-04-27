@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { requestProjectVoiceoverAudio } from "../../../src/lib/voiceover/client";
-import { VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
+import { VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_OPENAI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
 
 const originalFetch = global.fetch;
 
@@ -148,4 +148,42 @@ test("requestProjectVoiceoverAudio sends Gemini keys and parses token metadata",
     completionTokens: 50,
     totalTokens: 60,
   });
+});
+
+test("requestProjectVoiceoverAudio sends OpenAI keys and parses speed metadata", async () => {
+  let capturedHeaders: HeadersInit | undefined;
+
+  global.fetch = (async (_input, init) => {
+    capturedHeaders = init?.headers;
+    return new Response(new Uint8Array([4, 5, 6]), {
+      status: 200,
+      headers: {
+        "content-type": "audio/mpeg",
+        [VOICEOVER_RESPONSE_HEADERS.provider]: "openai",
+        [VOICEOVER_RESPONSE_HEADERS.model]: "gpt-4o-mini-tts",
+        [VOICEOVER_RESPONSE_HEADERS.voice]: "coral",
+        [VOICEOVER_RESPONSE_HEADERS.speed]: "1.25",
+        [VOICEOVER_RESPONSE_HEADERS.format]: "mp3",
+      },
+    });
+  }) as typeof fetch;
+
+  const result = await requestProjectVoiceoverAudio(
+    {
+      projectId: "project_1",
+      scriptText: "Hola mundo",
+      provider: "openai",
+      model: "gpt-4o-mini-tts",
+      voiceId: "coral",
+      voiceName: "coral",
+      speed: 1.25,
+      outputFormat: "mp3",
+    },
+    { openAIApiKey: "sk-test" }
+  );
+
+  assert.equal((capturedHeaders as Record<string, string>)[VOICEOVER_OPENAI_API_KEY_HEADER], "sk-test");
+  assert.equal(result.meta.provider, "openai");
+  assert.equal(result.meta.voiceName, "coral");
+  assert.equal(result.meta.speed, 1.25);
 });

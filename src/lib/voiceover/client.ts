@@ -2,6 +2,7 @@ import {
   parseAttachmentFilename,
   VOICEOVER_ELEVENLABS_API_KEY_HEADER,
   VOICEOVER_GEMINI_API_KEY_HEADER,
+  VOICEOVER_OPENAI_API_KEY_HEADER,
   VOICEOVER_RESPONSE_HEADERS,
 } from "@/lib/voiceover/contracts";
 import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverUsageSummary } from "@/lib/voiceover/types";
@@ -38,7 +39,7 @@ async function readVoiceoverError(response: Response): Promise<string> {
 
 export async function requestProjectVoiceoverAudio(
   payload: VoiceoverGenerateRequest,
-  options: { elevenLabsApiKey?: string; geminiApiKey?: string }
+  options: { elevenLabsApiKey?: string; geminiApiKey?: string; openAIApiKey?: string }
 ): Promise<VoiceoverClientResult> {
   const response = await fetch("/api/projects/voiceover/generate", {
     method: "POST",
@@ -52,6 +53,11 @@ export async function requestProjectVoiceoverAudio(
       ...(options.geminiApiKey
         ? {
             [VOICEOVER_GEMINI_API_KEY_HEADER]: options.geminiApiKey,
+          }
+        : undefined),
+      ...(options.openAIApiKey
+        ? {
+            [VOICEOVER_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
           }
         : undefined),
     },
@@ -68,6 +74,7 @@ export async function requestProjectVoiceoverAudio(
   const voiceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice);
   const languageHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.language);
   const speakerModeHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.speakerMode);
+  const speedHeader = parseNumberHeader(response.headers.get(VOICEOVER_RESPONSE_HEADERS.speed));
   const formatHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.format);
   const apiKeySourceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.apiKeySource);
   const maskedApiKeyHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.maskedApiKey);
@@ -118,7 +125,8 @@ export async function requestProjectVoiceoverAudio(
     provider: providerHeader === "openai" || providerHeader === "gemini" ? providerHeader : "elevenlabs",
     model: modelHeader?.trim() || payload.model,
     voiceId: voiceHeader?.trim() || payload.voiceId,
-    voiceName: providerHeader === "gemini" ? voiceHeader?.trim() || payload.voiceName : payload.voiceName,
+    voiceName: providerHeader === "gemini" || providerHeader === "openai" ? voiceHeader?.trim() || payload.voiceName : payload.voiceName,
+    speed: speedHeader == null ? payload.speed : speedHeader,
     languageCode: languageHeader?.trim() || payload.languageCode,
     speakerMode: speakerModeHeader === "multi" ? "multi" : speakerModeHeader === "single" ? "single" : payload.speakerMode,
     speakers: payload.speakers,

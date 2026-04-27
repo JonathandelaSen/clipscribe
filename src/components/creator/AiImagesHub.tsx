@@ -219,6 +219,19 @@ function getCreatorProviderKeyPlaceholder(provider: CreatorLLMProvider): string 
   return provider === "gemini" ? "AIza..." : "sk-proj-...";
 }
 
+function isPromptGuidedImageFrame(provider?: string): boolean {
+  return provider === "openai";
+}
+
+function getImageFrameLabel(provider?: string): string {
+  return isPromptGuidedImageFrame(provider) ? "Frame intent" : "Ratio";
+}
+
+function getImageFrameValue(provider?: string, aspectRatio?: string): string | undefined {
+  if (!aspectRatio) return undefined;
+  return isPromptGuidedImageFrame(provider) ? `${aspectRatio} (prompt-guided)` : aspectRatio;
+}
+
 function base64ToFile(base64: string, filename: string, mimeType: string): File {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -246,7 +259,7 @@ function GenerationInfoGrid({
   const items = [
     ["Provider", provider],
     ["Model", model],
-    ["Ratio", aspectRatio],
+    [getImageFrameLabel(provider), getImageFrameValue(provider, aspectRatio)],
     ["Size", size],
     ["Quality", quality],
     ["Format", outputFormat],
@@ -781,6 +794,11 @@ export function AiImagesHub({
                     ))}
                   </SelectContent>
                 </Select>
+                {isPromptGuidedImageFrame(resolvedProvider) ? (
+                  <div className="text-xs leading-relaxed text-zinc-500">
+                    OpenAI uses fixed output sizes; this frame is added to the prompt.
+                  </div>
+                ) : null}
               </div>
               <div className="space-y-2">
                 <div className="text-xs uppercase tracking-[0.24em] text-zinc-500">Quality</div>

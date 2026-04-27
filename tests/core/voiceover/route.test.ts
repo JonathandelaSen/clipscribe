@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
+import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_OPENAI_API_KEY_HEADER, VOICEOVER_RESPONSE_HEADERS } from "../../../src/lib/voiceover/contracts";
 import { POST } from "../../../src/app/api/projects/voiceover/generate/route";
 
 const originalFetch = global.fetch;
@@ -17,6 +17,9 @@ const originalCreatorGeminiApiKey = process.env.CREATOR_GEMINI_API_KEY;
 const originalGeminiApiKey = process.env.GEMINI_API_KEY;
 const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
 const originalVoiceoverGeminiModel = process.env.VOICEOVER_GEMINI_MODEL;
+const originalCreatorOpenAIApiKey = process.env.CREATOR_OPENAI_API_KEY;
+const originalOpenAIApiKey = process.env.OPENAI_API_KEY;
+const originalVoiceoverOpenAIModel = process.env.VOICEOVER_OPENAI_MODEL;
 
 function readHeaderValue(headers: HeadersInit | undefined, name: string): string {
   if (!headers) return "";
@@ -94,6 +97,21 @@ test.afterEach(() => {
     delete process.env.VOICEOVER_GEMINI_MODEL;
   } else {
     process.env.VOICEOVER_GEMINI_MODEL = originalVoiceoverGeminiModel;
+  }
+  if (originalCreatorOpenAIApiKey == null) {
+    delete process.env.CREATOR_OPENAI_API_KEY;
+  } else {
+    process.env.CREATOR_OPENAI_API_KEY = originalCreatorOpenAIApiKey;
+  }
+  if (originalOpenAIApiKey == null) {
+    delete process.env.OPENAI_API_KEY;
+  } else {
+    process.env.OPENAI_API_KEY = originalOpenAIApiKey;
+  }
+  if (originalVoiceoverOpenAIModel == null) {
+    delete process.env.VOICEOVER_OPENAI_MODEL;
+  } else {
+    process.env.VOICEOVER_OPENAI_MODEL = originalVoiceoverOpenAIModel;
   }
 });
 
@@ -318,6 +336,54 @@ test("voiceover route falls back to GEMINI_API_KEY from env", async () => {
 
   assert.equal(response.status, 200);
   assert.equal(seenApiKey, "AIza-env-key");
+});
+
+test("voiceover route sends OpenAI speed with the Creator settings key", async () => {
+  let seenAuth = "";
+  let capturedBody: unknown = null;
+
+  global.fetch = (async (_input, init) => {
+    seenAuth = readHeaderValue(init?.headers, "authorization");
+    capturedBody = JSON.parse(String(init?.body ?? "{}")) as unknown;
+    return new Response(new Uint8Array([1, 2, 3]), {
+      status: 200,
+      headers: {
+        "content-type": "audio/mpeg",
+      },
+    });
+  }) as typeof fetch;
+
+  const response = await POST(
+    new Request("http://localhost/api/projects/voiceover/generate", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        [VOICEOVER_OPENAI_API_KEY_HEADER]: "sk-header-key",
+      },
+      body: JSON.stringify({
+        projectId: "project_1",
+        scriptText: "Hola mundo",
+        provider: "openai",
+        model: "gpt-4o-mini-tts",
+        voiceName: "coral",
+        speed: 1.25,
+        outputFormat: "mp3",
+      }),
+    })
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(seenAuth, "Bearer sk-header-key");
+  assert.deepEqual(capturedBody, {
+    model: "gpt-4o-mini-tts",
+    input: "Hola mundo",
+    voice: "coral",
+    response_format: "mp3",
+    speed: 1.25,
+  });
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.provider), "openai");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice), "coral");
+  assert.equal(response.headers.get(VOICEOVER_RESPONSE_HEADERS.speed), "1.25");
 });
 
 test("voiceover route explains when the saved Voiceover settings key is rejected", async () => {

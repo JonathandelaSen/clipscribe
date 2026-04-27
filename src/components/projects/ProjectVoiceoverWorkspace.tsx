@@ -1,7 +1,9 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  CircleHelp,
   Download,
   KeyRound,
   Loader2,
@@ -44,6 +46,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCreatorAiSettings } from "@/hooks/useCreatorAiSettings";
 import { useProjectVoiceoverConfig } from "@/hooks/useProjectVoiceoverConfig";
 import { useProjectVoiceoverGenerator } from "@/hooks/useProjectVoiceoverGenerator";
@@ -61,6 +64,8 @@ import type {
 } from "@/lib/voiceover/types";
 import {
   DEFAULT_GEMINI_TTS_VOICE,
+  DEFAULT_OPENAI_TTS_SPEED,
+  DEFAULT_OPENAI_TTS_VOICE,
   areProjectVoiceoverDraftsEqual,
   buildProjectVoiceoverDraftFromRecord,
   buildProjectVoiceoverFilename,
@@ -74,6 +79,98 @@ import {
   normalizeProjectVoiceoverDraft,
 } from "@/lib/voiceover/utils";
 import { cn } from "@/lib/utils";
+
+type GeminiAdvancedControlKey =
+  keyof NonNullable<ProjectVoiceoverDraft["generationConfig"]>;
+
+const GEMINI_ADVANCED_CONTROL_HELP: Record<
+  Exclude<GeminiAdvancedControlKey, "stopSequences">,
+  {
+    label: string;
+    placeholder: string;
+    min?: string;
+    max?: string;
+    step: string;
+    purpose: string;
+    lower: string;
+    higher: string;
+    caution: string;
+  }
+> = {
+  temperature: {
+    label: "Temperature",
+    placeholder: "0-2",
+    min: "0",
+    max: "2",
+    step: "0.1",
+    purpose: "Controls how adventurous the speech generation can be.",
+    lower: "Lower values usually sound more stable and literal.",
+    higher: "Higher values can add variation, but may drift in delivery.",
+    caution: "Too high can make timing, tone, or pronunciation less predictable.",
+  },
+  topP: {
+    label: "Top P",
+    placeholder: "0-1",
+    min: "0",
+    max: "1",
+    step: "0.05",
+    purpose: "Limits generation to the most likely slice of possible outputs.",
+    lower: "Lower values narrow the delivery and can feel safer.",
+    higher: "Higher values allow a wider range of expression.",
+    caution: "Very low values can sound flat; very high values can vary more between runs.",
+  },
+  topK: {
+    label: "Top K",
+    placeholder: "1-100",
+    min: "1",
+    max: "100",
+    step: "1",
+    purpose: "Caps how many likely next choices Gemini can consider.",
+    lower: "Lower values make the result tighter and more conservative.",
+    higher: "Higher values give Gemini more room for alternate phrasing/delivery.",
+    caution: "Large values can add variety without guaranteeing better audio.",
+  },
+  seed: {
+    label: "Seed",
+    placeholder: "Optional",
+    step: "1",
+    purpose: "Gives Gemini a repeatability hint for similar requests.",
+    lower: "The number itself has no quality direction.",
+    higher: "Different numbers can produce different takes.",
+    caution: "Preview models may still vary, so treat seed as a hint, not a lock.",
+  },
+  candidateCount: {
+    label: "Candidates",
+    placeholder: "1-4",
+    min: "1",
+    max: "4",
+    step: "1",
+    purpose: "Requests how many candidate generations the API may produce.",
+    lower: "One candidate is cheaper and simplest.",
+    higher: "More candidates can increase work and cost, but this UI uses the first audio result.",
+    caution: "For voiceover, keep this at 1 unless you are deliberately testing provider behavior.",
+  },
+  maxOutputTokens: {
+    label: "Max output tokens",
+    placeholder: "Optional",
+    min: "1",
+    max: "32768",
+    step: "1",
+    purpose: "Limits the maximum generated audio token budget.",
+    lower: "Lower values can stop long audio early.",
+    higher: "Higher values allow longer scripts to complete.",
+    caution: "Set only when you need a hard ceiling; unnecessary limits can truncate narration.",
+  },
+};
+
+const GEMINI_ADVANCED_CONTROL_ORDER = [
+  "temperature",
+  "topP",
+  "topK",
+  "seed",
+  "candidateCount",
+  "maxOutputTokens",
+] as const;
 
 function formatDateTime(timestamp: number) {
   return new Intl.DateTimeFormat("es", {
@@ -141,8 +238,71 @@ function getVoiceoverVoiceLabel(record: ProjectVoiceoverRecord) {
     }
     return record.voiceName || record.voiceId || DEFAULT_GEMINI_TTS_VOICE;
   }
+  if (record.provider === "openai") {
+    return record.voiceName || record.voiceId || DEFAULT_OPENAI_TTS_VOICE;
+  }
 
   return maskVoiceoverSecret(record.voiceId);
+}
+
+function formatGeminiSettingValue(value: string | number | undefined, fallback = "Default") {
+  if (value == null || value === "") return fallback;
+  return String(value);
+}
+
+function buildGeminiRunSettingItems(record: ProjectVoiceoverRecord): Array<{ label: string; value: string }> {
+  if (record.provider !== "gemini") return [];
+  const generationConfig = record.generationConfig ?? {};
+  return [
+    { label: "Voice", value: getVoiceoverVoiceLabel(record) },
+    { label: "Language", value: record.languageCode || "Auto" },
+    { label: "Speaker mode", value: record.speakerMode === "multi" ? "Two speakers" : "Single" },
+    { label: "Director notes", value: record.stylePrompt?.trim() ? "Yes" : "No" },
+    { label: "Temperature", value: formatGeminiSettingValue(generationConfig.temperature) },
+    { label: "Top P", value: formatGeminiSettingValue(generationConfig.topP) },
+    { label: "Top K", value: formatGeminiSettingValue(generationConfig.topK) },
+    { label: "Seed", value: formatGeminiSettingValue(generationConfig.seed, "None") },
+    { label: "Candidates", value: formatGeminiSettingValue(generationConfig.candidateCount, "Default") },
+    { label: "Max tokens", value: formatGeminiSettingValue(generationConfig.maxOutputTokens, "Default") },
+    {
+      label: "Stops",
+      value: generationConfig.stopSequences?.length ? generationConfig.stopSequences.join(", ") : "None",
+    },
+  ];
+}
+
+function buildOpenAIRunSettingItems(record: ProjectVoiceoverRecord): Array<{ label: string; value: string }> {
+  if (record.provider !== "openai") return [];
+  return [
+    { label: "Voice", value: getVoiceoverVoiceLabel(record) },
+    { label: "Speed", value: formatGeminiSettingValue(record.speed, String(DEFAULT_OPENAI_TTS_SPEED)) },
+  ];
+}
+
+function GeminiAdvancedTooltip({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md text-white/45 transition hover:bg-white/10 hover:text-cyan-100 focus:outline-none focus:ring-2 focus:ring-cyan-300/70"
+          aria-label={`${title} help`}
+        >
+          <CircleHelp className="h-3.5 w-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[380px] border border-white/10 bg-slate-950 px-4 py-3.5 text-left text-sm leading-6 text-white shadow-2xl">
+        <div className="font-semibold text-cyan-100">{title}</div>
+        <div className="mt-2.5 space-y-2.5 text-white/82">{children}</div>
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 function triggerFileDownload(file: File, filename: string) {
@@ -184,14 +344,19 @@ export function ProjectVoiceoverWorkspace({
   const lastProjectIdRef = useRef(project.id);
   const {
     elevenLabsApiKey,
+    openAIApiKey,
     geminiApiKey,
     hasElevenLabsApiKey,
+    hasOpenAIApiKey,
     hasGeminiApiKey,
     maskedElevenLabsApiKey,
+    maskedOpenAIApiKey,
     maskedGeminiApiKey,
     saveElevenLabsApiKey,
+    saveOpenAIApiKey,
     saveGeminiApiKey,
     clearElevenLabsApiKey,
+    clearOpenAIApiKey,
     clearGeminiApiKey,
   } = useCreatorAiSettings();
   const config = useProjectVoiceoverConfig();
@@ -208,6 +373,7 @@ export function ProjectVoiceoverWorkspace({
   const [draft, setDraft] = useState<ProjectVoiceoverDraft>(persistedDraft);
   const [elevenLabsApiKeyDraft, setElevenLabsApiKeyDraft] =
     useState(elevenLabsApiKey);
+  const [openAIApiKeyDraft, setOpenAIApiKeyDraft] = useState(openAIApiKey);
   const [geminiApiKeyDraft, setGeminiApiKeyDraft] = useState(geminiApiKey);
   const [isConfirmDialogOpen, setIsConfirmDialogOpen] = useState(false);
   const [selectedVoiceoverId, setSelectedVoiceoverId] = useState<string | null>(
@@ -220,7 +386,7 @@ export function ProjectVoiceoverWorkspace({
   );
   const draftUsage = useMemo(
     () => {
-      if (draft.provider === "gemini") {
+      if (draft.provider === "gemini" || draft.provider === "openai") {
         return {
           billedCharacters: draft.text.length,
           source: "estimated" as const,
@@ -262,12 +428,19 @@ export function ProjectVoiceoverWorkspace({
   const providerConfig = config.providers[draft.provider] ?? config.providers.elevenlabs;
   const modelOptions = providerConfig?.models?.length ? providerConfig.models : config.models;
   const geminiConfig = config.providers.gemini;
+  const openAIConfig = config.providers.openai;
   const elevenLabsConfig = config.providers.elevenlabs;
   const isGeminiProvider = draft.provider === "gemini";
+  const isOpenAIProvider = draft.provider === "openai";
   const hasElevenLabsAvailableApiKey = hasElevenLabsApiKey || Boolean(elevenLabsConfig?.hasApiKey ?? config.hasApiKey);
   const hasGeminiAvailableApiKey = hasGeminiApiKey || Boolean(geminiConfig?.hasApiKey);
-  const hasCurrentProviderLocalApiKey = isGeminiProvider ? hasGeminiApiKey : hasElevenLabsApiKey;
-  const hasCurrentProviderEnvApiKey = isGeminiProvider ? Boolean(geminiConfig?.hasApiKey) : Boolean(elevenLabsConfig?.hasApiKey ?? config.hasApiKey);
+  const hasOpenAIAvailableApiKey = hasOpenAIApiKey || Boolean(openAIConfig?.hasApiKey);
+  const hasCurrentProviderLocalApiKey = isGeminiProvider ? hasGeminiApiKey : isOpenAIProvider ? hasOpenAIApiKey : hasElevenLabsApiKey;
+  const hasCurrentProviderEnvApiKey = isGeminiProvider
+    ? Boolean(geminiConfig?.hasApiKey)
+    : isOpenAIProvider
+      ? Boolean(openAIConfig?.hasApiKey)
+      : Boolean(elevenLabsConfig?.hasApiKey ?? config.hasApiKey);
   const currentApiKeySource = resolveCurrentApiKeySource(hasCurrentProviderLocalApiKey, hasCurrentProviderEnvApiKey);
   const apiKeySourceLabel = currentApiKeySource
     ? getProjectVoiceoverApiKeyLabel(currentApiKeySource)
@@ -280,10 +453,10 @@ export function ProjectVoiceoverWorkspace({
     () =>
       selectedVoiceover
         ? getProjectVoiceoverReplayStatus(selectedVoiceover, {
-            hasLocalApiKey: selectedVoiceover.provider === "gemini" ? hasGeminiApiKey : hasElevenLabsApiKey,
+            hasLocalApiKey: selectedVoiceover.provider === "gemini" ? hasGeminiApiKey : selectedVoiceover.provider === "openai" ? hasOpenAIApiKey : hasElevenLabsApiKey,
           })
         : null,
-    [hasElevenLabsApiKey, hasGeminiApiKey, selectedVoiceover],
+    [hasElevenLabsApiKey, hasGeminiApiKey, hasOpenAIApiKey, selectedVoiceover],
   );
 
   useEffect(() => {
@@ -326,6 +499,10 @@ export function ProjectVoiceoverWorkspace({
   }, [elevenLabsApiKey]);
 
   useEffect(() => {
+    setOpenAIApiKeyDraft(openAIApiKey);
+  }, [openAIApiKey]);
+
+  useEffect(() => {
     setGeminiApiKeyDraft(geminiApiKey);
   }, [geminiApiKey]);
 
@@ -362,6 +539,16 @@ export function ProjectVoiceoverWorkspace({
     }
     saveElevenLabsApiKey(trimmed);
     toast.success("ElevenLabs key saved");
+  };
+
+  const handleOpenAIApiKeySave = () => {
+    const trimmed = openAIApiKeyDraft.trim();
+    if (!trimmed) {
+      toast.error("Paste an OpenAI API key first.");
+      return;
+    }
+    saveOpenAIApiKey(trimmed);
+    toast.success("OpenAI key saved");
   };
 
   const handleGeminiApiKeySave = () => {
@@ -478,13 +665,19 @@ export function ProjectVoiceoverWorkspace({
       scriptText: draft.text,
       provider: draft.provider,
       model: draft.model,
-      voiceId: draft.provider === "gemini" ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : draft.voiceId,
-      voiceName: draft.provider === "gemini" ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : undefined,
+      voiceId: draft.provider === "gemini" ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE : draft.provider === "openai" ? draft.voiceName || DEFAULT_OPENAI_TTS_VOICE : draft.voiceId,
+      voiceName:
+        draft.provider === "gemini"
+          ? draft.voiceName || DEFAULT_GEMINI_TTS_VOICE
+          : draft.provider === "openai"
+            ? draft.voiceName || DEFAULT_OPENAI_TTS_VOICE
+            : undefined,
       languageCode: draft.provider === "gemini" ? draft.languageCode : undefined,
       speakerMode: draft.provider === "gemini" ? draft.speakerMode ?? "single" : undefined,
       speakers: draft.provider === "gemini" && draft.speakerMode === "multi" ? draft.speakers : undefined,
       stylePrompt: draft.provider === "gemini" ? draft.stylePrompt : undefined,
       generationConfig: draft.provider === "gemini" ? draft.generationConfig : undefined,
+      speed: draft.provider === "openai" ? draft.speed ?? DEFAULT_OPENAI_TTS_SPEED : undefined,
       outputFormat: draft.outputFormat,
     };
   };
@@ -494,6 +687,7 @@ export function ProjectVoiceoverWorkspace({
       await saveVoiceoverDraft(draft);
       const result = await generateVoiceover(request, {
         elevenLabsApiKey: hasElevenLabsApiKey ? elevenLabsApiKey : undefined,
+        openAIApiKey: hasOpenAIApiKey ? openAIApiKey : undefined,
         geminiApiKey: hasGeminiApiKey ? geminiApiKey : undefined,
       });
       const metadata = await readMediaMetadata(result.file);
@@ -533,6 +727,7 @@ export function ProjectVoiceoverWorkspace({
           speakers: result.meta.speakers ?? request.speakers,
           stylePrompt: request.stylePrompt,
           generationConfig: request.generationConfig,
+          speed: result.meta.speed ?? request.speed,
           outputFormat: result.meta.outputFormat,
         },
         scriptText: draft.text,
@@ -633,8 +828,14 @@ export function ProjectVoiceoverWorkspace({
                           ...current,
                           provider,
                           model: nextModel,
-                          voiceName: provider === "gemini" ? current.voiceName || nextConfig?.defaultVoiceName || DEFAULT_GEMINI_TTS_VOICE : current.voiceName,
+                          voiceName:
+                            provider === "gemini"
+                              ? current.voiceName || nextConfig?.defaultVoiceName || DEFAULT_GEMINI_TTS_VOICE
+                              : provider === "openai"
+                                ? current.voiceName || nextConfig?.defaultVoiceName || DEFAULT_OPENAI_TTS_VOICE
+                                : current.voiceName,
                           speakerMode: provider === "gemini" ? current.speakerMode ?? "single" : current.speakerMode,
+                          speed: provider === "openai" ? current.speed ?? DEFAULT_OPENAI_TTS_SPEED : current.speed,
                           speakers:
                             provider === "gemini"
                               ? current.speakers ?? [
@@ -651,6 +852,7 @@ export function ProjectVoiceoverWorkspace({
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="elevenlabs">ElevenLabs</SelectItem>
+                      <SelectItem value="openai">OpenAI</SelectItem>
                       <SelectItem value="gemini">Google Gemini</SelectItem>
                     </SelectContent>
                   </Select>
@@ -787,6 +989,55 @@ export function ProjectVoiceoverWorkspace({
                       </Select>
                     </div>
                   </div>
+                ) : isOpenAIProvider ? (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-openai-voice" className="text-white/80">
+                        Voice
+                      </Label>
+                      <Select
+                        value={draft.voiceName || DEFAULT_OPENAI_TTS_VOICE}
+                        onValueChange={(value) =>
+                          setDraft((current) => ({
+                            ...current,
+                            voiceName: value,
+                          }))
+                        }
+                      >
+                        <SelectTrigger id="voiceover-openai-voice">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(openAIConfig?.voices ?? []).map((voice) => (
+                            <SelectItem key={voice.value} value={voice.value}>
+                              {voice.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="voiceover-openai-speed" className="text-white/80">
+                        Speed
+                      </Label>
+                      <Input
+                        id="voiceover-openai-speed"
+                        type="number"
+                        min="0.25"
+                        max="4"
+                        step="0.05"
+                        value={String(draft.speed ?? DEFAULT_OPENAI_TTS_SPEED)}
+                        onChange={(event) =>
+                          setDraft((current) => ({
+                            ...current,
+                            speed: event.target.value.trim() ? Number(event.target.value) : undefined,
+                          }))
+                        }
+                        placeholder="1.0"
+                      />
+                    </div>
+                  </div>
                 ) : (
                   <div className="space-y-2">
                     <Label htmlFor="voiceover-voice-id" className="text-white/80">
@@ -886,24 +1137,33 @@ export function ProjectVoiceoverWorkspace({
                 <details className="rounded-[1.4rem] border border-white/10 bg-black/20 p-4">
                   <summary className="cursor-pointer text-sm font-medium text-white/78">Advanced Gemini controls</summary>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {[
-                      ["temperature", "Temperature", "0-2", "0", "2", "0.1"],
-                      ["topP", "Top P", "0-1", "0", "1", "0.05"],
-                      ["topK", "Top K", "1-100", "1", "100", "1"],
-                      ["seed", "Seed", "Optional", undefined, undefined, "1"],
-                      ["candidateCount", "Candidates", "1-4", "1", "4", "1"],
-                      ["maxOutputTokens", "Max output tokens", "Optional", "1", "32768", "1"],
-                    ].map(([key, label, placeholder, min, max, step]) => (
+                    {GEMINI_ADVANCED_CONTROL_ORDER.map((key) => {
+                      const control = GEMINI_ADVANCED_CONTROL_HELP[key];
+                      return (
                       <div key={key} className="space-y-2">
-                        <Label htmlFor={`voiceover-gemini-${key}`} className="text-white/70">
-                          {label}
-                        </Label>
+                        <div className="flex items-center gap-1.5">
+                          <Label htmlFor={`voiceover-gemini-${key}`} className="text-white/70">
+                            {control.label}
+                          </Label>
+                          <GeminiAdvancedTooltip title={control.label}>
+                            <p>{control.purpose}</p>
+                            <p>
+                              <span className="text-cyan-100">Lower:</span> {control.lower}
+                            </p>
+                            <p>
+                              <span className="text-cyan-100">Higher:</span> {control.higher}
+                            </p>
+                            <p>
+                              <span className="text-amber-100">Watch out:</span> {control.caution}
+                            </p>
+                          </GeminiAdvancedTooltip>
+                        </div>
                         <Input
                           id={`voiceover-gemini-${key}`}
                           type="number"
-                          min={min}
-                          max={max}
-                          step={step}
+                          min={control.min}
+                          max={control.max}
+                          step={control.step}
                           value={String(draft.generationConfig?.[key as keyof NonNullable<ProjectVoiceoverDraft["generationConfig"]>] ?? "")}
                           onChange={(event) =>
                             updateGeminiGenerationConfig(
@@ -911,14 +1171,29 @@ export function ProjectVoiceoverWorkspace({
                               event.target.value,
                             )
                           }
-                          placeholder={placeholder}
+                          placeholder={control.placeholder}
                         />
                       </div>
-                    ))}
+                    );
+                    })}
                     <div className="space-y-2 sm:col-span-2 lg:col-span-3">
-                      <Label htmlFor="voiceover-gemini-stop-sequences" className="text-white/70">
-                        Stop sequences
-                      </Label>
+                      <div className="flex items-center gap-1.5">
+                        <Label htmlFor="voiceover-gemini-stop-sequences" className="text-white/70">
+                          Stop sequences
+                        </Label>
+                        <GeminiAdvancedTooltip title="Stop sequences">
+                          <p>Stops generation when Gemini reaches one of these exact strings.</p>
+                          <p>
+                            <span className="text-cyan-100">Fewer:</span> safer for narration; the script is less likely to stop early.
+                          </p>
+                          <p>
+                            <span className="text-cyan-100">More:</span> useful for hard boundaries in templated scripts.
+                          </p>
+                          <p>
+                            <span className="text-amber-100">Watch out:</span> a stop string that appears in the narration can truncate the audio.
+                          </p>
+                        </GeminiAdvancedTooltip>
+                      </div>
                       <Textarea
                         id="voiceover-gemini-stop-sequences"
                         value={draft.generationConfig?.stopSequences?.join("\n") ?? ""}
@@ -975,7 +1250,7 @@ export function ProjectVoiceoverWorkspace({
                       true,
                     )}
                   </Badge>
-                  {!isGeminiProvider ? (
+                  {!isGeminiProvider && !isOpenAIProvider ? (
                     <Badge
                       variant="outline"
                       className="border-white/15 bg-white/5 text-white/70"
@@ -1155,6 +1430,24 @@ export function ProjectVoiceoverWorkspace({
                           </Badge>
                         </div>
                       ) : null}
+                      {record.provider === "gemini" || record.provider === "openai" ? (
+                        <div className="rounded-[1.2rem] border border-white/10 bg-black/25 p-4">
+                          <div className="text-xs font-medium uppercase tracking-[0.18em] text-white/55">
+                            Run settings
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                            {(record.provider === "gemini" ? buildGeminiRunSettingItems(record) : buildOpenAIRunSettingItems(record)).map((item) => (
+                              <div
+                                key={item.label}
+                                className="min-w-0 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm"
+                              >
+                                <div className="text-xs text-white/45">{item.label}</div>
+                                <div className="mt-0.5 truncate font-medium text-white/82">{item.value}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2 text-xs text-white/52">
                         <Badge
                           variant="outline"
@@ -1291,6 +1584,70 @@ export function ProjectVoiceoverWorkspace({
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <KeyRound className="h-4 w-4 text-cyan-300" />
+                OpenAI
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="openai-api-key" className="text-white/80">
+                  API Key
+                </Label>
+                <Input
+                  id="openai-api-key"
+                  value={openAIApiKeyDraft}
+                  onChange={(event) => setOpenAIApiKeyDraft(event.target.value)}
+                  placeholder="Paste your OpenAI API key"
+                  type="password"
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  className="rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+                  onClick={handleOpenAIApiKeySave}
+                >
+                  Save Key
+                </Button>
+                <Button
+                  variant="outline"
+                  className="rounded-xl border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  onClick={() => {
+                    clearOpenAIApiKey();
+                    toast.success("OpenAI key cleared");
+                  }}
+                  disabled={!hasOpenAIApiKey}
+                >
+                  Clear
+                </Button>
+              </div>
+
+              <div
+                className={cn(
+                  "rounded-[1.4rem] border px-4 py-3 text-sm",
+                  hasOpenAIAvailableApiKey
+                    ? "border-emerald-400/20 bg-emerald-500/10 text-emerald-50"
+                    : "border-white/10 bg-black/20 text-white/50",
+                )}
+              >
+                {hasOpenAIApiKey
+                  ? maskedOpenAIApiKey
+                  : openAIConfig?.hasApiKey
+                    ? openAIConfig.maskedApiKey
+                    : "No key detected"}
+              </div>
+
+              {hasOpenAIApiKey && openAIConfig?.hasApiKey ? (
+                <div className="text-xs text-white/45">
+                  Local key overrides `.env`
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+
+          <Card className="border-white/10 bg-[linear-gradient(180deg,rgba(7,13,23,0.92),rgba(7,13,23,0.74))] text-white">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <KeyRound className="h-4 w-4 text-cyan-300" />
                 Google Gemini
               </CardTitle>
             </CardHeader>
@@ -1405,13 +1762,15 @@ export function ProjectVoiceoverWorkspace({
                 { label: "Provider", value: getProviderLabel(draft.provider) },
                 { label: "Model", value: draft.model },
                 {
-                  label: isGeminiProvider ? "Voice" : "Voice ID",
+                  label: isGeminiProvider || isOpenAIProvider ? "Voice" : "Voice ID",
                   value: isGeminiProvider
                     ? draft.speakerMode === "multi"
                       ? (draft.speakers ?? [])
                           .map((speaker) => `${speaker.speaker}: ${speaker.voiceName}`)
                           .join(" / ") || "Missing"
                       : draft.voiceName || DEFAULT_GEMINI_TTS_VOICE
+                    : isOpenAIProvider
+                      ? draft.voiceName || DEFAULT_OPENAI_TTS_VOICE
                     : maskVoiceoverSecret(draft.voiceId) || "Missing",
                 },
                 ...(isGeminiProvider
@@ -1419,6 +1778,14 @@ export function ProjectVoiceoverWorkspace({
                       {
                         label: "Language",
                         value: draft.languageCode || "Auto",
+                      },
+                    ]
+                  : []),
+                ...(isOpenAIProvider
+                  ? [
+                      {
+                        label: "Speed",
+                        value: String(draft.speed ?? DEFAULT_OPENAI_TTS_SPEED),
                       },
                     ]
                   : []),

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -29,7 +30,7 @@ import { resolveYouTubePublishView } from "@/lib/creator/youtube-publish";
 import { useProjectWorkspace } from "@/hooks/useProjectWorkspace";
 import { useBackgroundTasks } from "@/hooks/useBackgroundTasks";
 import { useTranscriber } from "@/hooks/useTranscriber";
-import type { ProjectExportRecord } from "@/lib/projects/types";
+import type { ProjectAssetRecord, ProjectExportRecord } from "@/lib/projects/types";
 
 type WorkspaceTab =
   | "assets"
@@ -83,6 +84,50 @@ function transcribeButtonLabel(isRetranscribe: boolean, progressTask?: Backgroun
     return isRetranscribe ? "Retranscribe Active Source" : "Transcribe Active Source";
   }
   return progressLabel;
+}
+
+function isPngProjectAsset(asset: ProjectAssetRecord) {
+  return asset.kind === "image" && (asset.mimeType.toLowerCase() === "image/png" || /\.png$/i.test(asset.filename));
+}
+
+function useObjectUrl(file: Blob | null | undefined) {
+  const url = useMemo(() => (file ? URL.createObjectURL(file) : null), [file]);
+
+  useEffect(() => {
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+
+  return url;
+}
+
+function ProjectAssetPngPreview({ asset }: { asset: ProjectAssetRecord }) {
+  const imageUrl = useObjectUrl(isPngProjectAsset(asset) ? asset.fileBlob : null);
+
+  if (!imageUrl) return null;
+
+  return (
+    <div className="relative h-24 w-36 shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+      <div
+        className="absolute inset-0 opacity-30"
+        style={{
+          backgroundImage:
+            "linear-gradient(45deg, rgba(255,255,255,0.12) 25%, transparent 25%), linear-gradient(-45deg, rgba(255,255,255,0.12) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(255,255,255,0.12) 75%), linear-gradient(-45deg, transparent 75%, rgba(255,255,255,0.12) 75%)",
+          backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0",
+          backgroundSize: "16px 16px",
+        }}
+      />
+      <Image
+        src={imageUrl}
+        alt={asset.filename}
+        fill
+        unoptimized
+        sizes="144px"
+        className="object-contain p-1"
+      />
+    </div>
+  );
 }
 
 export function ProjectWorkspace({ projectId }: { projectId: string }) {
@@ -388,28 +433,31 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                           </DropdownMenuContent>
                         </DropdownMenu>
 
-                        <div className="space-y-3 pr-10">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-lg font-semibold text-white">{asset.filename}</div>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.kind}</span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.role}</span>
-                            <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.origin}</span>
-                            {project.activeSourceAssetId === asset.id && (
-                              <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-100">
-                                active source
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm text-white/55">
-                            Updated {formatRelativeDate(asset.updatedAt)}
-                            {asset.durationSeconds > 0 ? ` · ${asset.durationSeconds.toFixed(1)}s` : ""}
-                          </div>
-                          {asset.externalSource?.kind === "youtube" ? (
-                            <div className="text-xs text-cyan-100/70">
-                              YouTube{asset.externalSource.channelTitle ? ` · ${asset.externalSource.channelTitle}` : ""}{asset.externalSource.title ? ` · ${asset.externalSource.title}` : ""}
+                        <div className="flex flex-col gap-4 pr-10 sm:flex-row">
+                          <ProjectAssetPngPreview asset={asset} />
+                          <div className="min-w-0 flex-1 space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <div className="break-words text-lg font-semibold text-white">{asset.filename}</div>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.kind}</span>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.role}</span>
+                              <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-white/55">{asset.origin}</span>
+                              {project.activeSourceAssetId === asset.id && (
+                                <span className="rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-[11px] uppercase tracking-[0.24em] text-emerald-100">
+                                  active source
+                                </span>
+                              )}
                             </div>
-                          ) : null}
-                          {asset.kind === "audio" ? <ProjectAudioPlayer file={asset.fileBlob} className="max-w-xl" /> : null}
+                            <div className="text-sm text-white/55">
+                              Updated {formatRelativeDate(asset.updatedAt)}
+                              {asset.durationSeconds > 0 ? ` · ${asset.durationSeconds.toFixed(1)}s` : ""}
+                            </div>
+                            {asset.externalSource?.kind === "youtube" ? (
+                              <div className="text-xs text-cyan-100/70">
+                                YouTube{asset.externalSource.channelTitle ? ` · ${asset.externalSource.channelTitle}` : ""}{asset.externalSource.title ? ` · ${asset.externalSource.title}` : ""}
+                              </div>
+                            ) : null}
+                            {asset.kind === "audio" ? <ProjectAudioPlayer file={asset.fileBlob} className="max-w-xl" /> : null}
+                          </div>
                         </div>
                       </div>
                     );

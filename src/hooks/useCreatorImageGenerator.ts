@@ -4,7 +4,7 @@ import { buildPendingCreatorLlmRun } from "@/lib/creator/llm-run-pending";
 import type { CreatorImageGenerateRequest, CreatorImageGenerateResponse } from "@/lib/creator/types";
 import { CreatorApiError, postJson } from "@/hooks/creator-api";
 
-const IMAGE_PENDING_PROMPT_VERSION = "creator-images-v1";
+const IMAGE_PENDING_PROMPT_VERSION = "creator-images-v2";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object";

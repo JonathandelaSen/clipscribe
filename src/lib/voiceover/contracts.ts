@@ -2,6 +2,7 @@ import type { VoiceoverGenerateResponseMeta } from "./types";
 
 export const VOICEOVER_ELEVENLABS_API_KEY_HEADER = "x-voiceover-elevenlabs-api-key";
 export const VOICEOVER_GEMINI_API_KEY_HEADER = "x-creator-gemini-api-key";
+export const VOICEOVER_OPENAI_API_KEY_HEADER = "x-creator-openai-api-key";
 
 export const VOICEOVER_RESPONSE_HEADERS = {
   provider: "x-clipscribe-provider",
@@ -9,6 +10,7 @@ export const VOICEOVER_RESPONSE_HEADERS = {
   voice: "x-clipscribe-voice",
   language: "x-clipscribe-language",
   speakerMode: "x-clipscribe-speaker-mode",
+  speed: "x-clipscribe-speed",
   format: "x-clipscribe-format",
   apiKeySource: "x-clipscribe-api-key-source",
   maskedApiKey: "x-clipscribe-masked-api-key",
@@ -41,6 +43,11 @@ export function buildVoiceoverResponseHeaders(meta: VoiceoverGenerateResponseMet
     ...(meta.speakerMode
       ? {
           [VOICEOVER_RESPONSE_HEADERS.speakerMode]: sanitizeHeaderValue(meta.speakerMode),
+        }
+      : undefined),
+    ...(meta.speed != null
+      ? {
+          [VOICEOVER_RESPONSE_HEADERS.speed]: String(meta.speed),
         }
       : undefined),
     [VOICEOVER_RESPONSE_HEADERS.format]: meta.outputFormat,

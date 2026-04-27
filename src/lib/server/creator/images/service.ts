@@ -130,7 +130,7 @@ export async function generateCreatorImages(
   const provider = resolvedConfig.provider;
   const model = resolveImageModel(provider, resolvedConfig.model);
   const { apiKey, apiKeySource } = resolveCreatorProviderApiKey(options.headers, provider);
-  const prompt = buildCreatorImagePrompt(request);
+  const prompt = buildCreatorImagePrompt(request, { provider });
   const count = request.count ?? 1;
   const quality: CreatorImageQuality = request.quality ?? "auto";
   const outputFormat: CreatorImageFormat = request.outputFormat ?? "png";

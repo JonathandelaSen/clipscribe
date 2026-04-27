@@ -15,6 +15,9 @@ const originalGeminiApiKey = process.env.GEMINI_API_KEY;
 const originalCreatorGeminiApiKey = process.env.CREATOR_GEMINI_API_KEY;
 const originalGoogleApiKey = process.env.GOOGLE_API_KEY;
 const originalVoiceoverGeminiModel = process.env.VOICEOVER_GEMINI_MODEL;
+const originalOpenAIApiKey = process.env.OPENAI_API_KEY;
+const originalCreatorOpenAIApiKey = process.env.CREATOR_OPENAI_API_KEY;
+const originalVoiceoverOpenAIModel = process.env.VOICEOVER_OPENAI_MODEL;
 
 test.afterEach(() => {
   if (originalElevenLabsApiKey == null) {
@@ -77,6 +80,21 @@ test.afterEach(() => {
   } else {
     process.env.VOICEOVER_GEMINI_MODEL = originalVoiceoverGeminiModel;
   }
+  if (originalOpenAIApiKey == null) {
+    delete process.env.OPENAI_API_KEY;
+  } else {
+    process.env.OPENAI_API_KEY = originalOpenAIApiKey;
+  }
+  if (originalCreatorOpenAIApiKey == null) {
+    delete process.env.CREATOR_OPENAI_API_KEY;
+  } else {
+    process.env.CREATOR_OPENAI_API_KEY = originalCreatorOpenAIApiKey;
+  }
+  if (originalVoiceoverOpenAIModel == null) {
+    delete process.env.VOICEOVER_OPENAI_MODEL;
+  } else {
+    process.env.VOICEOVER_OPENAI_MODEL = originalVoiceoverOpenAIModel;
+  }
 });
 
 test("voiceover config reads aliased env vars and returns masked values", async () => {
@@ -88,6 +106,8 @@ test("voiceover config reads aliased env vars and returns masked values", async 
   process.env.EVELEN_LABS_MODEL = "eleven_flash_v2_5";
   process.env.GEMINI_API_KEY = "AIza-gemini-secret";
   process.env.VOICEOVER_GEMINI_MODEL = "gemini-3.1-flash-tts-preview";
+  process.env.OPENAI_API_KEY = "sk-openai-secret";
+  process.env.VOICEOVER_OPENAI_MODEL = "gpt-4o-mini-tts";
 
   const response = await GET();
   const body = await response.json();
@@ -103,4 +123,8 @@ test("voiceover config reads aliased env vars and returns masked values", async 
   assert.equal(body.providers.gemini.hasApiKey, true);
   assert.equal(body.providers.gemini.maskedApiKey, "AIza...cret");
   assert.ok(body.providers.gemini.voices.some((voice: { value: string }) => voice.value === "Kore"));
+  assert.equal(body.providers.openai.defaultModel, "gpt-4o-mini-tts");
+  assert.equal(body.providers.openai.hasApiKey, true);
+  assert.equal(body.providers.openai.maskedApiKey, "sk-o...cret");
+  assert.ok(body.providers.openai.voices.some((voice: { value: string }) => voice.value === "coral"));
 });

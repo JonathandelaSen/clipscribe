@@ -25,6 +25,26 @@ export const ELEVENLABS_MODEL_OPTIONS: VoiceoverModelOption[] = [
   { value: "eleven_turbo_v2_5", label: "Eleven Turbo v2.5" },
   { value: "eleven_v3", label: "Eleven v3" },
 ];
+export const OPENAI_TTS_MODEL_OPTIONS: VoiceoverModelOption[] = [
+  { value: "gpt-4o-mini-tts", label: "GPT-4o mini TTS" },
+  { value: "tts-1", label: "TTS-1" },
+  { value: "tts-1-hd", label: "TTS-1 HD" },
+];
+export const OPENAI_TTS_VOICE_OPTIONS: VoiceoverVoiceOption[] = [
+  { value: "alloy", label: "Alloy" },
+  { value: "ash", label: "Ash" },
+  { value: "ballad", label: "Ballad" },
+  { value: "coral", label: "Coral" },
+  { value: "echo", label: "Echo" },
+  { value: "fable", label: "Fable" },
+  { value: "nova", label: "Nova" },
+  { value: "onyx", label: "Onyx" },
+  { value: "sage", label: "Sage" },
+  { value: "shimmer", label: "Shimmer" },
+  { value: "verse", label: "Verse" },
+  { value: "marin", label: "Marin" },
+  { value: "cedar", label: "Cedar" },
+];
 export const GEMINI_TTS_MODEL_OPTIONS: VoiceoverModelOption[] = [
   { value: "gemini-3.1-flash-tts-preview", label: "Gemini 3.1 Flash TTS Preview" },
   { value: "gemini-2.5-flash-preview-tts", label: "Gemini 2.5 Flash Preview TTS" },
@@ -68,12 +88,12 @@ export const GEMINI_TTS_LANGUAGE_OPTIONS: VoiceoverLanguageOption[] = [
   { value: "en-GB", label: "English (United Kingdom)" },
   { value: "en-IN", label: "English (India)" },
   { value: "en-US", label: "English (United States)" },
+  { value: "es-ES", label: "Spanish (Spain)" },
   { value: "es-US", label: "Spanish (United States)" },
   { value: "fr-FR", label: "French (France)" },
   { value: "hi-IN", label: "Hindi (India)" },
   { value: "pt-BR", label: "Portuguese (Brazil)" },
   { value: "ar-XA", label: "Arabic" },
-  { value: "es-ES", label: "Spanish (Spain)" },
   { value: "fr-CA", label: "French (Canada)" },
   { value: "id-ID", label: "Indonesian" },
   { value: "it-IT", label: "Italian" },
@@ -96,6 +116,9 @@ export const GEMINI_TTS_LANGUAGE_OPTIONS: VoiceoverLanguageOption[] = [
 ];
 export const DEFAULT_GEMINI_TTS_MODEL = GEMINI_TTS_MODEL_OPTIONS[0]!.value;
 export const DEFAULT_GEMINI_TTS_VOICE = "Kore";
+export const DEFAULT_OPENAI_TTS_MODEL = OPENAI_TTS_MODEL_OPTIONS[0]!.value;
+export const DEFAULT_OPENAI_TTS_VOICE = "coral";
+export const DEFAULT_OPENAI_TTS_SPEED = 1;
 export const DEFAULT_VOICEOVER_MODEL = ELEVENLABS_MODEL_OPTIONS[0]!.value;
 const VOICEOVER_MODEL_USD_PER_1K_CHARS: Record<string, number> = {
   eleven_flash_v2_5: 0.06,
@@ -168,6 +191,20 @@ function normalizeGeminiVoiceName(value?: string | null): string {
     : DEFAULT_GEMINI_TTS_VOICE;
 }
 
+function normalizeOpenAIVoiceName(value?: string | null): string {
+  const trimmed = value?.trim() ?? "";
+  return OPENAI_TTS_VOICE_OPTIONS.some((option) => option.value === trimmed)
+    ? trimmed
+    : DEFAULT_OPENAI_TTS_VOICE;
+}
+
+export function normalizeOpenAITtsSpeed(value?: unknown): number | undefined {
+  if (value === "" || value == null) return undefined;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return Math.min(4, Math.max(0.25, Number(parsed.toFixed(2))));
+}
+
 function normalizeGeminiLanguageCode(value?: string | null): string | undefined {
   const trimmed = value?.trim() ?? "";
   return GEMINI_TTS_LANGUAGE_OPTIONS.some((option) => option.value === trimmed) ? trimmed : undefined;
@@ -234,7 +271,10 @@ export function normalizeProjectVoiceoverDraft(
     draft?.provider === "elevenlabs" || draft?.provider === "openai" || draft?.provider === "gemini"
       ? draft.provider
       : baseDefaults.provider;
-  const voiceName = normalizeGeminiVoiceName(draft?.voiceName);
+  const voiceName =
+    provider === "openai"
+      ? normalizeOpenAIVoiceName(draft?.voiceName ?? draft?.voiceId)
+      : normalizeGeminiVoiceName(draft?.voiceName);
   return {
     text: typeof draft?.text === "string" ? draft.text : baseDefaults.text,
     updatedAt: typeof draft?.updatedAt === "number" ? draft.updatedAt : baseDefaults.updatedAt,
@@ -252,6 +292,11 @@ export function normalizeProjectVoiceoverDraft(
     speakers: normalizeGeminiSpeakers(draft?.speakers, voiceName),
     stylePrompt: typeof draft?.stylePrompt === "string" && draft.stylePrompt.trim() ? draft.stylePrompt.trim() : undefined,
     generationConfig: normalizeGeminiGenerationConfig(draft?.generationConfig),
+    ...(provider === "openai"
+      ? {
+          speed: normalizeOpenAITtsSpeed(draft?.speed) ?? DEFAULT_OPENAI_TTS_SPEED,
+        }
+      : undefined),
     useDefaultVoiceId: typeof draft?.useDefaultVoiceId === "boolean" ? draft.useDefaultVoiceId : defaultUseDefaultVoiceId,
     outputFormat: draft?.outputFormat === "wav" ? "wav" : baseDefaults.outputFormat,
   };
@@ -275,6 +320,7 @@ export function areProjectVoiceoverDraftsEqual(
     JSON.stringify(normalizedLeft.speakers ?? []) === JSON.stringify(normalizedRight.speakers ?? []) &&
     normalizedLeft.stylePrompt === normalizedRight.stylePrompt &&
     JSON.stringify(normalizedLeft.generationConfig ?? {}) === JSON.stringify(normalizedRight.generationConfig ?? {}) &&
+    normalizedLeft.speed === normalizedRight.speed &&
     normalizedLeft.useDefaultVoiceId === normalizedRight.useDefaultVoiceId &&
     normalizedLeft.outputFormat === normalizedRight.outputFormat
   );
@@ -286,7 +332,12 @@ export function sortProjectVoiceovers(records: ProjectVoiceoverRecord[]): Projec
 
 export function resolveVoiceoverModelSelection(value?: string | null, provider: VoiceoverProviderId = DEFAULT_VOICEOVER_PROVIDER): string {
   const trimmed = value?.trim() ?? "";
-  const options = provider === "gemini" ? GEMINI_TTS_MODEL_OPTIONS : ELEVENLABS_MODEL_OPTIONS;
+  const options =
+    provider === "gemini"
+      ? GEMINI_TTS_MODEL_OPTIONS
+      : provider === "openai"
+        ? OPENAI_TTS_MODEL_OPTIONS
+        : ELEVENLABS_MODEL_OPTIONS;
   if (options.some((option) => option.value === trimmed)) {
     return trimmed;
   }
@@ -303,9 +354,13 @@ export function buildDefaultProjectVoiceoverConfig(input?: {
   geminiDefaultModel?: string | null;
   geminiHasApiKey?: boolean;
   geminiMaskedApiKey?: string | null;
+  openAIDefaultModel?: string | null;
+  openAIHasApiKey?: boolean;
+  openAIMaskedApiKey?: string | null;
 }): ProjectVoiceoverConfigResponse {
   const elevenLabsDefaultModel = resolveVoiceoverModelSelection(input?.defaultModel, "elevenlabs");
   const geminiDefaultModel = resolveVoiceoverModelSelection(input?.geminiDefaultModel, "gemini");
+  const openAIDefaultModel = resolveVoiceoverModelSelection(input?.openAIDefaultModel, "openai");
   return {
     provider: DEFAULT_VOICEOVER_PROVIDER,
     models: ELEVENLABS_MODEL_OPTIONS,
@@ -337,6 +392,16 @@ export function buildDefaultProjectVoiceoverConfig(input?: {
         voices: GEMINI_TTS_VOICE_OPTIONS,
         defaultVoiceName: DEFAULT_GEMINI_TTS_VOICE,
         languages: GEMINI_TTS_LANGUAGE_OPTIONS,
+      },
+      openai: {
+        provider: "openai",
+        label: "OpenAI",
+        models: OPENAI_TTS_MODEL_OPTIONS,
+        defaultModel: openAIDefaultModel,
+        hasApiKey: Boolean(input?.openAIHasApiKey),
+        maskedApiKey: input?.openAIMaskedApiKey?.trim() ?? "",
+        voices: OPENAI_TTS_VOICE_OPTIONS,
+        defaultVoiceName: DEFAULT_OPENAI_TTS_VOICE,
       },
     },
   };
@@ -473,6 +538,7 @@ export function buildProjectVoiceoverRecord(input: {
     speakers: input.request.speakers,
     stylePrompt: input.request.stylePrompt,
     generationConfig: input.request.generationConfig,
+    speed: input.request.speed,
     outputFormat: input.request.outputFormat,
     sourceFilename: input.sourceFilename,
     apiKeySource: input.apiKeySource,
@@ -485,7 +551,7 @@ export function buildProjectVoiceoverDraftFromRecord(
   record: Pick<
     ProjectVoiceoverRecord,
     "scriptText" | "provider" | "model" | "voiceId" | "outputFormat" | "sourceFilename" | "createdAt"
-    | "voiceName" | "languageCode" | "speakerMode" | "speakers" | "stylePrompt" | "generationConfig"
+    | "voiceName" | "languageCode" | "speakerMode" | "speakers" | "stylePrompt" | "generationConfig" | "speed"
   >,
   now = Date.now()
 ): ProjectVoiceoverDraft {
@@ -500,6 +566,7 @@ export function buildProjectVoiceoverDraftFromRecord(
     speakers: record.speakers,
     stylePrompt: record.stylePrompt,
     generationConfig: record.generationConfig,
+    speed: record.speed,
     outputFormat: record.outputFormat,
     sourceFilename: record.sourceFilename,
     updatedAt: typeof now === "number" && Number.isFinite(now) ? now : record.createdAt,

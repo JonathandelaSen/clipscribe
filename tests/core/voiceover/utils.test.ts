@@ -12,12 +12,16 @@ import {
   ELEVENLABS_MODEL_OPTIONS,
   GEMINI_TTS_MODEL_OPTIONS,
   DEFAULT_GEMINI_TTS_VOICE,
+  DEFAULT_OPENAI_TTS_SPEED,
+  DEFAULT_OPENAI_TTS_VOICE,
+  OPENAI_TTS_MODEL_OPTIONS,
   getProjectVoiceoverReplayStatus,
   createDefaultProjectVoiceoverDraft,
   estimateGeminiTtsCostUsd,
   extractVoiceoverTextFromFileContents,
   maskVoiceoverSecret,
   normalizeProjectVoiceoverDraft,
+  normalizeOpenAITtsSpeed,
   resolveVoiceoverModelUsdPer1kChars,
   resolveVoiceoverModelSelection,
   resolveVoiceoverOutputFileInfo,
@@ -137,6 +141,8 @@ test("resolveVoiceoverModelSelection accepts env-backed values and falls back to
   assert.equal(resolveVoiceoverModelSelection("not-a-real-model"), ELEVENLABS_MODEL_OPTIONS[0]?.value);
   assert.equal(resolveVoiceoverModelSelection("gemini-3.1-flash-tts-preview", "gemini"), "gemini-3.1-flash-tts-preview");
   assert.equal(resolveVoiceoverModelSelection("not-a-real-model", "gemini"), GEMINI_TTS_MODEL_OPTIONS[0]?.value);
+  assert.equal(resolveVoiceoverModelSelection("gpt-4o-mini-tts", "openai"), "gpt-4o-mini-tts");
+  assert.equal(resolveVoiceoverModelSelection("not-a-real-model", "openai"), OPENAI_TTS_MODEL_OPTIONS[0]?.value);
 });
 
 test("buildDefaultProjectVoiceoverConfig uses the requested default model when valid", () => {
@@ -154,6 +160,10 @@ test("buildDefaultProjectVoiceoverConfig uses the requested default model when v
   assert.deepEqual(
     config.providers.gemini?.models.map((model) => model.value),
     GEMINI_TTS_MODEL_OPTIONS.map((model) => model.value)
+  );
+  assert.deepEqual(
+    config.providers.openai?.models.map((model) => model.value),
+    OPENAI_TTS_MODEL_OPTIONS.map((model) => model.value)
   );
 });
 
@@ -271,4 +281,30 @@ test("Gemini voiceover draft normalization preserves TTS options", () => {
     maxOutputTokens: 2048,
     stopSequences: ["END"],
   });
+});
+
+test("OpenAI voiceover draft normalization preserves speed", () => {
+  assert.equal(normalizeOpenAITtsSpeed(0.1), 0.25);
+  assert.equal(normalizeOpenAITtsSpeed(9), 4);
+  assert.equal(normalizeOpenAITtsSpeed("1.25"), 1.25);
+
+  const draft = normalizeProjectVoiceoverDraft({
+    provider: "openai",
+    model: "gpt-4o-mini-tts",
+    voiceName: "coral",
+    speed: 1.25,
+    outputFormat: "mp3",
+  });
+
+  assert.equal(draft.provider, "openai");
+  assert.equal(draft.model, "gpt-4o-mini-tts");
+  assert.equal(draft.voiceName, "coral");
+  assert.equal(draft.speed, 1.25);
+
+  const defaulted = normalizeProjectVoiceoverDraft({
+    provider: "openai",
+    model: "gpt-4o-mini-tts",
+  });
+  assert.equal(defaulted.voiceName, DEFAULT_OPENAI_TTS_VOICE);
+  assert.equal(defaulted.speed, DEFAULT_OPENAI_TTS_SPEED);
 });
