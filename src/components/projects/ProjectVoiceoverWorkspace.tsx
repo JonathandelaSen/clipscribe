@@ -12,6 +12,7 @@ import {
   Pencil,
   Plus,
   Save,
+  Scissors,
   Sparkles,
   WandSparkles,
 } from "lucide-react";
@@ -78,6 +79,7 @@ import {
   maskVoiceoverSecret,
   normalizeProjectVoiceoverDraft,
 } from "@/lib/voiceover/utils";
+import { chunkScriptText } from "@/lib/voiceover/chunking";
 import { cn } from "@/lib/utils";
 
 type GeminiAdvancedControlKey =
@@ -426,6 +428,10 @@ export function ProjectVoiceoverWorkspace({
     [draft.text],
   );
   const scriptPreview = useMemo(() => draft.text.trim(), [draft.text]);
+  const chunkingResult = useMemo(
+    () => (draft.provider === "gemini" ? chunkScriptText(draft.text) : null),
+    [draft.provider, draft.text],
+  );
   const providerConfig = config.providers[draft.provider] ?? config.providers.elevenlabs;
   const modelOptions = providerConfig?.models?.length ? providerConfig.models : config.models;
   const geminiConfig = config.providers.gemini;
@@ -1952,9 +1958,41 @@ export function ProjectVoiceoverWorkspace({
                     {draft.sourceFilename || "Manual script"}
                   </Badge>
                 </div>
-                <div className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-[1.2rem] border border-white/8 bg-black/25 px-4 py-3 text-sm leading-6 text-white/78">
-                  {scriptPreview || "No script"}
-                </div>
+
+                {chunkingResult && chunkingResult.needsChunking ? (
+                  <div className="mt-3 space-y-0">
+                    <div className="mb-3 flex items-center gap-2 rounded-xl border border-cyan-300/20 bg-cyan-400/10 px-3 py-2 text-sm text-cyan-50">
+                      <Scissors className="h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        {chunkingResult.chunks.length} chunks · {formatWholeNumber(chunkingResult.totalChars)} chars · {chunkingResult.chunks.length} API requests
+                      </span>
+                    </div>
+                    {chunkingResult.chunks.map((chunk, i) => (
+                      <div key={chunk.index}>
+                        {i > 0 && (
+                          <div className="flex items-center justify-center py-1.5">
+                            <div className="h-px flex-1 border-t border-dashed border-cyan-300/25" />
+                            <span className="px-2 text-[10px] uppercase tracking-widest text-cyan-300/40">split</span>
+                            <div className="h-px flex-1 border-t border-dashed border-cyan-300/25" />
+                          </div>
+                        )}
+                        <div className="rounded-[1.2rem] border border-white/8 bg-black/25 px-4 py-3">
+                          <div className="mb-2 flex items-center justify-between text-xs text-white/45">
+                            <span>Chunk {chunk.index + 1}/{chunkingResult.chunks.length}</span>
+                            <span>{formatWholeNumber(chunk.charCount)} chars</span>
+                          </div>
+                          <div className="max-h-[200px] overflow-y-auto whitespace-pre-wrap text-sm leading-6 text-white/78">
+                            {chunk.text}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 max-h-64 overflow-y-auto whitespace-pre-wrap rounded-[1.2rem] border border-white/8 bg-black/25 px-4 py-3 text-sm leading-6 text-white/78">
+                    {scriptPreview || "No script"}
+                  </div>
+                )}
               </div>
             </section>
           </div>

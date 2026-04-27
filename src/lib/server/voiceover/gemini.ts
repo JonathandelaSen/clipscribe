@@ -60,6 +60,7 @@ import { getBundledBinaryPath, isEnoentError } from "@/lib/editor/node-binaries"
 import type {
   VoiceoverGeminiGenerationConfig,
   VoiceoverProviderAdapter,
+  VoiceoverProviderGenerateInput,
   VoiceoverSpeakerConfig,
   VoiceoverUsageSummary,
 } from "@/lib/voiceover/types";
@@ -69,6 +70,7 @@ import {
   estimateGeminiTtsCostUsd,
   resolveVoiceoverOutputFileInfo,
 } from "@/lib/voiceover/utils";
+import { chunkScriptText } from "@/lib/voiceover/chunking";
 
 import { VoiceoverError } from "./errors";
 
@@ -388,64 +390,142 @@ function buildGenerationConfig(input: {
   };
 }
 
+/**
+ * Generate PCM audio for a single text chunk via the Gemini TTS API.
+ * Returns the raw PCM bytes and usage metadata for that chunk.
+ */
+async function generateSingleChunkPcm(
+  input: VoiceoverProviderGenerateInput,
+  chunkText: string,
+  voiceName: string,
+  speakerMode: "single" | "multi",
+): Promise<{ pcm: Uint8Array; usageMetadata: GeminiUsageMetadata | undefined }> {
+  const response = await httpsPostWithTimeout(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`,
+    {
+      "Content-Type": "application/json",
+      "x-goog-api-key": input.apiKey,
+    },
+    JSON.stringify({
+      contents: [
+        {
+          parts: [
+            {
+              text: buildGeminiPrompt(chunkText, input.stylePrompt, input.speed),
+            },
+          ],
+        },
+      ],
+      generationConfig: buildGenerationConfig({
+        voiceName,
+        languageCode: input.languageCode,
+        speakerMode,
+        speakers: input.speakers,
+        generationConfig: input.generationConfig,
+      }),
+      model: input.model,
+    }),
+    input.signal,
+  );
+
+  const responseText = response.text;
+  const payload = responseText ? safeJsonParse(responseText) : null;
+
+  if (!response.ok) {
+    throw toGeminiError(response.status, payload ?? responseText);
+  }
+
+  const base64Audio = readInlineAudioData(payload);
+  if (!base64Audio) {
+    throw new VoiceoverError(
+      "Gemini TTS returned no audio. Retry the generation; preview TTS can occasionally return text only.",
+      { status: 502, code: "gemini_audio_missing" },
+    );
+  }
+
+  const pcm = new Uint8Array(Buffer.from(base64Audio, "base64"));
+  if (pcm.byteLength === 0) {
+    throw new VoiceoverError("Gemini TTS returned empty audio.", {
+      status: 502,
+      code: "gemini_audio_empty",
+    });
+  }
+
+  return { pcm, usageMetadata: readGeminiUsageMetadata(payload) };
+}
+
+/** Concatenate multiple Uint8Array buffers into one. */
+function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
+  const totalLength = arrays.reduce((sum, arr) => sum + arr.byteLength, 0);
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const arr of arrays) {
+    result.set(arr, offset);
+    offset += arr.byteLength;
+  }
+  return result;
+}
+
+/** Aggregate usage metadata from multiple chunk responses. */
+function aggregateUsageMetadata(usages: (GeminiUsageMetadata | undefined)[]): GeminiUsageMetadata | undefined {
+  const defined = usages.filter((u): u is GeminiUsageMetadata => u != null);
+  if (defined.length === 0) return undefined;
+  return {
+    promptTokenCount: defined.reduce((sum, u) => sum + (u.promptTokenCount ?? 0), 0),
+    candidatesTokenCount: defined.reduce((sum, u) => sum + (u.candidatesTokenCount ?? 0), 0),
+    totalTokenCount: defined.reduce((sum, u) => sum + (u.totalTokenCount ?? 0), 0),
+  };
+}
+
 export const geminiVoiceoverAdapter: VoiceoverProviderAdapter = {
   id: "gemini",
 
   async generate(input) {
     const voiceName = input.voiceName?.trim() || DEFAULT_GEMINI_TTS_VOICE;
     const speakerMode = input.speakerMode === "multi" ? "multi" : "single";
-    const response = await httpsPostWithTimeout(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`,
-      {
-        "Content-Type": "application/json",
-        "x-goog-api-key": input.apiKey,
-      },
-      JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: buildGeminiPrompt(input.scriptText, input.stylePrompt, input.speed),
-              },
-            ],
-          },
-        ],
-        generationConfig: buildGenerationConfig({
-          voiceName,
-          languageCode: input.languageCode,
-          speakerMode,
-          speakers: input.speakers,
-          generationConfig: input.generationConfig,
-        }),
-        model: input.model,
-      }),
-      input.signal
-    );
 
-    const responseText = response.text;
-    const payload = responseText ? safeJsonParse(responseText) : null;
+    // --- Chunk the script text ---
+    const { chunks } = chunkScriptText(input.scriptText);
 
-    if (!response.ok) {
-      throw toGeminiError(response.status, payload ?? responseText);
-    }
-
-    const base64Audio = readInlineAudioData(payload);
-    if (!base64Audio) {
-      throw new VoiceoverError("Gemini TTS returned no audio. Retry the generation; preview TTS can occasionally return text only.", {
-        status: 502,
-        code: "gemini_audio_missing",
+    if (chunks.length === 0) {
+      throw new VoiceoverError("Script text is empty.", {
+        status: 400,
+        code: "gemini_empty_script",
       });
     }
 
-    const pcm = new Uint8Array(Buffer.from(base64Audio, "base64"));
-    if (pcm.byteLength === 0) {
-      throw new VoiceoverError("Gemini TTS returned empty audio.", {
-        status: 502,
-        code: "gemini_audio_empty",
-      });
+    // --- Generate PCM for each chunk sequentially ---
+    const pcmBuffers: Uint8Array[] = [];
+    const usageMetadatas: (GeminiUsageMetadata | undefined)[] = [];
+
+    for (let i = 0; i < chunks.length; i++) {
+      // Check abort between chunks.
+      if (input.signal?.aborted) {
+        throw new VoiceoverError("Aborted", { status: 499, code: "aborted" });
+      }
+
+      if (chunks.length > 1) {
+        console.log(`[Gemini TTS] Generating chunk ${i + 1}/${chunks.length} (${chunks[i]!.charCount} chars)`);
+      }
+
+      const { pcm, usageMetadata } = await generateSingleChunkPcm(
+        input,
+        chunks[i]!.text,
+        voiceName,
+        speakerMode,
+      );
+
+      pcmBuffers.push(pcm);
+      usageMetadatas.push(usageMetadata);
     }
 
-    const bytes = input.outputFormat === "wav" ? writePcmAsWav(pcm) : await transcodePcmToMp3(pcm);
+    if (chunks.length > 1) {
+      console.log(`[Gemini TTS] All ${chunks.length} chunks generated, concatenating PCM...`);
+    }
+
+    // --- Concatenate all PCM and encode once ---
+    const fullPcm = pcmBuffers.length === 1 ? pcmBuffers[0]! : concatUint8Arrays(pcmBuffers);
+    const bytes = input.outputFormat === "wav" ? writePcmAsWav(fullPcm) : await transcodePcmToMp3(fullPcm);
     const { extension, mimeType } = resolveVoiceoverOutputFileInfo(input.outputFormat);
 
     return {
@@ -463,7 +543,7 @@ export const geminiVoiceoverAdapter: VoiceoverProviderAdapter = {
       extension,
       usage: buildGeminiUsageSummary({
         scriptText: input.scriptText,
-        usageMetadata: readGeminiUsageMetadata(payload),
+        usageMetadata: aggregateUsageMetadata(usageMetadatas),
       }),
       filename: buildProjectVoiceoverFilename({
         projectName: input.projectId,
