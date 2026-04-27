@@ -52,6 +52,17 @@ export interface ProjectVoiceoverDraft {
   speed?: number;
   useDefaultVoiceId: boolean;
   outputFormat: VoiceoverOutputFormat;
+  pendingJobId?: string;
+}
+
+export type VoiceoverJobStatus = "pending" | "completed" | "failed" | "interrupted";
+
+export interface VoiceoverJobMetadata {
+  id: string;
+  status: VoiceoverJobStatus;
+  createdAt: number;
+  completedAt?: number;
+  error?: string;
 }
 
 export interface ProjectVoiceoverRecord {

@@ -1,6 +1,7 @@
 import { VOICEOVER_ELEVENLABS_API_KEY_HEADER, VOICEOVER_GEMINI_API_KEY_HEADER, VOICEOVER_OPENAI_API_KEY_HEADER, buildVoiceoverResponseHeaders } from "@/lib/voiceover/contracts";
 import type { VoiceoverApiKeySource, VoiceoverGenerateRequest, VoiceoverSpeakerConfig } from "@/lib/voiceover/types";
 import { generateProjectVoiceover } from "@/lib/server/voiceover/service";
+import { submitVoiceoverJob } from "@/lib/server/voiceover/jobs";
 import {
   readElevenLabsApiKeyFromEnv,
   readGeminiApiKeyFromEnv,
@@ -273,31 +274,18 @@ export async function POST(request: Request) {
   try {
     const payload = parseRequest(body);
     const { apiKey, apiKeySource, maskedApiKey } = getProviderApiKey(request.headers, payload.provider);
-    const result = await generateProjectVoiceover(payload, {
-      apiKey,
-      apiKeySource,
-      signal: request.signal,
-    });
-    const responseBytes = Uint8Array.from(result.bytes);
-    const binaryBody = new Blob([responseBytes], {
-      type: result.mimeType,
-    });
+    
+    const jobId = submitVoiceoverJob(payload, { apiKey, apiKeySource });
 
-    return new Response(binaryBody, {
-      status: 200,
-      headers: {
-        "content-type": result.mimeType,
-        ...buildVoiceoverResponseHeaders({
-          ...result,
-          apiKeySource,
-          maskedApiKey,
-        }),
-      },
+    return Response.json({
+      jobId,
+      status: "pending",
+      maskedApiKey, // Para que el cliente sepa qué se usó
     });
   } catch (error) {
     if (error instanceof VoiceoverError) {
       return errorJson(error.message, error.status, error.code);
     }
-    return errorJson(error instanceof Error ? error.message : "Voiceover generation failed.", 500, "voiceover_failed");
+    return errorJson(error instanceof Error ? error.message : "Voiceover generation submission failed.", 500, "voiceover_submit_failed");
   }
 }

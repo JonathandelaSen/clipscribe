@@ -258,7 +258,7 @@ function buildGeminiRunSettingItems(record: ProjectVoiceoverRecord): Array<{ lab
     { label: "Speed", value: formatGeminiSettingValue(record.speed, String(DEFAULT_OPENAI_TTS_SPEED)) },
     { label: "Language", value: record.languageCode || "Auto" },
     { label: "Speaker mode", value: record.speakerMode === "multi" ? "Two speakers" : "Single" },
-    { label: "Director notes", value: record.stylePrompt?.trim() ? "Yes" : "No" },
+    { label: "Director notes", value: record.stylePrompt?.trim() ? record.stylePrompt.trim() : "None" },
     { label: "Temperature", value: formatGeminiSettingValue(generationConfig.temperature) },
     { label: "Top P", value: formatGeminiSettingValue(generationConfig.topP) },
     { label: "Top K", value: formatGeminiSettingValue(generationConfig.topK) },
@@ -361,7 +361,7 @@ export function ProjectVoiceoverWorkspace({
     clearGeminiApiKey,
   } = useCreatorAiSettings();
   const config = useProjectVoiceoverConfig();
-  const { generateVoiceover, isGeneratingVoiceover, voiceoverError } =
+  const { generateVoiceover, isGeneratingVoiceover, voiceoverError, pollVoiceoverJob, activeJobId, jobStatus, elapsedSeconds } =
     useProjectVoiceoverGenerator();
 
   const persistedDraft = useMemo(
@@ -683,14 +683,8 @@ export function ProjectVoiceoverWorkspace({
     };
   };
 
-  const handleGenerate = async (request: VoiceoverGenerateRequest) => {
+  const handleGenerateComplete = async (request: VoiceoverGenerateRequest, result: VoiceoverClientResult) => {
     try {
-      await saveVoiceoverDraft(draft);
-      const result = await generateVoiceover(request, {
-        elevenLabsApiKey: hasElevenLabsApiKey ? elevenLabsApiKey : undefined,
-        openAIApiKey: hasOpenAIApiKey ? openAIApiKey : undefined,
-        geminiApiKey: hasGeminiApiKey ? geminiApiKey : undefined,
-      });
       const metadata = await readMediaMetadata(result.file);
       const now = Date.now();
       const asset = createEditorAssetRecord({
@@ -744,11 +738,59 @@ export function ProjectVoiceoverWorkspace({
         voiceover,
       });
 
+      setDraft(current => ({ ...current, pendingJobId: undefined }));
       toast.success(`Audio generated with ${result.meta.provider}`);
     } catch (error) {
       console.error(error);
       toast.error(
-        error instanceof Error ? error.message : "Voiceover generation failed",
+        error instanceof Error ? error.message : "Voiceover saving failed",
+      );
+    }
+  };
+
+  const handleGenerateError = (error: string) => {
+    setDraft(current => ({ ...current, pendingJobId: undefined }));
+    // error is already shown by the hook/toast if needed, but we can toast it
+    toast.error(error);
+  };
+
+  const startPollingJob = (jobId: string, request: VoiceoverGenerateRequest) => {
+    pollVoiceoverJob(
+      jobId,
+      request,
+      (result) => handleGenerateComplete(request, result),
+      (error) => handleGenerateError(error)
+    );
+  };
+
+  // Resume on mount if there's a pending job
+  useEffect(() => {
+    if (persistedDraft.pendingJobId && !activeJobId && !isGeneratingVoiceover && draft.pendingJobId) {
+      const request = buildGenerateRequest();
+      if (request) {
+        startPollingJob(persistedDraft.pendingJobId, request);
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [persistedDraft.pendingJobId]); // Only run when persistedDraft changes (e.g. on mount)
+
+  const handleGenerate = async (request: VoiceoverGenerateRequest) => {
+    try {
+      await saveVoiceoverDraft(draft);
+      const jobId = await generateVoiceover(request, {
+        elevenLabsApiKey: hasElevenLabsApiKey ? elevenLabsApiKey : undefined,
+        openAIApiKey: hasOpenAIApiKey ? openAIApiKey : undefined,
+        geminiApiKey: hasGeminiApiKey ? geminiApiKey : undefined,
+      });
+      
+      setDraft(current => ({ ...current, pendingJobId: jobId }));
+      await saveVoiceoverDraft({ ...draft, pendingJobId: jobId });
+      
+      startPollingJob(jobId, request);
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        error instanceof Error ? error.message : "Voiceover generation submission failed",
       );
     }
   };
@@ -1296,18 +1338,34 @@ export function ProjectVoiceoverWorkspace({
                     )}
                   </Badge>
                 </div>
-                <Button
-                  className="rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
-                  onClick={handleOpenGenerateConfirm}
-                  disabled={!canGenerate || isGeneratingVoiceover}
-                >
+                <div className="flex gap-2">
+                  <Button
+                    className="flex-1 rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
+                    onClick={handleOpenGenerateConfirm}
+                    disabled={!canGenerate || isGeneratingVoiceover}
+                  >
+                    {isGeneratingVoiceover ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        {elapsedSeconds > 0 ? `Generating... (${elapsedSeconds}s)` : "Generating..."}
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="mr-2 h-4 w-4" />
+                        Generate Audio
+                      </>
+                    )}
+                  </Button>
                   {isGeneratingVoiceover ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Sparkles className="mr-2 h-4 w-4" />
-                  )}
-                  Generate Audio
-                </Button>
+                    <Button
+                      variant="outline"
+                      className="rounded-xl border-white/10 bg-white/5 text-white/70 hover:bg-white/10 hover:text-white"
+                      onClick={() => handleGenerateError("Canceled by user")}
+                    >
+                      Cancel
+                    </Button>
+                  ) : null}
+                </div>
               </div>
 
               {voiceoverError ? (
@@ -1416,6 +1474,14 @@ export function ProjectVoiceoverWorkspace({
                           <span>{getVoiceoverVoiceLabel(record)}</span>
                         </div>
                       </div>
+                      <div className="rounded-[1.2rem] border border-white/10 bg-black/25 p-4">
+                        <div className="text-xs font-medium uppercase tracking-[0.18em] text-white/55">
+                          Transcript
+                        </div>
+                        <div className="mt-3 max-h-32 overflow-y-auto whitespace-pre-wrap text-sm text-white/80 pr-2">
+                          {record.scriptText}
+                        </div>
+                      </div>
                       {record.usage ? (
                         <div className="flex flex-wrap items-center gap-2 text-xs text-white/60">
                           <Badge
@@ -1464,7 +1530,15 @@ export function ProjectVoiceoverWorkspace({
                                 className="min-w-0 rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm"
                               >
                                 <div className="text-xs text-white/45">{item.label}</div>
-                                <div className="mt-0.5 truncate font-medium text-white/82">{item.value}</div>
+                                <div
+                                  className={`mt-0.5 font-medium text-white/82 ${
+                                    item.label === "Director notes" || item.label === "Stops"
+                                      ? "break-words"
+                                      : "truncate"
+                                  }`}
+                                >
+                                  {item.value}
+                                </div>
                               </div>
                             ))}
                           </div>

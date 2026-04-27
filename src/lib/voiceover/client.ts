@@ -5,7 +5,7 @@ import {
   VOICEOVER_OPENAI_API_KEY_HEADER,
   VOICEOVER_RESPONSE_HEADERS,
 } from "@/lib/voiceover/contracts";
-import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverUsageSummary } from "@/lib/voiceover/types";
+import type { VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverUsageSummary, VoiceoverJobStatus } from "@/lib/voiceover/types";
 import { buildProjectVoiceoverFilename } from "@/lib/voiceover/utils";
 
 interface ErrorResponseBody {
@@ -37,38 +37,13 @@ async function readVoiceoverError(response: Response): Promise<string> {
   return text.trim() || `Voiceover request failed (${response.status}).`;
 }
 
-export async function requestProjectVoiceoverAudio(
+
+function parseVoiceoverResponse(
+  response: Response,
   payload: VoiceoverGenerateRequest,
-  options: { elevenLabsApiKey?: string; geminiApiKey?: string; openAIApiKey?: string }
-): Promise<VoiceoverClientResult> {
-  const response = await fetch("/api/projects/voiceover/generate", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.elevenLabsApiKey
-        ? {
-            [VOICEOVER_ELEVENLABS_API_KEY_HEADER]: options.elevenLabsApiKey,
-          }
-        : undefined),
-      ...(options.geminiApiKey
-        ? {
-            [VOICEOVER_GEMINI_API_KEY_HEADER]: options.geminiApiKey,
-          }
-        : undefined),
-      ...(options.openAIApiKey
-        ? {
-            [VOICEOVER_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
-          }
-        : undefined),
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    throw new Error(await readVoiceoverError(response));
-  }
-
-  const contentType = response.headers.get("content-type")?.trim() || "audio/mpeg";
+  contentType: string,
+  buffer: ArrayBuffer
+): VoiceoverClientResult {
   const providerHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.provider);
   const modelHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.model);
   const voiceHeader = response.headers.get(VOICEOVER_RESPONSE_HEADERS.voice);
@@ -145,7 +120,7 @@ export async function requestProjectVoiceoverAudio(
     usage,
   };
 
-  const file = new File([await response.arrayBuffer()], meta.filename, {
+  const file = new File([buffer], meta.filename, {
     type: contentType,
   });
 
@@ -153,4 +128,104 @@ export async function requestProjectVoiceoverAudio(
     file,
     meta,
   };
+}
+
+export async function requestProjectVoiceoverAudio(
+  payload: VoiceoverGenerateRequest,
+  options: { elevenLabsApiKey?: string; geminiApiKey?: string; openAIApiKey?: string }
+): Promise<VoiceoverClientResult> {
+  const response = await fetch("/api/projects/voiceover/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.elevenLabsApiKey
+        ? {
+            [VOICEOVER_ELEVENLABS_API_KEY_HEADER]: options.elevenLabsApiKey,
+          }
+        : undefined),
+      ...(options.geminiApiKey
+        ? {
+            [VOICEOVER_GEMINI_API_KEY_HEADER]: options.geminiApiKey,
+          }
+        : undefined),
+      ...(options.openAIApiKey
+        ? {
+            [VOICEOVER_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
+          }
+        : undefined),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readVoiceoverError(response));
+  }
+
+  const contentType = response.headers.get("content-type")?.trim() || "audio/mpeg";
+  return parseVoiceoverResponse(response, payload, contentType, await response.arrayBuffer());
+}
+
+export async function submitVoiceoverJob(
+  payload: VoiceoverGenerateRequest,
+  options: { elevenLabsApiKey?: string; geminiApiKey?: string; openAIApiKey?: string }
+): Promise<string> {
+  const response = await fetch("/api/projects/voiceover/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(options.elevenLabsApiKey
+        ? {
+            [VOICEOVER_ELEVENLABS_API_KEY_HEADER]: options.elevenLabsApiKey,
+          }
+        : undefined),
+      ...(options.geminiApiKey
+        ? {
+            [VOICEOVER_GEMINI_API_KEY_HEADER]: options.geminiApiKey,
+          }
+        : undefined),
+      ...(options.openAIApiKey
+        ? {
+            [VOICEOVER_OPENAI_API_KEY_HEADER]: options.openAIApiKey,
+          }
+        : undefined),
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readVoiceoverError(response));
+  }
+
+  const data = await response.json();
+  if (!data.jobId) {
+    throw new Error("No jobId returned from generation endpoint.");
+  }
+
+  return data.jobId;
+}
+
+
+
+export interface VoiceoverJobStatusResponse {
+  id: string;
+  status: VoiceoverJobStatus;
+  error?: string;
+  createdAt: number;
+}
+
+export async function pollVoiceoverJobStatus(jobId: string): Promise<VoiceoverJobStatusResponse> {
+  const response = await fetch(`/api/projects/voiceover/jobs/${jobId}`);
+  if (!response.ok) {
+    throw new Error(await readVoiceoverError(response));
+  }
+  return response.json();
+}
+
+export async function fetchVoiceoverJobResult(jobId: string, payload: VoiceoverGenerateRequest): Promise<VoiceoverClientResult> {
+  const response = await fetch(`/api/projects/voiceover/jobs/${jobId}/result`);
+  if (!response.ok) {
+    throw new Error(await readVoiceoverError(response));
+  }
+  const contentType = response.headers.get("content-type")?.trim() || "audio/mpeg";
+  return parseVoiceoverResponse(response, payload, contentType, await response.arrayBuffer());
 }

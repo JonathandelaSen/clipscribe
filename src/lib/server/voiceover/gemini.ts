@@ -1,4 +1,60 @@
 import { spawn } from "node:child_process";
+import * as https from "node:https";
+import { URL } from "node:url";
+
+function httpsPostWithTimeout(
+  url: string,
+  headers: Record<string, string>,
+  body: string,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const parsedUrl = new URL(url);
+    const options: https.RequestOptions = {
+      method: "POST",
+      hostname: parsedUrl.hostname,
+      path: parsedUrl.pathname + parsedUrl.search,
+      headers,
+      timeout: 30 * 60 * 1000, // 30 minutos (evita el límite de 5m de fetch)
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => {
+        data += chunk;
+      });
+      res.on("end", () => {
+        resolve({
+          ok: (res.statusCode ?? 500) < 400,
+          status: res.statusCode ?? 500,
+          text: data,
+        });
+      });
+    });
+
+    req.on("error", (e) => {
+      reject(e);
+    });
+
+    req.on("timeout", () => {
+      req.destroy(new Error("Request timed out after 30 minutes"));
+    });
+
+    if (signal) {
+      if (signal.aborted) {
+        req.destroy(new Error("Aborted"));
+        return;
+      }
+      const abortHandler = () => req.destroy(new Error("Aborted"));
+      signal.addEventListener("abort", abortHandler);
+      req.on("close", () => signal.removeEventListener("abort", abortHandler));
+    }
+
+    req.write(body);
+    req.end();
+  });
+}
 
 import { getBundledBinaryPath, isEnoentError } from "@/lib/editor/node-binaries";
 import type {
@@ -338,38 +394,35 @@ export const geminiVoiceoverAdapter: VoiceoverProviderAdapter = {
   async generate(input) {
     const voiceName = input.voiceName?.trim() || DEFAULT_GEMINI_TTS_VOICE;
     const speakerMode = input.speakerMode === "multi" ? "multi" : "single";
-    const response = await fetch(
+    const response = await httpsPostWithTimeout(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(input.model)}:generateContent`,
       {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": input.apiKey,
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: buildGeminiPrompt(input.scriptText, input.stylePrompt, input.speed),
-                },
-              ],
-            },
-          ],
-          generationConfig: buildGenerationConfig({
-            voiceName,
-            languageCode: input.languageCode,
-            speakerMode,
-            speakers: input.speakers,
-            generationConfig: input.generationConfig,
-          }),
-          model: input.model,
+        "Content-Type": "application/json",
+        "x-goog-api-key": input.apiKey,
+      },
+      JSON.stringify({
+        contents: [
+          {
+            parts: [
+              {
+                text: buildGeminiPrompt(input.scriptText, input.stylePrompt, input.speed),
+              },
+            ],
+          },
+        ],
+        generationConfig: buildGenerationConfig({
+          voiceName,
+          languageCode: input.languageCode,
+          speakerMode,
+          speakers: input.speakers,
+          generationConfig: input.generationConfig,
         }),
-        cache: "no-store",
-        signal: input.signal,
-      }
+        model: input.model,
+      }),
+      input.signal
     );
-    const responseText = await response.text();
+
+    const responseText = response.text;
     const payload = responseText ? safeJsonParse(responseText) : null;
 
     if (!response.ok) {
