@@ -582,6 +582,7 @@ export function HistoryItemCard({
                 onClick={() => onDelete(item.id)}
                 className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                 title="Delete project (all transcript and subtitle versions)"
+                aria-label="Delete project (all transcript and subtitle versions)"
               >
                 <Trash2 className="w-5 h-5" />
               </Button>
@@ -626,6 +627,7 @@ export function HistoryItemCard({
                   size="icon"
                   className="rounded-xl text-white/60 hover:bg-red-500/10 hover:text-red-100 flex-shrink-0"
                   title="Delete transcript version"
+                  aria-label="Delete transcript version"
                   onClick={() => {
                     if (window.confirm("Delete this transcript version?")) {
                       onDeleteTranscriptVersion(item.id, effectiveSelectedTranscriptId);
@@ -655,6 +657,7 @@ export function HistoryItemCard({
                   onClick={handleDownloadText}
                   disabled={!selectedTranscriptText}
                   title="Download transcript text"
+                  aria-label="Download transcript text"
                 >
                   <Download className="w-4 h-4 mr-2" /> .txt
                 </Button>
@@ -665,6 +668,7 @@ export function HistoryItemCard({
                   onClick={copyText}
                   disabled={!selectedTranscriptText}
                   title="Copy transcript text"
+                  aria-label="Copy transcript text"
                 >
                   {copiedTxt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                 </Button>
@@ -799,6 +803,7 @@ export function HistoryItemCard({
                   className="text-fuchsia-300 hover:bg-fuchsia-500/20 hover:text-fuchsia-200"
                   onClick={handleDownloadSrt}
                   disabled={!selectedSubtitle}
+                  aria-label="Download subtitles (SRT)"
                 >
                   <Download className="w-4 h-4 mr-2" /> SRT
                 </Button>
@@ -809,6 +814,7 @@ export function HistoryItemCard({
                   onClick={copySrt}
                   disabled={!selectedSubtitle}
                   title="Copy subtitles"
+                  aria-label="Copy subtitles"
                 >
                   {copiedSrt ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                 </Button>
