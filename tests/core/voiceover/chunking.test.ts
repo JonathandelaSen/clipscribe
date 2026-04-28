@@ -61,22 +61,23 @@ test("text exactly at limit returns single chunk", () => {
 // ---------------------------------------------------------------------------
 
 test("multiple short paragraphs are accumulated into chunks", () => {
-  const para = "A".repeat(400);
-  // 4 paragraphs of 400 chars each → at 1500 limit, 3 fit in one chunk
+  const para = "A".repeat(350);
+  // 4 paragraphs of 350 chars each → at 1200 limit, 3 fit in one chunk
+  // (350 + 2 + 350 + 2 + 350 = 1054 ≤ 1200, but +2+350 = 1406 > 1200)
   const text = [para, para, para, para].join("\n\n");
   const result = chunkScriptText(text);
 
   assert.equal(result.needsChunking, true);
   assert.equal(result.chunks.length, 2);
-  // First chunk: 3 paragraphs (400 + 2 + 400 + 2 + 400 = 1204 chars)
+  // First chunk: 3 paragraphs (350 + 2 + 350 + 2 + 350 = 1054 chars)
   assert.ok(result.chunks[0]!.charCount <= DEFAULT_CHUNK_MAX_CHARS);
   // Second chunk: 1 paragraph
-  assert.equal(result.chunks[1]!.charCount, 400);
+  assert.equal(result.chunks[1]!.charCount, 350);
 });
 
 test("two paragraphs that each fit individually but not together are split", () => {
-  const para1 = "A".repeat(1000);
-  const para2 = "B".repeat(1000);
+  const para1 = "A".repeat(800);
+  const para2 = "B".repeat(800);
   const text = para1 + "\n\n" + para2;
   const result = chunkScriptText(text);
 
@@ -147,11 +148,11 @@ test("no punctuation at all splits by word boundary", () => {
 
 test("last chunk under 10% threshold is merged into previous", () => {
   // Create text that would produce a tiny last chunk.
-  // 1400 chars + \n\n + 1400 chars + \n\n + 50 chars = 2854 total
-  // Without merge: [1400] [1400] [50] → 3 chunks, last is 50 < 150 (10%)
-  // With merge:    [1400] [1400+\n\n+50] → 2 chunks
-  const para1 = "A".repeat(1400);
-  const para2 = "B".repeat(1400);
+  // 1100 chars + \n\n + 1100 chars + \n\n + 50 chars
+  // Without merge: [1100] [1100] [50] → 3 chunks, last is 50 < 120 (10% of 1200)
+  // With merge:    [1100] [1100+\n\n+50] → 2 chunks
+  const para1 = "A".repeat(1100);
+  const para2 = "B".repeat(1100);
   const para3 = "C".repeat(50);
   const text = [para1, para2, para3].join("\n\n");
   const result = chunkScriptText(text);
@@ -164,10 +165,10 @@ test("last chunk under 10% threshold is merged into previous", () => {
 });
 
 test("last chunk at or above 10% threshold stays separate", () => {
-  // 1400 chars + \n\n + 1400 chars + \n\n + 200 chars = 3004 total
-  // 200 >= 150 (10% of 1500) → should NOT merge
-  const para1 = "A".repeat(1400);
-  const para2 = "B".repeat(1400);
+  // 1100 chars + \n\n + 1100 chars + \n\n + 200 chars
+  // 200 >= 120 (10% of 1200) → should NOT merge
+  const para1 = "A".repeat(1100);
+  const para2 = "B".repeat(1100);
   const para3 = "C".repeat(200);
   const text = [para1, para2, para3].join("\n\n");
   const result = chunkScriptText(text);
@@ -214,7 +215,7 @@ test("chunk offsets are sequential and cover the text", () => {
 
 test("needsChunking is false for single-chunk results", () => {
   assert.equal(chunkScriptText("short").needsChunking, false);
-  assert.equal(chunkScriptText("A".repeat(1500)).needsChunking, false);
+  assert.equal(chunkScriptText("A".repeat(1200)).needsChunking, false);
 });
 
 test("needsChunking is true for multi-chunk results", () => {

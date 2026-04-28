@@ -1848,7 +1848,7 @@ export function ProjectVoiceoverWorkspace({
       </div>
 
       <Dialog open={isConfirmDialogOpen} onOpenChange={setIsConfirmDialogOpen}>
-        <DialogContent className="overflow-hidden border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] p-0 text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-3xl">
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden border-white/10 bg-[linear-gradient(180deg,rgba(8,12,18,0.985),rgba(4,7,12,0.985))] p-0 text-white shadow-[0_24px_90px_rgba(0,0,0,0.48)] sm:max-w-6xl">
           <DialogHeader className="border-b border-white/8 px-6 py-5 text-left">
             <DialogTitle className="text-2xl font-semibold tracking-tight text-white">
               Confirm audio generation
@@ -1858,7 +1858,8 @@ export function ProjectVoiceoverWorkspace({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="grid gap-6 px-6 py-6 lg:grid-cols-[0.95fr_1.05fr]">
+          <div className="flex-1 overflow-y-auto">
+            <div className="grid gap-6 px-6 py-6 lg:grid-cols-[0.95fr_1.05fr]">
             <section className="space-y-3 rounded-[1.6rem] border border-white/8 bg-black/20 p-4">
               {[
                 { label: "Provider", value: getProviderLabel(draft.provider) },
@@ -1995,6 +1996,7 @@ export function ProjectVoiceoverWorkspace({
                 )}
               </div>
             </section>
+            </div>
           </div>
 
           <DialogFooter className="border-t border-white/8 px-6 py-4 sm:justify-between">

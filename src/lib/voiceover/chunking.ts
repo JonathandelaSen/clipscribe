@@ -35,7 +35,7 @@ export interface ChunkingResult {
   needsChunking: boolean;
 }
 
-export const DEFAULT_CHUNK_MAX_CHARS = 1500;
+export const DEFAULT_CHUNK_MAX_CHARS = 1200;
 const RUNT_THRESHOLD_RATIO = 0.1; // 10 %
 
 // ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createDexieEditorRepository, groupEditorExportsByProjectId } from "@/lib/repositories/editor-repo";
 import { normalizeLegacyEditorExportRecord, normalizeLegacyEditorProjectRecord } from "@/lib/editor/storage";
 import type { EditorAssetRecord, EditorExportRecord, EditorProjectRecord } from "@/lib/editor/types";
+import { PROJECT_LIBRARY_UPDATED_EVENT } from "@/lib/projects/events";
 
 const editorRepository = createDexieEditorRepository();
 
@@ -30,6 +31,16 @@ export function useEditorLibrary() {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      void refresh();
+    };
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    };
   }, [refresh]);
 
   const upsertProject = useCallback(async (record: EditorProjectRecord) => {
@@ -120,6 +131,16 @@ export function useEditorProject(projectId: string | undefined) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      void refresh();
+    };
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    };
   }, [refresh]);
 
   const saveProject = useCallback(async (record: EditorProjectRecord) => {

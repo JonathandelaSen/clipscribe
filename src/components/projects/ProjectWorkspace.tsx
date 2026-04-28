@@ -186,6 +186,7 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     createShiftedSubtitleVersion,
     saveTranslation,
     deleteTranscriptVersion,
+    deleteHistoryItem,
   } = useTranscriber();
   const { getTaskForResource, startYouTubeImport } = useBackgroundTasks();
 
@@ -321,6 +322,18 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
     } catch (error) {
       console.error(error);
       toast.error(error instanceof Error ? error.message : "No se pudo iniciar la nueva transcripción");
+    }
+  };
+
+  const handleDeleteActiveHistoryItem = async (assetId: string) => {
+    const confirmed = window.confirm("Delete all transcript history for this asset?");
+    if (!confirmed) return;
+    try {
+      await deleteHistoryItem(assetId);
+      toast.success("Historial de transcripción eliminado");
+    } catch (err) {
+      console.error(err);
+      toast.error(err instanceof Error ? err.message : "No se pudo eliminar el historial");
     }
   };
 
@@ -539,6 +552,8 @@ export function ProjectWorkspace({ projectId }: { projectId: string }) {
                   onCreateShiftedSubtitleVersion={createShiftedSubtitleVersion}
                   onSaveTranslation={saveTranslation}
                   onDeleteTranscriptVersion={deleteTranscriptVersion}
+                  onRename={(id, nextName) => void renameAsset(id, nextName)}
+                  onDelete={handleDeleteActiveHistoryItem}
                 />
               ) : (
                 <Card className="border-white/10 bg-white/[0.03] text-white">

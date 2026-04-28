@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { HistoryItem } from "@/lib/history";
 import { createDexieHistoryRepository } from "@/lib/repositories/history-repo";
+import { PROJECT_LIBRARY_UPDATED_EVENT } from "@/lib/projects/events";
 
 const historyRepository = createDexieHistoryRepository();
 
@@ -24,6 +25,16 @@ export function useHistoryLibrary(projectId?: string) {
 
   useEffect(() => {
     void refresh();
+  }, [refresh]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      void refresh();
+    };
+    window.addEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    return () => {
+      window.removeEventListener(PROJECT_LIBRARY_UPDATED_EVENT, handleUpdate);
+    };
   }, [refresh]);
 
   return { history, isLoading, error, refresh };
