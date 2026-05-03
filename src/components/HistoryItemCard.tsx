@@ -582,6 +582,7 @@ export function HistoryItemCard({
                 onClick={() => onDelete(item.id)}
                 className="text-red-400 hover:text-red-300 hover:bg-red-500/10"
                 title="Delete project (all transcript and subtitle versions)"
+                aria-label="Delete project (all transcript and subtitle versions)"
               >
                 <Trash2 className="w-5 h-5" />
               </Button>
@@ -626,6 +627,7 @@ export function HistoryItemCard({
                   size="icon"
                   className="rounded-xl text-white/60 hover:bg-red-500/10 hover:text-red-100 flex-shrink-0"
                   title="Delete transcript version"
+                  aria-label="Delete transcript version"
                   onClick={() => {
                     if (window.confirm("Delete this transcript version?")) {
                       onDeleteTranscriptVersion(item.id, effectiveSelectedTranscriptId);
