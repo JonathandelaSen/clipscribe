@@ -12,7 +12,7 @@ export function useTranslator() {
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [modelProgressItems, setModelProgressItems] = useState<TranslatorProgress[]>([]);
   const [translationProgress, setTranslationProgress] = useState<number>(0);
-  const [translatedChunks, setTranslatedChunks] = useState<any[] | null>(null);
+  const [translatedChunks, setTranslatedChunks] = useState<SubtitleChunk[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   
   const worker = useRef<Worker | null>(null);
@@ -70,7 +70,7 @@ export function useTranslator() {
     };
   }, [initWorker]);
 
-  const translateChunks = (chunks: any[], targetLanguage: string, sourceLanguage: string = "es") => {
+  const translateChunks = (chunks: SubtitleChunk[], targetLanguage: string, sourceLanguage: string = "es") => {
     initWorker();
     setIsTranslating(true);
     setTranslationProgress(0);
