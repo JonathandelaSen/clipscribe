@@ -363,7 +363,7 @@ export function ProjectVoiceoverWorkspace({
     clearGeminiApiKey,
   } = useCreatorAiSettings();
   const config = useProjectVoiceoverConfig();
-  const { generateVoiceover, isGeneratingVoiceover, voiceoverError, pollVoiceoverJob, activeJobId, jobStatus, elapsedSeconds } =
+  const { generateVoiceover, isGeneratingVoiceover, voiceoverError, pollVoiceoverJob, activeJobId, elapsedSeconds } =
     useProjectVoiceoverGenerator();
 
   const persistedDraft = useMemo(
@@ -536,6 +536,7 @@ export function ProjectVoiceoverWorkspace({
 
   const canGenerate =
     draft.text.trim().length > 0 && draft.model.trim().length > 0;
+  const hasPendingVoiceoverJob = Boolean(draft.pendingJobId || activeJobId);
   const hasAvailableApiKey = hasCurrentProviderLocalApiKey || hasCurrentProviderEnvApiKey;
 
   const handleApiKeySave = () => {
@@ -1348,9 +1349,9 @@ export function ProjectVoiceoverWorkspace({
                   <Button
                     className="flex-1 rounded-xl bg-cyan-300 text-slate-950 hover:bg-cyan-200"
                     onClick={handleOpenGenerateConfirm}
-                    disabled={!canGenerate || isGeneratingVoiceover}
+                    disabled={!canGenerate || hasPendingVoiceoverJob}
                   >
-                    {isGeneratingVoiceover ? (
+                    {isGeneratingVoiceover || hasPendingVoiceoverJob ? (
                       <>
                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                         {elapsedSeconds > 0 ? `Generating... (${elapsedSeconds}s)` : "Generating..."}

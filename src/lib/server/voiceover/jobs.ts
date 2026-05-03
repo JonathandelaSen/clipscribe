@@ -1,16 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { VoiceoverApiKeySource, VoiceoverGenerateRequest, VoiceoverGenerateResult } from "@/lib/voiceover/types";
+import type { VoiceoverApiKeySource, VoiceoverGenerateRequest, VoiceoverGenerateResponseMeta, VoiceoverGenerateResult } from "@/lib/voiceover/types";
 import { generateProjectVoiceover } from "./service";
 import { voiceoverJobRepository, type VoiceoverJobModel } from "./repository";
 import { VoiceoverError } from "./errors";
 
 const JOBS_DIR = path.join(process.cwd(), ".data", "voiceover-jobs");
-
-function getJobAudioPath(jobId: string, extension: string): string {
-  return path.join(JOBS_DIR, `${jobId}.${extension}`);
-}
 
 /**
  * Cleanup de jobs viejos (> 1 hora) para no acumular basura en disco.
@@ -70,8 +66,23 @@ export function submitVoiceoverJob(
       const audioPath = path.join(JOBS_DIR, audioFilename);
       fs.writeFileSync(audioPath, Buffer.from(result.bytes));
 
-      // Quitar los bytes del result para guardarlo como metadata
-      const { bytes, ...resultMeta } = result;
+      const resultMeta: VoiceoverGenerateResponseMeta = {
+        provider: result.provider,
+        model: result.model,
+        voiceId: result.voiceId,
+        voiceName: result.voiceName,
+        languageCode: result.languageCode,
+        speakerMode: result.speakerMode,
+        speakers: result.speakers,
+        speed: result.speed,
+        outputFormat: result.outputFormat,
+        apiKeySource: result.apiKeySource,
+        maskedApiKey: result.maskedApiKey,
+        filename: result.filename,
+        mimeType: result.mimeType,
+        extension: result.extension,
+        usage: result.usage,
+      };
 
       // Actualizar SQLite
       voiceoverJobRepository.markCompleted(jobId, resultMeta, audioFilename);
@@ -110,14 +121,6 @@ export function consumeVoiceoverJobResult(jobId: string): VoiceoverGenerateResul
   }
 
   const bytes = new Uint8Array(fs.readFileSync(audioPath));
-
-  // Borrar de disco y de BD (consume-once)
-  try {
-    fs.unlinkSync(audioPath);
-    voiceoverJobRepository.delete(jobId);
-  } catch (err) {
-    console.error(`Failed to cleanup job ${jobId} after consuming:`, err);
-  }
 
   return {
     ...job.resultMeta,
